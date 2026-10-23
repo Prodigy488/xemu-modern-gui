@@ -12,7 +12,12 @@
 #include "qemu/rcu.h"
 #include "exec/cpu-common.h"
 
-#define TB_JMP_CACHE_BITS 12
+/*
+ * xemu: 16384 entries instead of 4096. Xbox games run large amounts of hot
+ * code on a single CPU, and a bigger cache means fewer slow lookups of
+ * already-translated blocks (also done by the XPSemu fork).
+ */
+#define TB_JMP_CACHE_BITS 14
 #define TB_JMP_CACHE_SIZE (1 << TB_JMP_CACHE_BITS)
 
 /*

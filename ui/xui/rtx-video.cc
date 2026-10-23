@@ -466,11 +466,23 @@ GLuint g_gl_in, g_gl_out, g_gl_in_fbo;
 HANDLE g_h_in, g_h_out;
 bool g_out_locked;
 
+void Log(const char *msg)
+{
+    fprintf(stderr, "rtx-video: %s\n", msg);
+    fflush(stderr);
+}
+
 void ReleaseSized()
 {
     if (g_out_locked) {
         wglDXUnlockObjects(g_gl_dev, 1, &g_h_out);
         g_out_locked = false;
+    }
+    // Let both APIs finish with the shared textures before they go away
+    glFinish();
+    if (g_ctx) {
+        g_ctx->ClearState();
+        g_ctx->Flush();
     }
     if (g_gl_in_fbo) {
         glDeleteFramebuffers(1, &g_gl_in_fbo);
@@ -517,6 +529,7 @@ std::vector<uint8_t> g_cpu_buf;
 bool BuildSized(int tw, int th, int dw, int dh)
 {
     ReleaseSized();
+    Log("released old textures");
     if (!g_pipe.Build(tw, th, dw, dh, g_nv12, true)) {
         std::string first = g_err;
         g_pipe = Pipeline();
@@ -529,6 +542,7 @@ bool BuildSized(int tw, int th, int dw, int dh)
         }
         g_nv12 = true;
     }
+    Log("video processor ready");
     g_gl_out = NewTexture();
     g_h_out = wglDXRegisterObject(g_gl_dev, g_pipe.out_tex.Get(), g_gl_out,
                                   GL_TEXTURE_2D, WGL_ACCESS_READ_ONLY_NV);
@@ -603,9 +617,31 @@ bool RtxVideoUpscale(GLuint src_fbo, int tw, int th, int dw, int dh,
     if (g_out_locked) {
         RtxVideoEndFrame();
     }
+    if (tw > 8192 || th > 8192 || dw > 8192 || dh > 8192) {
+        return false;
+    }
     if (tw != g_pipe.tw || th != g_pipe.th || dw != g_pipe.dw ||
         dh != g_pipe.dh || !g_h_out) {
+        // While the window is resizing (e.g. going fullscreen) the size
+        // changes every frame: wait until it settles, using NIS meanwhile,
+        // instead of rebuilding the shared textures each frame
+        static int want_w, want_h, want_tw, want_th;
+        static Uint64 since;
+        Uint64 now = SDL_GetTicks();
+        if (dw != want_w || dh != want_h || tw != want_tw || th != want_th) {
+            want_w = dw;
+            want_h = dh;
+            want_tw = tw;
+            want_th = th;
+            since = now;
+        }
+        if (g_h_out && now - since < 400) {
+            return false;
+        }
         g_err.clear();
+        char m[96];
+        snprintf(m, sizeof(m), "resizing to %dx%d -> %dx%d", tw, th, dw, dh);
+        Log(m);
         if (!BuildSized(tw, th, dw, dh)) {
             char b[320];
             snprintf(b, sizeof(b),

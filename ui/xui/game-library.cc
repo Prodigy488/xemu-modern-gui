@@ -196,6 +196,55 @@ bool g_covers_finished = false;
 // stops its thread.
 PreviewPlayer *g_preview = new PreviewPlayer();
 
+// Never start or stop the player while a frame is being built: the current
+// frame's draw list may still reference the video texture, and deleting it
+// before ImGui renders crashes in the GPU driver. UI code only queues a
+// request; Update() applies it before the next frame begins.
+bool g_preview_stop_requested = false;
+std::string g_preview_open_requested;
+
+struct PendingPreviewImport {
+    bool active = false;
+    std::string source;
+    uint32_t title_id = 0;
+    std::string game_path;
+} g_pending_import;
+
+void FinishPreviewImport();
+
+void RequestPreviewStop()
+{
+    g_preview_stop_requested = true;
+    g_preview_open_requested.clear();
+}
+
+void RequestPreviewOpen(const std::string &path)
+{
+    g_preview_stop_requested = false;
+    g_preview_open_requested = path;
+}
+
+bool PreviewStopping()
+{
+    return g_preview_stop_requested;
+}
+
+void ApplyPreviewRequests()
+{
+    if (g_preview_stop_requested) {
+        g_preview->Close();
+        g_preview_stop_requested = false;
+    }
+    if (g_pending_import.active) {
+        g_preview->Close();
+        FinishPreviewImport();
+    }
+    if (!g_preview_open_requested.empty()) {
+        g_preview->Open(g_preview_open_requested);
+        g_preview_open_requested.clear();
+    }
+}
+
 // Loaded disc tracking
 std::string g_last_dvd_path;
 uint64_t g_last_tick = 0;
@@ -370,12 +419,31 @@ LibraryEntry *FindEntry(const std::string &path)
     return nullptr;
 }
 
+// Textures are never deleted while a frame is being built: the frame's draw
+// list may still reference them, and ImGui renders it later. Deletions are
+// queued and done at the start of the next Update(), before the next frame.
+std::vector<GLuint> g_textures_to_delete;
+
+void DeleteTextureLater(GLuint tex)
+{
+    if (tex) {
+        g_textures_to_delete.push_back(tex);
+    }
+}
+
+void FlushDeletedTextures()
+{
+    if (!g_textures_to_delete.empty()) {
+        glDeleteTextures((GLsizei)g_textures_to_delete.size(),
+                         g_textures_to_delete.data());
+        g_textures_to_delete.clear();
+    }
+}
+
 void FreeTexture(LibraryEntry &e)
 {
-    if (e.tex) {
-        glDeleteTextures(1, &e.tex);
-        e.tex = 0;
-    }
+    DeleteTextureLater(e.tex);
+    e.tex = 0;
     e.tex_attempted = false;
 }
 
@@ -742,9 +810,7 @@ void MergeScanResults()
             bool attempted = e->tex_attempted;
             *e = r;
             if (changed) {
-                if (tex) {
-                    glDeleteTextures(1, &tex);
-                }
+                DeleteTextureLater(tex);
             } else {
                 e->tex = tex;
                 e->tex_w = tw;
@@ -970,9 +1036,7 @@ void UploadDecodedImages(int max_uploads)
         if (!e || r.rgba.empty() || !e->tex_attempted) {
             continue; // removed, nothing found, or reset since requested
         }
-        if (e->tex) {
-            glDeleteTextures(1, &e->tex);
-        }
+        DeleteTextureLater(e->tex);
         e->tex = UploadTexture(r.rgba.data(), r.w, r.h);
         e->tex_w = r.w;
         e->tex_h = r.h;
@@ -1503,7 +1567,7 @@ void DrawContextMenu(LibraryEntry &e)
                 PreviewDir() / (TitleIdHex(e.title_id) + kPreviewExtensions[i]), pec);
         }
         if (imported && ImGui::MenuItem("Remove preview video")) {
-            g_preview->Close();
+            RequestPreviewStop();
             RemoveImportedPreview(e.title_id);
         }
     }
@@ -2425,6 +2489,35 @@ void RemoveImportedPreview(uint32_t title_id)
     }
 }
 
+void FinishPreviewImport()
+{
+    PendingPreviewImport imp = g_pending_import;
+    g_pending_import = PendingPreviewImport();
+    fs::path src = fs::u8path(imp.source);
+    std::string ext = Lower(src.extension().u8string());
+    bool ok_ext = false;
+    for (int i = 0; kPreviewExtensions[i]; i++) {
+        ok_ext |= (ext == kPreviewExtensions[i]);
+    }
+    if (!ok_ext) {
+        xemu_queue_error_message(
+            "Unsupported video type. Use MP4, WMV, AVI, MOV or MKV.");
+        return;
+    }
+    std::error_code ec;
+    fs::create_directories(PreviewDir(), ec);
+    RemoveImportedPreview(imp.title_id);
+    fs::path dst = PreviewDir() / (TitleIdHex(imp.title_id) + ext);
+    if (!fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec)) {
+        xemu_queue_error_message("Could not copy the video.");
+        return;
+    }
+    g_preview_cache.clear();
+    g_selected_path = imp.game_path;
+    g_preview_open_requested = dst.u8string();
+    xemu_queue_notification("Preview video added");
+}
+
 void ImportPreview(const LibraryEntry &e)
 {
     static const SDL_DialogFileFilter filters[] = {
@@ -2435,29 +2528,9 @@ void ImportPreview(const LibraryEntry &e)
     uint32_t id = e.title_id;
     std::string game_path = e.path;
     ShowOpenFileDialog(filters, 2, NULL, [id, game_path](const char *path) {
-        fs::path src = fs::u8path(path);
-        std::string ext = Lower(src.extension().u8string());
-        bool ok_ext = false;
-        for (int i = 0; kPreviewExtensions[i]; i++) {
-            ok_ext |= (ext == kPreviewExtensions[i]);
-        }
-        if (!ok_ext) {
-            xemu_queue_error_message("Unsupported video type. Use MP4, WMV, AVI, MOV or MKV.");
-            return;
-        }
-        g_preview->Close();
-        std::error_code ec;
-        fs::create_directories(PreviewDir(), ec);
-        RemoveImportedPreview(id);
-        fs::path dst = PreviewDir() / (TitleIdHex(id) + ext);
-        if (!fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec)) {
-            xemu_queue_error_message("Could not copy the video.");
-            return;
-        }
-        g_preview_cache.clear();
-        g_selected_path = game_path;
-        g_preview->Open(dst.u8string());
-        xemu_queue_notification("Preview video added");
+        // Applied by ApplyPreviewRequests() at the start of the next frame,
+        // after stopping the player (which may be reading the old file).
+        g_pending_import = { true, path, id, game_path };
     });
 }
 
@@ -2550,10 +2623,10 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
     EnsureTexture(e, tex_budget);
 
     std::string preview = FindPreviewCached(e);
-    bool playing = g_preview->IsOpen() && !preview.empty() &&
-                   g_preview->Path() == preview;
-    if (g_preview->IsOpen() && !playing) {
-        g_preview->Close(); // selection changed
+    bool playing = g_preview->IsOpen() && !PreviewStopping() &&
+                   !preview.empty() && g_preview->Path() == preview;
+    if (g_preview->IsOpen() && !playing && !PreviewStopping()) {
+        RequestPreviewStop(); // selection changed
     }
 
     ImVec2 a = ImGui::GetCursorScreenPos();
@@ -2581,9 +2654,9 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
         if (ImGui::SmallButton(playing ? ICON_FA_XMARK "  Stop preview"
                                        : ICON_FA_PLAY "  Watch preview")) {
             if (playing) {
-                g_preview->Close();
+                RequestPreviewStop();
             } else {
-                g_preview->Open(preview);
+                RequestPreviewOpen(preview);
             }
         }
         std::string perr = playing ? g_preview->Error() : std::string();
@@ -2730,7 +2803,7 @@ void GameLibraryWindow::Launch(const std::string &path)
 {
     LibraryEntry *e = FindEntry(path);
     std::string name = e ? e->DisplayName() : fs::u8path(path).stem().u8string();
-    g_preview->Close();
+    RequestPreviewStop();
     std::string load_path = path;
     if (e) {
         std::string error;
@@ -2816,6 +2889,8 @@ void GameLibraryWindow::Update()
     if (!g_scan_running && FolderSignature() != g_scanned_dir) {
         StartScan();
     }
+    ApplyPreviewRequests();
+    FlushDeletedTextures();
     MergeScanResults();
     MergeCoverResults();
     UploadDecodedImages(2);
@@ -2854,8 +2929,8 @@ void GameLibraryWindow::Update()
 void GameLibraryWindow::Draw()
 {
     if (!is_open) {
-        if (g_preview->IsOpen()) {
-            g_preview->Close();
+        if (g_preview->IsOpen() && !PreviewStopping()) {
+            RequestPreviewStop();
         }
         return;
     }

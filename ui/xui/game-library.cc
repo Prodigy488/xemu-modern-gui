@@ -1517,10 +1517,18 @@ void GameLibraryWindow::Launch(const std::string &path)
     LibraryEntry *e = FindEntry(path);
     std::string name = e ? e->DisplayName() : fs::u8path(path).stem().u8string();
     ActionLoadDiscFile(path.c_str());
+    const char *loaded = g_config.sys.files.dvd_path;
+    if (!loaded || path != loaded) {
+        return; // the load failed and xemu already showed why
+    }
+    // Restart the console so it boots the disc, like powering on a real Xbox
+    // with the game in the tray. Swapping the disc alone leaves many
+    // dashboards and BIOSes sitting at the menu until a manual reset.
+    ActionReset();
     if (!runstate_is_running()) {
         vm_start();
     }
-    std::string msg = "Loading " + name;
+    std::string msg = "Starting " + name;
     xemu_queue_notification(msg.c_str());
     is_open = false;
 }

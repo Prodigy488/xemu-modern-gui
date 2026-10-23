@@ -6422,8 +6422,9 @@ void GameLibraryWindow::Update()
 //
 // Two more ways to lay out the same dashboard sections. Blades: full-height
 // panels side by side; the current one opens wide and the rest stay as slim
-// labelled strips you flip through. Metro: flat, coloured live tiles on a
-// sideways-scrolling start page, with big lowercase section headers.
+// labelled strips you flip through. Metro: big lowercase section headers
+// over a slim start page in the style of XBMC4Gamers (game list, faded art,
+// details).
 
 bool BladesStyle()
 {
@@ -6679,207 +6680,185 @@ void DrawBladesFrame(int &tex_budget)
 
 // ---- Metro ----
 
-// A flat tile; true when chosen. Covers fill the tile when given.
-bool MetroTile(const char *id, ImVec2 pos, ImVec2 size, ImU32 col,
-               const char *icon, const char *label, const char *badge,
-               LibraryEntry *cover, int &tex_budget)
-{
-    const float s = g_viewport_mgr.m_scale;
-    ImDrawList *dl = ImGui::GetWindowDrawList();
-    ImGui::SetCursorScreenPos(pos);
-    bool pressed =
-        ImGui::InvisibleButton(id, size, ImGuiButtonFlags_EnableNav);
-    bool hov = ImGui::IsItemHovered();
-    bool focus = ImGui::IsItemFocused() && ImGui::GetIO().NavVisible;
-    bool held = ImGui::IsItemActive();
-    // Pressed tiles sink in slightly
-    float inset = held ? 3 * s : 0;
-    ImVec2 a(pos.x + inset, pos.y + inset);
-    ImVec2 b(pos.x + size.x - inset, pos.y + size.y - inset);
-    dl->AddRectFilled(a, b, col);
-    if (cover) {
-        EnsureTexture(*cover, tex_budget);
-    }
-    if (cover && cover->tex && cover->tex_w > 0) {
-        // Fill the tile, cropping the cover to its shape
-        float ta = (float)cover->tex_w / cover->tex_h, ra = size.x / size.y;
-        ImVec2 uv0(0, 0), uv1(1, 1);
-        if (ta > ra) {
-            float u = ra / ta;
-            uv0.x = (1 - u) / 2;
-            uv1.x = 1 - uv0.x;
-        } else {
-            float v = ta / ra;
-            uv0.y = (1 - v) / 2 * 0.6f; // keep more of the top (titles)
-            uv1.y = uv0.y + v;
-        }
-        dl->AddImage((ImTextureID)(intptr_t)cover->tex, a, b, uv0, uv1);
-        dl->AddRectFilledMultiColor(ImVec2(a.x, b.y - size.y * 0.42f), b,
-                                    IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0),
-                                    IM_COL32(0, 0, 0, 200), IM_COL32(0, 0, 0, 200));
-    }
-    float fh = ImGui::GetFontSize();
-    if (icon && !(cover && cover->tex)) {
-        // The menu font has the icons merged in at their native size
-        ImFont *f = FontOr(g_font_mgr.m_menu_font);
-        float isz = std::min(f->FontSize, size.y * 0.42f);
-        ImVec2 is = f->CalcTextSizeA(isz, FLT_MAX, 0, icon);
-        dl->AddText(f, isz,
-                    ImVec2(a.x + (b.x - a.x - is.x) / 2, a.y + (b.y - a.y - is.y) / 2 - fh * 0.4f),
-                    IM_COL32_WHITE, icon);
-    }
-    if (label) {
-        dl->PushClipRect(a, b, true);
-        dl->AddText(ImVec2(a.x + 10 * s, b.y - fh - 8 * s), IM_COL32_WHITE, label);
-        dl->PopClipRect();
-    }
-    if (badge && badge[0]) {
-        ImVec2 bs = ImGui::CalcTextSize(badge);
-        dl->AddText(ImVec2(b.x - bs.x - 10 * s, a.y + 8 * s), IM_COL32_WHITE, badge);
-    }
-    if (hov || focus) {
-        dl->AddRect(ImVec2(a.x - 2 * s, a.y - 2 * s), ImVec2(b.x + 2 * s, b.y + 2 * s),
-                    IM_COL32_WHITE, 0, 0, (focus ? 3.0f : 2.0f) * s);
-    }
-    return pressed;
-}
-
+// Metro start page, in the slim style of XBMC4Gamers: a text list of games
+// on the left, the selected game's art faded across the background, and its
+// cover and details on the right
 void DrawMetroStart(int &tex_budget)
 {
     const float s = g_viewport_mgr.m_scale;
-    ImVec2 avail = ImGui::GetContentRegionAvail();
-    const float gap = 8 * s;
-    // Three rows of square cells
-    float cell = std::floor((avail.y - 2 * gap - 16 * s) / 3);
-    cell = std::max(cell, 60 * s);
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
-    ImGui::BeginChild("##metrostart", ImVec2(0, 0), ImGuiChildFlags_NavFlattened,
-                      ImGuiWindowFlags_HorizontalScrollbar);
-    ImGui::PopStyleColor();
     ImVec2 o = ImGui::GetCursorScreenPos();
-    auto at = [&](float col, float row) {
-        return ImVec2(o.x + col * (cell + gap), o.y + row * (cell + gap));
-    };
-    auto sz = [&](float w, float h) {
-        return ImVec2(w * cell + (w - 1) * gap, h * cell + (h - 1) * gap);
-    };
+    ImVec2 avail = ImGui::GetContentRegionAvail();
 
-    // Featured game: the one on the Home screen, or the last played
-    LibraryEntry *hero = FindEntry(g_home_path);
-    auto recent = game_library_window.GetRecentGames(12);
-    if (!hero && !recent.empty()) {
-        hero = FindEntry(recent[0].path);
-    }
-    if (g_home_focus_play) {
-        ImGui::SetKeyboardFocusHere();
-        ImGui::SetNavCursorVisible(true);
-        g_home_focus_play = false;
-    }
-    if (hero) {
-        std::string label = hero->DisplayName();
-        if (MetroTile("##hero", at(0, 0), sz(2, 2), SectionColor(kTabHome),
-                      ICON_FA_PLAY, label.c_str(),
-                      SupportsOnline(*hero) ? "ONLINE" : "", hero, tex_budget)) {
-            game_library_window.Launch(hero->path);
-        }
-    } else if (MetroTile("##hero", at(0, 0), sz(2, 2), SectionColor(kTabHome),
-                         ICON_FA_FOLDER_OPEN, "add games", "", nullptr,
-                         tex_budget)) {
-        AddGameFolder();
-    }
-    std::string games = string_format("%d games", (int)g_entries.size());
-    if (MetroTile("##library", at(0, 2), sz(1, 1), SectionColor(kTabLibrary),
-                  ICON_FA_TABLE_CELLS, "library", games.c_str(), nullptr,
-                  tex_budget)) {
-        SwitchTab(kTabLibrary);
-    }
-    const char *word;
-    ImU32 ins_col;
-    InsigniaWord(&word, &ins_col);
-    ImU32 ins_tile = (InsigniaStatus)(int)g_insignia_status == InsigniaStatus::Up
-                         ? SectionColor(kTabInsignia)
-                         : IM_COL32(90, 90, 96, 255);
-    if (MetroTile("##insignia", at(1, 2), sz(1, 1), ins_tile, ICON_FA_NETWORK_WIRED,
-                  word, "", nullptr, tex_budget)) {
-        SwitchTab(kTabInsignia);
-    }
-
-    // Games: recently played first, then the rest of the library, filling
-    // two columns of three next to the featured tile
-    std::vector<LibraryEntry *> games_list;
-    std::set<std::string> shown;
-    if (hero) {
-        shown.insert(hero->path);
-    }
-    for (auto &r : recent) {
+    // Recently played first, then the rest of the library
+    std::vector<LibraryEntry *> games;
+    std::set<std::string> seen;
+    for (auto &r : game_library_window.GetRecentGames(12)) {
         LibraryEntry *e = FindEntry(r.path);
-        if (e && shown.insert(e->path).second) {
-            games_list.push_back(e);
+        if (e && seen.insert(e->path).second) {
+            games.push_back(e);
         }
     }
+    int recent_n = (int)games.size();
     std::vector<LibraryEntry *> all;
     SortedFiltered(all);
     for (LibraryEntry *e : all) {
-        if (shown.insert(e->path).second) {
-            games_list.push_back(e);
+        if (seen.insert(e->path).second) {
+            games.push_back(e);
         }
     }
-    auto game_tile = [&](int idx, ImVec2 p) {
-        LibraryEntry *e = games_list[idx];
-        ImGui::PushID(idx);
-        std::string label = e->DisplayName();
-        if (MetroTile("##game", p, sz(1, 1), IM_COL32(40, 44, 52, 255),
-                      ICON_FA_COMPACT_DISC, label.c_str(), "", e, tex_budget)) {
+    if (games.empty()) {
+        ImGui::TextDisabled("No games yet.");
+        if (DashButton(ICON_FA_FOLDER_OPEN "  Add a games folder", T().glass,
+                       T().white, ImVec2(0, 34 * s))) {
+            AddGameFolder();
+        }
+        return;
+    }
+    LibraryEntry *cur = FindEntry(g_home_path);
+    if (!cur) {
+        cur = games[0];
+        g_home_path = cur->path;
+    }
+
+    // Background art: the selected game's cover, wide and faded
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 ra(o.x + avail.x * 0.36f, o.y), rb(o.x + avail.x, o.y + avail.y);
+    EnsureTexture(*cur, tex_budget);
+    if (cur->tex && cur->tex_w > 0) {
+        float ta = (float)cur->tex_w / cur->tex_h, aa = (rb.x - ra.x) / (rb.y - ra.y);
+        ImVec2 uv0(0, 0), uv1(1, 1);
+        if (ta < aa) { // crop top and bottom
+            float v = ta / aa;
+            uv0.y = (1 - v) * 0.3f;
+            uv1.y = uv0.y + v;
+        }
+        dl->AddImage((ImTextureID)(intptr_t)cur->tex, ra, rb, uv0, uv1,
+                     IM_COL32(255, 255, 255, 46));
+        // Fade into the list on the left and the bar at the bottom
+        ImU32 bg = T().neon ? IM_COL32(8, 8, 14, 255) : IM_COL32(10, 14, 12, 255);
+        dl->AddRectFilledMultiColor(ra, ImVec2(ra.x + (rb.x - ra.x) * 0.45f, rb.y), bg,
+                                    Alpha(bg, 0), Alpha(bg, 0), bg);
+        dl->AddRectFilledMultiColor(ImVec2(ra.x, rb.y - 80 * s), rb, Alpha(bg, 0),
+                                    Alpha(bg, 0), bg, bg);
+    }
+
+    // Game list
+    float list_w = std::floor(avail.x * 0.34f);
+    ImFont *row_font = FontOr(g_font_mgr.m_menu_font_small);
+    float row_h = std::floor(row_font->FontSize * 1.55f);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::BeginChild("##metrolist", ImVec2(list_w, avail.y), ImGuiChildFlags_NavFlattened);
+    ImGui::PopStyleColor();
+    ImDrawList *ldl = ImGui::GetWindowDrawList();
+    ImU32 accent = SectionColor(kTabHome);
+    for (int i = 0; i < (int)games.size(); i++) {
+        LibraryEntry *e = games[i];
+        if (i == recent_n && recent_n > 0) {
+            ImGui::Dummy(ImVec2(0, 6 * s));
+            ImGui::TextDisabled("ALL GAMES");
+        } else if (i == 0 && recent_n > 0) {
+            ImGui::TextDisabled("RECENTLY PLAYED");
+        }
+        ImGui::PushID(e->path.c_str());
+        bool selected = e == cur;
+        if (selected && g_home_focus_play) {
+            ImGui::SetKeyboardFocusHere();
+            ImGui::SetNavCursorVisible(true);
+            ImGui::SetScrollHereY(0.3f);
+            g_home_focus_play = false;
+        }
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        float w = ImGui::GetContentRegionAvail().x;
+        bool clicked = ImGui::InvisibleButton("##row", ImVec2(w, row_h),
+                                              ImGuiButtonFlags_EnableNav);
+        bool hov = ImGui::IsItemHovered();
+        bool focus = ImGui::IsItemFocused() && ImGui::GetIO().NavVisible;
+        if (focus || (hov && ImGui::IsMouseClicked(ImGuiMouseButton_Left))) {
+            g_home_path = e->path;
+        }
+        if (clicked && (ImGui::GetIO().NavVisible ||
+                        ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))) {
             game_library_window.Launch(e->path);
         }
+        if (ImGui::IsItemFocused() &&
+            ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false)) {
+            g_stats[e->path].favorite = !g_stats[e->path].favorite;
+            g_dirty = true;
+        }
+        if (selected) {
+            ldl->AddRectFilledMultiColor(p, ImVec2(p.x + w, p.y + row_h),
+                                         Alpha(accent, 70), Alpha(accent, 0),
+                                         Alpha(accent, 0), Alpha(accent, 70));
+            ldl->AddRectFilled(p, ImVec2(p.x + 3 * s, p.y + row_h), accent);
+        } else if (hov) {
+            ldl->AddRectFilled(p, ImVec2(p.x + w, p.y + row_h), IM_COL32(255, 255, 255, 12));
+        }
+        std::string name = e->DisplayName();
+        ImVec4 clip(p.x, p.y, p.x + w - 34 * s, p.y + row_h);
+        ldl->AddText(row_font, row_font->FontSize,
+                     ImVec2(p.x + 14 * s, p.y + (row_h - row_font->FontSize) / 2),
+                     selected ? IM_COL32_WHITE : IM_COL32(200, 200, 205, 255),
+                     name.c_str(), NULL, 0, &clip);
+        if (g_stats[e->path].favorite) {
+            ldl->AddText(ImVec2(p.x + w - 24 * s, p.y + (row_h - ImGui::GetFontSize()) / 2),
+                         IM_COL32(255, 200, 0, 255), ICON_FA_STAR);
+        }
         ImGui::PopID();
-    };
-    const int col0 = 2;
-    int first = std::min<int>(6, (int)games_list.size());
-    for (int i = 0; i < first; i++) {
-        game_tile(i, at(col0 + i / 3, i % 3));
-    }
-    int col1 = col0 + (first + 2) / 3;
-
-    // Sections
-    if (MetroTile("##media", at(col1, 0), sz(1, 1), SectionColor(kTabMedia),
-                  ICON_FA_CAMERA, "media", "", nullptr, tex_budget)) {
-        SwitchTab(kTabMedia);
-    }
-    if (MetroTile("##drive", at(col1 + 1, 0), sz(1, 1), SectionColor(kTabDrive),
-                  ICON_FA_HARD_DRIVE, "drive", "", nullptr, tex_budget)) {
-        SwitchTab(kTabDrive);
-    }
-    int newp = GamesWithNewPatches();
-    std::string pbadge = newp > 0 ? string_format("%d new", newp) : "";
-    if (MetroTile("##patches", at(col1, 1), sz(2, 1), SectionColor(kTabPatches),
-                  ICON_FA_WRENCH, "patches", pbadge.c_str(), nullptr,
-                  tex_budget)) {
-        SwitchTab(kTabPatches);
-    }
-    if (MetroTile("##settings", at(col1, 2), sz(1, 1), SectionColor(kTabSettings),
-                  ICON_FA_GEAR, "settings", "", nullptr, tex_budget)) {
-        SwitchTab(kTabSettings);
-    }
-    if (MetroTile("##folders", at(col1 + 1, 2), sz(1, 1), IM_COL32(60, 64, 72, 255),
-                  ICON_FA_FOLDER_OPEN, "game folders", "", nullptr, tex_budget)) {
-        g_open_folders_popup = true;
-    }
-
-    // The rest of the library
-    int col2 = col1 + 2;
-    int k = 0;
-    for (int i = first; i < (int)games_list.size() && k < 36; i++, k++) {
-        game_tile(i, at(col2 + k / 3, k % 3));
-    }
-    // Right padding so the last column can scroll fully into view
-    ImGui::SetCursorScreenPos(at(col2 + (k + 2) / 3, 0));
-    ImGui::Dummy(ImVec2(gap, sz(1, 3).y));
-    // Mouse wheel scrolls sideways
-    if (ImGui::IsWindowHovered() && ImGui::GetIO().MouseWheel != 0) {
-        ImGui::SetScrollX(ImGui::GetScrollX() - ImGui::GetIO().MouseWheel * 140 * s);
     }
     ImGui::EndChild();
+
+    // Details of the selected game
+    float dx = o.x + list_w + 40 * s;
+    float dw = o.x + avail.x - dx;
+    float cover_h = std::min(avail.y * 0.62f, dw * 0.5f);
+    float cover_w = cover_h * (Home3DCovers() ? 0.86f : 0.72f);
+    ImVec2 ca(o.x + avail.x - cover_w - 10 * s, o.y + 10 * s);
+    if (Home3DCovers()) {
+        DrawCover3D(dl, ca, ImVec2(ca.x + cover_w, ca.y + cover_h), *cur, 24.0f);
+    } else {
+        DrawArtwork(dl, ca, ImVec2(ca.x + cover_w, ca.y + cover_h), *cur, 4 * s);
+    }
+    float text_w = ca.x - dx - 20 * s;
+    ImFont *tf = FontOr(g_font_mgr.m_menu_font);
+    float y = o.y + 16 * s;
+    std::string title = cur->DisplayName();
+    ImVec4 tclip(dx, y, dx + text_w, y + tf->FontSize * 3);
+    dl->AddText(tf, tf->FontSize, ImVec2(dx, y), IM_COL32_WHITE, title.c_str(),
+                NULL, text_w, &tclip);
+    ImVec2 ts = tf->CalcTextSizeA(tf->FontSize, FLT_MAX, text_w, title.c_str());
+    y += ts.y + 10 * s;
+    const GameStats &st = g_stats[cur->path];
+    float fh = ImGui::GetFontSize();
+    auto line = [&](const char *label, const std::string &value) {
+        dl->AddText(ImVec2(dx, y), ImGui::GetColorU32(ImGuiCol_TextDisabled), label);
+        dl->AddText(ImVec2(dx + 110 * s, y), IM_COL32(225, 225, 230, 255),
+                    value.c_str());
+        y += fh + 6 * s;
+    };
+    if (cur->valid) {
+        line("Title ID", FormatTitleId(cur->title_id));
+        line("Region", FormatRegion(cur->region));
+    }
+    line("Play time", FormatPlayTime(st.play_seconds));
+    line("Last played", FormatLastPlayed(st.last_played));
+    if (SupportsOnline(*cur)) {
+        line("Online", "Plays on Insignia");
+    }
+    int states = (int)SnapshotsFor(*cur).size();
+    if (states) {
+        line("Save states", string_format("%d", states));
+    }
+    y += 10 * s;
+    ImGui::SetCursorScreenPos(ImVec2(dx, y));
+    if (DashButton(ICON_FA_PLAY "  Play", T().primary, T().on_primary,
+                   ImVec2(120 * s, 34 * s))) {
+        game_library_window.Launch(cur->path);
+    }
+    ImGui::SameLine(0, 10 * s);
+    if (DashButton(ICON_FA_WRENCH "  Patches", T().glass, T().white,
+                   ImVec2(0, 34 * s))) {
+        OpenPatchesFor(*cur);
+    }
 }
 
 void DrawMetroFrame(int &tex_budget)
@@ -6897,8 +6876,8 @@ void DrawMetroFrame(int &tex_budget)
     // Section headers: big lowercase words that slide so the current one
     // sits at the left
     ImFont *hf = FontOr(g_font_mgr.m_menu_font);
-    float hsz = hf->FontSize * 1.35f;
-    float hgap = 30 * s;
+    float hsz = hf->FontSize;
+    float hgap = 26 * s;
     float xs[kTabCount], x = 0;
     std::string names[kTabCount];
     for (int i = 0; i < kTabCount; i++) {

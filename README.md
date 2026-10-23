@@ -40,7 +40,7 @@ shared.
   badge for online-capable games. Turn it off in Settings > General > Discord
   status. Requires the Discord app running on the same PC.
 - **New in v1.5: Blades and Metro styles.** Two more dashboard layouts:
-  sliding side-by-side panels, or a start page of live tiles. Save states
+  sliding side-by-side panels, or slim XBMC4Gamers-style lists. Save states
   also get a right-click menu (load, delete, show file).
 - **New in v1.5: Xbox hard drive explorer.** A Drive tab to browse the
   emulated hard drive's C, E, F and X/Y/Z partitions and copy files and

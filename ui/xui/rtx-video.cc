@@ -52,6 +52,7 @@ void RtxVideoShutdown(void)
 #include <wrl/client.h>
 #include <epoxy/wgl.h>
 #include <SDL3/SDL.h>
+#include <algorithm>
 #include <math.h>
 #include <stdio.h>
 #include <string>
@@ -367,6 +368,7 @@ bool Fail(const char *why)
     g_state = State::Failed;
     g_status = why;
     fprintf(stderr, "rtx-video: %s\n", why);
+    fflush(stderr);
     return false;
 }
 
@@ -387,6 +389,9 @@ bool LoadInterop()
            wglDXUnregisterObject && wglDXLockObjects && wglDXUnlockObjects;
 }
 
+bool CheckEngagement();
+void AbandonDevice();
+
 bool Init()
 {
     const char *vendor = (const char *)glGetString(GL_VENDOR);
@@ -396,6 +401,14 @@ bool Init()
     if (!LoadInterop()) {
         return Fail("The NVIDIA driver's OpenGL/Direct3D sharing isn't "
                     "available; update the driver");
+    }
+
+    // Reuse the device from an earlier check unless the driver reset it
+    if (g_dev && SUCCEEDED(g_dev->GetDeviceRemovedReason())) {
+        return CheckEngagement();
+    }
+    if (g_dev) {
+        AbandonDevice();
     }
 
     // The NVIDIA adapter (the one running xemu's OpenGL)
@@ -424,47 +437,50 @@ bool Init()
         FAILED(g_dev.As(&g_vdev)) || FAILED(g_ctx.As(&g_vctx))) {
         return Fail("Couldn't start the Direct3D video processor");
     }
+    return CheckEngagement();
+}
 
+bool CheckEngagement()
+{
     // Does the driver actually apply super resolution?
     double rgb = EngagementTest(false);
     double yuv = rgb > 0.4 ? -1 : EngagementTest(true);
     fprintf(stderr, "rtx-video: engagement test: rgb %.3f, nv12 %.3f\n", rgb,
             yuv);
+    fflush(stderr);
     if (rgb > 0.4) {
         g_nv12 = false;
     } else if (yuv > 0.4) {
         g_nv12 = true;
     } else {
-        g_vctx.Reset();
-        g_vdev.Reset();
-        g_ctx.Reset();
-        g_dev.Reset();
         return Fail("Not switched on in the driver: turn on RTX Video "
                     "Super Resolution in the NVIDIA app (System > Video) "
                     "or NVIDIA Control Panel, then press Check again. "
                     "Needs an RTX graphics card. Using NIS for now.");
     }
 
-    g_gl_dev = wglDXOpenDevice(g_dev.Get());
     if (!g_gl_dev) {
-        g_vctx.Reset();
-        g_vdev.Reset();
-        g_ctx.Reset();
-        g_dev.Reset();
+        g_gl_dev = wglDXOpenDevice(g_dev.Get());
+    }
+    if (!g_gl_dev) {
         return Fail("The NVIDIA driver's OpenGL/Direct3D sharing failed");
     }
     g_state = State::Ready;
     g_status = g_nv12 ? "Active (video mode)" : "Active";
     fprintf(stderr, "rtx-video: active (%s input)\n", g_nv12 ? "NV12" : "RGB");
+    fflush(stderr);
     return true;
 }
 
-// ---- Per-size resources shared with OpenGL -----------------------------
-
-Pipeline g_pipe;
-GLuint g_gl_in, g_gl_out, g_gl_in_fbo;
-HANDLE g_h_in, g_h_out;
-bool g_out_locked;
+// ---- Resources shared with OpenGL ---------------------------------------
+//
+// Tearing down textures shared between OpenGL and Direct3D crashed in the
+// driver when the window changed size (going fullscreen). So shared
+// textures are never released while xemu runs: they are allocated with
+// room to spare and reused for every size, with the video processor (a
+// Direct3D-only object, safe to recreate) told which part to use. If a
+// bigger size is ever needed, new ones are added and the old ones are just
+// left alone.
 
 void Log(const char *msg)
 {
@@ -472,40 +488,26 @@ void Log(const char *msg)
     fflush(stderr);
 }
 
-void ReleaseSized()
-{
-    if (g_out_locked) {
-        wglDXUnlockObjects(g_gl_dev, 1, &g_h_out);
-        g_out_locked = false;
-    }
-    // Let both APIs finish with the shared textures before they go away
-    glFinish();
-    if (g_ctx) {
-        g_ctx->ClearState();
-        g_ctx->Flush();
-    }
-    if (g_gl_in_fbo) {
-        glDeleteFramebuffers(1, &g_gl_in_fbo);
-        g_gl_in_fbo = 0;
-    }
-    if (g_h_in) {
-        wglDXUnregisterObject(g_gl_dev, g_h_in);
-        g_h_in = nullptr;
-    }
-    if (g_h_out) {
-        wglDXUnregisterObject(g_gl_dev, g_h_out);
-        g_h_out = nullptr;
-    }
-    if (g_gl_in) {
-        glDeleteTextures(1, &g_gl_in);
-        g_gl_in = 0;
-    }
-    if (g_gl_out) {
-        glDeleteTextures(1, &g_gl_out);
-        g_gl_out = 0;
-    }
-    g_pipe = Pipeline();
-}
+struct Shared {
+    int cap_in_w = 0, cap_in_h = 0, cap_out_w = 0, cap_out_h = 0;
+    ComPtr<ID3D11Texture2D> in_tex, mid_tex, out_tex;
+    GLuint gl_in = 0, gl_out = 0, gl_in_fbo = 0;
+    HANDLE h_in = nullptr, h_out = nullptr;
+    bool cpu_input = false; // input copied through the CPU instead
+};
+Shared g_sh;
+std::vector<Shared> g_retired; // kept, never unregistered (see above)
+// Video processor setups by size (Direct3D only, cheap), so a game that
+// alternates between render sizes doesn't rebuild every frame
+struct Setup {
+    int tw, th, dw, dh;
+    bool nv12;
+    Stage conv, scale;
+};
+std::vector<Setup> g_setups;
+Setup *g_cur;
+bool g_out_locked;
+std::vector<uint8_t> g_cpu_buf, g_cpu_flip;
 
 GLuint NewTexture()
 {
@@ -520,87 +522,155 @@ GLuint NewTexture()
     return t;
 }
 
-// The input normally goes GPU to GPU through a shared texture; if the
-// driver won't share that one, it is copied through the CPU instead
-// (slower, but only the small native-resolution image).
-bool g_cpu_input;
-std::vector<uint8_t> g_cpu_buf;
-
-bool BuildSized(int tw, int th, int dw, int dh)
+// Make sure the shared textures can hold tw x th in and dw x dh out
+bool EnsureCapacity(int tw, int th, int dw, int dh)
 {
-    ReleaseSized();
-    Log("released old textures");
-    if (!g_pipe.Build(tw, th, dw, dh, g_nv12, true)) {
-        std::string first = g_err;
-        g_pipe = Pipeline();
-        // Some sizes only work with the video (NV12) input path
-        if (g_nv12 || !g_pipe.Build(tw, th, dw, dh, true, true)) {
-            if (!g_nv12) {
-                g_err = first + "; NV12: " + g_err;
-            }
-            return false;
-        }
-        g_nv12 = true;
+    if (g_sh.h_out && tw <= g_sh.cap_in_w && th <= g_sh.cap_in_h &&
+        dw <= g_sh.cap_out_w && dh <= g_sh.cap_out_h) {
+        return true;
     }
-    Log("video processor ready");
-    g_gl_out = NewTexture();
-    g_h_out = wglDXRegisterObject(g_gl_dev, g_pipe.out_tex.Get(), g_gl_out,
+    Shared n;
+    // Room for 4x internal resolution in and a 4K (16:10) screen out
+    n.cap_in_w = std::max({ tw, g_sh.cap_in_w, 2560 });
+    n.cap_in_h = std::max({ th, g_sh.cap_in_h, 1920 });
+    n.cap_out_w = std::max({ dw, g_sh.cap_out_w, 3840 });
+    n.cap_out_h = std::max({ dh, g_sh.cap_out_h, 2400 });
+    n.cap_in_w = (n.cap_in_w + 1) & ~1; // NV12 needs even sizes
+    n.cap_in_h = (n.cap_in_h + 1) & ~1;
+    char m[128];
+    snprintf(m, sizeof(m), "allocating shared textures %dx%d in, %dx%d out",
+             n.cap_in_w, n.cap_in_h, n.cap_out_w, n.cap_out_h);
+    Log(m);
+    n.in_tex = MakeTexture(n.cap_in_w, n.cap_in_h, DXGI_FORMAT_B8G8R8A8_UNORM);
+    n.out_tex = MakeTexture(n.cap_out_w, n.cap_out_h, DXGI_FORMAT_B8G8R8A8_UNORM);
+    n.mid_tex = MakeTexture(n.cap_in_w, n.cap_in_h, DXGI_FORMAT_NV12);
+    if (!n.in_tex || !n.out_tex) {
+        return Err("create Direct3D textures");
+    }
+    n.gl_out = NewTexture();
+    n.h_out = wglDXRegisterObject(g_gl_dev, n.out_tex.Get(), n.gl_out,
                                   GL_TEXTURE_2D, WGL_ACCESS_READ_ONLY_NV);
-    if (!g_h_out) {
+    if (!n.h_out) {
         return Err("share output texture with OpenGL",
                    HRESULT_FROM_WIN32(GetLastError()));
     }
-
-    // Input: shared texture with an FBO to blit into (checked while locked;
-    // an unlocked shared texture has no storage on the OpenGL side)
-    g_cpu_input = false;
-    g_gl_in = NewTexture();
-    g_h_in = wglDXRegisterObject(g_gl_dev, g_pipe.in_tex.Get(), g_gl_in,
+    // Input: shared texture with an FBO to blit into (checked while
+    // locked: an unlocked shared texture has no storage on the GL side)
+    n.gl_in = NewTexture();
+    n.h_in = wglDXRegisterObject(g_gl_dev, n.in_tex.Get(), n.gl_in,
                                  GL_TEXTURE_2D, WGL_ACCESS_READ_WRITE_NV);
     bool ok = false;
-    if (g_h_in && wglDXLockObjects(g_gl_dev, 1, &g_h_in)) {
+    if (n.h_in && wglDXLockObjects(g_gl_dev, 1, &n.h_in)) {
         GLint prev;
         glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev);
-        glGenFramebuffers(1, &g_gl_in_fbo);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_gl_in_fbo);
+        glGenFramebuffers(1, &n.gl_in_fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, n.gl_in_fbo);
         glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                               GL_TEXTURE_2D, g_gl_in, 0);
+                               GL_TEXTURE_2D, n.gl_in, 0);
         ok = glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) ==
              GL_FRAMEBUFFER_COMPLETE;
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prev);
-        wglDXUnlockObjects(g_gl_dev, 1, &g_h_in);
+        wglDXUnlockObjects(g_gl_dev, 1, &n.h_in);
     }
     if (!ok) {
-        fprintf(stderr, "rtx-video: shared input texture unusable "
-                        "(registered %d); copying input through the CPU\n",
-                g_h_in != nullptr);
-        if (g_gl_in_fbo) {
-            glDeleteFramebuffers(1, &g_gl_in_fbo);
-            g_gl_in_fbo = 0;
-        }
-        if (g_h_in) {
-            wglDXUnregisterObject(g_gl_dev, g_h_in);
-            g_h_in = nullptr;
-        }
-        g_cpu_input = true;
-        g_cpu_buf.resize((size_t)tw * th * 4);
+        Log("shared input texture unusable; copying input through the CPU");
+        n.cpu_input = true;
     }
-    fprintf(stderr, "rtx-video: %dx%d -> %dx%d ready (%s input, %s)\n", tw, th,
-            dw, dh, g_nv12 ? "NV12" : "RGB", g_cpu_input ? "CPU copy" : "shared");
+    if (g_sh.h_out) {
+        g_retired.push_back(std::move(g_sh));
+    }
+    g_sh = std::move(n);
     return true;
 }
 
-void ReleaseAll()
+// Point the video processor at the given sizes (Direct3D only)
+bool SetupStages(Setup &u)
 {
-    if (g_gl_dev) {
-        ReleaseSized();
-        wglDXCloseDevice(g_gl_dev);
-        g_gl_dev = nullptr;
+    if (!u.nv12) {
+        return u.scale.Build(g_sh.in_tex.Get(), u.tw, u.th,
+                             DXGI_FORMAT_B8G8R8A8_UNORM, RgbFull(),
+                             g_sh.out_tex.Get(), u.dw, u.dh,
+                             DXGI_FORMAT_B8G8R8A8_UNORM, RgbFull(), true);
     }
-    g_vctx.Reset();
-    g_vdev.Reset();
-    g_ctx.Reset();
-    g_dev.Reset();
+    if (!g_sh.mid_tex) {
+        return Err("create NV12 texture");
+    }
+    return u.conv.Build(g_sh.in_tex.Get(), u.tw, u.th,
+                        DXGI_FORMAT_B8G8R8A8_UNORM, RgbFull(),
+                        g_sh.mid_tex.Get(), u.tw, u.th, DXGI_FORMAT_NV12,
+                        Yuv709(), false) &&
+           u.scale.Build(g_sh.mid_tex.Get(), u.tw, u.th, DXGI_FORMAT_NV12,
+                         Yuv709(), g_sh.out_tex.Get(), u.dw, u.dh,
+                         DXGI_FORMAT_B8G8R8A8_UNORM, RgbFull(), true);
+}
+
+Setup *FindSetup(int tw, int th, int dw, int dh)
+{
+    for (auto &u : g_setups) {
+        if (u.tw == tw && u.th == th && u.dw == dw && u.dh == dh) {
+            return &u;
+        }
+    }
+    if (g_setups.size() >= 6) {
+        g_setups.erase(g_setups.begin());
+    }
+    Setup u;
+    u.tw = tw;
+    u.th = th;
+    u.dw = dw;
+    u.dh = dh;
+    u.nv12 = g_nv12;
+    if (!SetupStages(u)) {
+        // Some sizes only work with the video (NV12) input path
+        std::string first = g_err;
+        u.conv = Stage();
+        u.scale = Stage();
+        u.nv12 = true;
+        if (g_nv12 || !SetupStages(u)) {
+            if (!g_nv12) {
+                g_err = first + "; NV12: " + g_err;
+            }
+            return nullptr;
+        }
+    }
+    char m[128];
+    snprintf(m, sizeof(m), "%dx%d -> %dx%d ready (%s input, %s)", tw, th, dw,
+             dh, u.nv12 ? "NV12" : "RGB", g_sh.cpu_input ? "CPU copy" : "shared");
+    Log(m);
+    g_setups.push_back(std::move(u));
+    return &g_setups.back();
+}
+
+// Stop using RTX Video without releasing anything shared (see above)
+bool Disable(const char *why)
+{
+    if (g_out_locked) {
+        wglDXUnlockObjects(g_gl_dev, 1, &g_sh.h_out);
+        g_out_locked = false;
+    }
+    g_setups.clear();
+    g_cur = nullptr;
+    return Fail(why);
+}
+
+// The driver reset the device: start over with a new one, leaving the old
+// device and everything shared with it alone (releasing them is what the
+// driver can't cope with)
+void AbandonDevice()
+{
+    Log("graphics device was reset; starting a new one");
+    g_setups.clear();
+    g_cur = nullptr;
+    g_out_locked = false;
+    if (g_sh.h_out) {
+        g_retired.push_back(std::move(g_sh));
+        g_sh = Shared();
+    }
+    g_vctx.Detach();
+    g_vdev.Detach();
+    g_ctx.Detach();
+    g_dev.Detach();
+    g_gl_dev = nullptr;
 }
 
 } // namespace
@@ -617,14 +687,25 @@ bool RtxVideoUpscale(GLuint src_fbo, int tw, int th, int dw, int dh,
     if (g_out_locked) {
         RtxVideoEndFrame();
     }
-    if (tw > 8192 || th > 8192 || dw > 8192 || dh > 8192) {
+    if (tw < 1 || th < 1 || dw < 1 || dh < 1 || tw > 8192 || th > 8192 ||
+        dw > 8192 || dh > 8192) {
         return false;
     }
-    if (tw != g_pipe.tw || th != g_pipe.th || dw != g_pipe.dw ||
-        dh != g_pipe.dh || !g_h_out) {
-        // While the window is resizing (e.g. going fullscreen) the size
-        // changes every frame: wait until it settles, using NIS meanwhile,
-        // instead of rebuilding the shared textures each frame
+    // The display moved to another GPU or the driver reset
+    HRESULT removed = g_dev->GetDeviceRemovedReason();
+    if (FAILED(removed)) {
+        char b[160];
+        snprintf(b, sizeof(b),
+                 "The graphics driver reset (0x%08lX); press Check again. "
+                 "Using NIS.", (unsigned long)removed);
+        return Disable(b);
+    }
+    bool fits = g_sh.h_out && tw <= g_sh.cap_in_w && th <= g_sh.cap_in_h &&
+                dw <= g_sh.cap_out_w && dh <= g_sh.cap_out_h;
+    if (!fits) {
+        // Bigger shared textures are needed. While the window is still
+        // resizing the size changes every frame, so wait until it settles
+        // (using NIS meanwhile) rather than allocating for every step.
         static int want_w, want_h, want_tw, want_th;
         static Uint64 since;
         Uint64 now = SDL_GetTicks();
@@ -635,26 +716,37 @@ bool RtxVideoUpscale(GLuint src_fbo, int tw, int th, int dw, int dh,
             want_th = th;
             since = now;
         }
-        if (g_h_out && now - since < 400) {
+        if (g_sh.h_out && now - since < 400) {
             return false;
         }
         g_err.clear();
-        char m[96];
-        snprintf(m, sizeof(m), "resizing to %dx%d -> %dx%d", tw, th, dw, dh);
-        Log(m);
-        if (!BuildSized(tw, th, dw, dh)) {
+        if (!EnsureCapacity(tw, th, dw, dh)) {
             char b[320];
             snprintf(b, sizeof(b),
                      "Couldn't set up %dx%d -> %dx%d: %s. Using NIS.", tw, th,
                      dw, dh, g_err.empty() ? "unknown step" : g_err.c_str());
-            ReleaseAll();
-            Fail(b);
-            return false;
+            return Disable(b);
+        }
+        g_setups.clear(); // they point at the old textures
+        g_cur = nullptr;
+    }
+    if (!g_cur || g_cur->tw != tw || g_cur->th != th || g_cur->dw != dw ||
+        g_cur->dh != dh) {
+        g_err.clear();
+        g_cur = FindSetup(tw, th, dw, dh);
+        if (!g_cur) {
+            char b[320];
+            snprintf(b, sizeof(b),
+                     "Couldn't set up %dx%d -> %dx%d: %s. Using NIS.", tw, th,
+                     dw, dh, g_err.empty() ? "unknown step" : g_err.c_str());
+            return Disable(b);
         }
     }
 
-    // 1. OpenGL copies the frame in, top row first as Direct3D expects
-    if (g_cpu_input) {
+    // 1. Copy the frame in, top row first as Direct3D expects
+    if (g_sh.cpu_input) {
+        g_cpu_buf.resize((size_t)tw * th * 4);
+        g_cpu_flip.resize(g_cpu_buf.size());
         GLint prev_read, pack;
         glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prev_read);
         glGetIntegerv(GL_PACK_ALIGNMENT, &pack);
@@ -663,56 +755,51 @@ bool RtxVideoUpscale(GLuint src_fbo, int tw, int th, int dw, int dh,
         glReadPixels(0, 0, tw, th, GL_BGRA, GL_UNSIGNED_BYTE, g_cpu_buf.data());
         glPixelStorei(GL_PACK_ALIGNMENT, pack);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, prev_read);
-        // OpenGL rows are bottom first: hand them over in reverse
         const uint8_t *last = g_cpu_buf.data() + (size_t)(th - 1) * tw * 4;
-        static std::vector<uint8_t> flipped;
-        flipped.resize(g_cpu_buf.size());
         for (int y = 0; y < th; y++) {
-            memcpy(&flipped[(size_t)y * tw * 4], last - (size_t)y * tw * 4,
+            memcpy(&g_cpu_flip[(size_t)y * tw * 4], last - (size_t)y * tw * 4,
                    (size_t)tw * 4);
         }
-        g_ctx->UpdateSubresource(g_pipe.in_tex.Get(), 0, nullptr,
-                                 flipped.data(), tw * 4, 0);
+        D3D11_BOX box = { 0, 0, 0, (UINT)tw, (UINT)th, 1 };
+        g_ctx->UpdateSubresource(g_sh.in_tex.Get(), 0, &box, g_cpu_flip.data(),
+                                 tw * 4, 0);
     } else {
-        if (!wglDXLockObjects(g_gl_dev, 1, &g_h_in)) {
-            ReleaseAll();
-            Fail("Lost the OpenGL/Direct3D sharing; using NIS");
-            return false;
+        if (!wglDXLockObjects(g_gl_dev, 1, &g_sh.h_in)) {
+            return Disable("Lost the OpenGL/Direct3D sharing; press Check "
+                           "again. Using NIS.");
         }
         GLint prev_read, prev_draw;
         glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prev_read);
         glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_draw);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, src_fbo);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_gl_in_fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_sh.gl_in_fbo);
         glBlitFramebuffer(0, 0, tw, th, 0, th, tw, 0, GL_COLOR_BUFFER_BIT,
                           GL_NEAREST);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, prev_read);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prev_draw);
-        wglDXUnlockObjects(g_gl_dev, 1, &g_h_in);
+        wglDXUnlockObjects(g_gl_dev, 1, &g_sh.h_in);
     }
 
-    // 2. The driver upscales it
-    if (!g_pipe.Run()) {
-        ReleaseAll();
-        Fail("The video processor stopped working; using NIS");
-        return false;
+    // 2. The driver upscales it into the top-left dw x dh of the output
+    if ((g_cur->nv12 && !g_cur->conv.Blit()) || !g_cur->scale.Blit()) {
+        return Disable("The video processor stopped working; press Check "
+                       "again. Using NIS.");
     }
 
     // 3. OpenGL reads the result
-    if (!wglDXLockObjects(g_gl_dev, 1, &g_h_out)) {
-        ReleaseAll();
-        Fail("Lost the OpenGL/Direct3D sharing; using NIS");
-        return false;
+    if (!wglDXLockObjects(g_gl_dev, 1, &g_sh.h_out)) {
+        return Disable("Lost the OpenGL/Direct3D sharing; press Check again. "
+                       "Using NIS.");
     }
     g_out_locked = true;
-    *out_tex = g_gl_out;
+    *out_tex = g_sh.gl_out;
     return true;
 }
 
 void RtxVideoEndFrame(void)
 {
     if (g_out_locked) {
-        wglDXUnlockObjects(g_gl_dev, 1, &g_h_out);
+        wglDXUnlockObjects(g_gl_dev, 1, &g_sh.h_out);
         g_out_locked = false;
     }
 }
@@ -724,14 +811,16 @@ const char *RtxVideoStatus(void)
 
 void RtxVideoRetry(void)
 {
-    ReleaseAll();
+    if (g_state == State::Ready) {
+        Disable("Checking...");
+    }
     g_state = State::Untried;
     g_status = "Checking...";
 }
 
 void RtxVideoShutdown(void)
 {
-    ReleaseAll();
+    // Nothing: shared textures are reclaimed when xemu exits
 }
 
 #endif

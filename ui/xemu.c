@@ -1458,7 +1458,20 @@ void xemu_load_disc(const char *path, Error **errp)
     xbox_smc_eject_button();
     xemu_settings_set_string(&g_config.sys.files.dvd_path, "");
 
-    qmp_blockdev_change_medium("ide0-cd1", NULL, path, "raw", false, false,
+    // Game library patch overlays are qcow2 images backed by the disc image;
+    // everything else is loaded as a raw disc image as before.
+    const char *format = "raw";
+    FILE *probe = qemu_fopen(path, "rb");
+    if (probe) {
+        unsigned char magic[4];
+        if (fread(magic, 1, 4, probe) == 4 && magic[0] == 'Q' &&
+            magic[1] == 'F' && magic[2] == 'I' && magic[3] == 0xfb) {
+            format = "qcow2";
+        }
+        fclose(probe);
+    }
+
+    qmp_blockdev_change_medium("ide0-cd1", NULL, path, format, false, false,
                                false, 0, &error);
     if (error) {
         error_propagate(errp, error);

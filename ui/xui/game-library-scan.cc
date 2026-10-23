@@ -7,6 +7,7 @@
 // (at your option) any later version.
 //
 #include "game-library-scan.hh"
+#include "game-patches.hh"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -75,7 +76,8 @@ bool NameEquals(const uint8_t *name, size_t len, const char *want)
 
 // Walk the XDVDFS directory binary tree looking for `want`.
 bool FindInDirectory(const std::vector<uint8_t> &dir, const char *want,
-                     uint32_t &sector, uint32_t &size)
+                     uint32_t &sector, uint32_t &size,
+                     uint32_t *entry_pos = nullptr)
 {
     std::vector<uint32_t> stack = { 0 };
     std::unordered_set<uint32_t> visited;
@@ -95,6 +97,9 @@ bool FindInDirectory(const std::vector<uint8_t> &dir, const char *want,
             NameEquals(e + 14, name_len, want)) {
             sector = Le32(e + 4);
             size = Le32(e + 8);
+            if (entry_pos) {
+                *entry_pos = pos;
+            }
             return true;
         }
         if (left && left != 0xFFFF) {
@@ -504,4 +509,52 @@ std::string FormatRegion(uint32_t region)
         s += s.empty() ? "PAL" : " / PAL";
     }
     return s.empty() ? "Unknown" : s;
+}
+
+bool LocateDefaultXbe(const std::string &image_path, XbeLocation &loc,
+                      std::string &error)
+{
+    ImageFile img(image_path);
+    if (!img.Ok()) {
+        error = "Cannot open the disc image";
+        return false;
+    }
+    std::vector<uint8_t> buf;
+    uint64_t base = 0;
+    bool found = false;
+    for (uint64_t off : kPartitionOffsets) {
+        if (img.Read(off + 32 * kSectorSize, kSectorSize, buf) &&
+            memcmp(buf.data(), kXdvdfsMagic, kXdvdfsMagicLen) == 0) {
+            base = off;
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        error = "Not an Xbox disc image";
+        return false;
+    }
+    uint32_t root_sector = Le32(&buf[20]);
+    uint32_t root_size = Le32(&buf[24]);
+    std::vector<uint8_t> dir;
+    if (root_size == 0 || root_size > 64 * 1024 * 1024 ||
+        !img.Read(base + (uint64_t)root_sector * kSectorSize, root_size, dir)) {
+        error = "Cannot read the disc's root directory";
+        return false;
+    }
+    uint32_t sector, size, pos;
+    if (!FindInDirectory(dir, "default.xbe", sector, size, &pos)) {
+        error = "The disc has no default.xbe";
+        return false;
+    }
+    loc.image_size = img.Size();
+    loc.xbe_offset = base + (uint64_t)sector * kSectorSize;
+    loc.xbe_size = size;
+    loc.size_field_offset =
+        base + (uint64_t)root_sector * kSectorSize + pos + 8;
+    if (loc.xbe_offset + size > loc.image_size) {
+        error = "default.xbe extends past the end of the image";
+        return false;
+    }
+    return true;
 }

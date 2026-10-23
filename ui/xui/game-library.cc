@@ -26,6 +26,7 @@
 #include "common.hh"
 #include "game-library.hh"
 #include "game-library-scan.hh"
+#include "game-patches.hh"
 #include "actions.hh"
 #include "misc.hh"
 #include "viewport-manager.hh"
@@ -90,6 +91,14 @@ struct GameOverrides {
 std::vector<LibraryEntry> g_entries;
 std::map<std::string, GameStats> g_stats;        // by image path
 std::map<uint32_t, GameOverrides> g_overrides;   // by title ID
+
+// Game patches: files in <base>/patches/<TITLEID>/, applied in list order
+struct PatchItem {
+    std::string file; // file name inside the patch folder
+    bool enabled = true;
+};
+std::map<uint32_t, std::vector<PatchItem>> g_patches;
+std::map<std::string, std::string> g_overlay_to_original; // overlay -> image
 bool g_loaded = false;
 bool g_dirty = false;
 uint64_t g_last_save_tick = 0;
@@ -318,6 +327,23 @@ void LoadLibrary()
         json stats = j.value("stats", json::object());
         json overrides = j.value("overrides", json::object());
         g_primary_recursive = j.value("primary_recursive", true);
+        json patch_lists = j.value("patches", json::object());
+        json overlay_map = j.value("overlays", json::object());
+        for (auto &[id, list] : patch_lists.items()) {
+            std::vector<PatchItem> items;
+            for (auto &it : list) {
+                PatchItem pi;
+                pi.file = it.value("file", "");
+                pi.enabled = it.value("enabled", true);
+                if (!pi.file.empty()) {
+                    items.push_back(pi);
+                }
+            }
+            g_patches[(uint32_t)strtoul(id.c_str(), NULL, 16)] = items;
+        }
+        for (auto &[overlay, original] : overlay_map.items()) {
+            g_overlay_to_original[overlay] = original.get<std::string>();
+        }
         for (auto &f : j.value("folders", json::array())) {
             LibraryFolder lf;
             lf.path = f.value("path", "");
@@ -402,6 +428,16 @@ void SaveLibrary()
     }
     j["overrides"] = ovs;
     j["primary_recursive"] = g_primary_recursive;
+    json patches = json::object();
+    for (auto &[id, items] : g_patches) {
+        json list = json::array();
+        for (auto &pi : items) {
+            list.push_back({ { "file", pi.file }, { "enabled", pi.enabled } });
+        }
+        patches[TitleIdHex(id)] = list;
+    }
+    j["patches"] = patches;
+    j["overlays"] = g_overlay_to_original;
     json folders = json::array();
     for (auto &f : g_extra_folders) {
         folders.push_back({ { "path", f.path }, { "recursive", f.recursive } });
@@ -715,6 +751,155 @@ void EnsureTexture(LibraryEntry &e, int &budget)
 // Per-game settings
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Game patches
+// ---------------------------------------------------------------------------
+
+fs::path PatchDir(uint32_t title_id)
+{
+    return BasePath() / "patches" / TitleIdHex(title_id);
+}
+
+fs::path OverlayDir()
+{
+    return BasePath() / "patched-discs";
+}
+
+// The disc image behind a loaded path (overlays map back to their game)
+std::string OriginalDiscPath(const std::string &path)
+{
+    auto it = g_overlay_to_original.find(path);
+    return it == g_overlay_to_original.end() ? path : it->second;
+}
+
+bool IsPatchFile(const fs::path &p)
+{
+    std::string ext = Lower(p.extension().u8string());
+    return ext == ".xbe" || ext == ".ips" || ext == ".bps";
+}
+
+// Match the saved list with the files actually in the patch folder: keep the
+// user's order and on/off state, append new files (on), drop removed ones.
+void SyncPatches(uint32_t title_id)
+{
+    std::set<std::string> present;
+    std::vector<std::string> sorted;
+    std::error_code ec;
+    for (fs::directory_iterator it(PatchDir(title_id), ec), end;
+         !ec && it != end; it.increment(ec)) {
+        std::error_code fec;
+        if (it->is_regular_file(fec) && IsPatchFile(it->path())) {
+            std::string name = it->path().filename().u8string();
+            present.insert(name);
+            sorted.push_back(name);
+        }
+    }
+    std::sort(sorted.begin(), sorted.end());
+    std::vector<PatchItem> &items = g_patches[title_id];
+    size_t before = items.size();
+    items.erase(std::remove_if(items.begin(), items.end(),
+                               [&](const PatchItem &pi) {
+                                   return !present.count(pi.file);
+                               }),
+                items.end());
+    bool changed = items.size() != before;
+    for (auto &name : sorted) {
+        bool known = false;
+        for (auto &pi : items) {
+            known |= (pi.file == name);
+        }
+        if (!known) {
+            items.push_back({ name, true });
+            changed = true;
+        }
+    }
+    if (items.empty()) {
+        g_patches.erase(title_id);
+    }
+    if (changed) {
+        g_dirty = true;
+    }
+}
+
+std::vector<std::string> EnabledPatchPaths(uint32_t title_id)
+{
+    std::vector<std::string> out;
+    auto it = g_patches.find(title_id);
+    if (it == g_patches.end()) {
+        return out;
+    }
+    for (auto &pi : it->second) {
+        if (pi.enabled) {
+            out.push_back((PatchDir(title_id) / fs::u8path(pi.file)).u8string());
+        }
+    }
+    return out;
+}
+
+int EnabledPatchCount(uint32_t title_id)
+{
+    return (int)EnabledPatchPaths(title_id).size();
+}
+
+// Overlay file name depends on the image and the exact patch files, so any
+// change produces a fresh overlay.
+std::string OverlayPathFor(const LibraryEntry &e,
+                           const std::vector<std::string> &paths)
+{
+    std::error_code ec;
+    std::string sig = e.path + "|" + std::to_string(e.file_size) + "|" +
+                      std::to_string(e.mtime);
+    for (auto &p : paths) {
+        fs::path fp = fs::u8path(p);
+        sig += "|" + p + "|" + std::to_string(fs::file_size(fp, ec)) + "|" +
+               std::to_string(fs::last_write_time(fp, ec).time_since_epoch().count());
+    }
+    char hash[32];
+    snprintf(hash, sizeof(hash), "%016llx",
+             (unsigned long long)std::hash<std::string>()(sig));
+    return (OverlayDir() / (TitleIdHex(e.title_id) + "-" + hash + ".qcow2"))
+        .u8string();
+}
+
+// Image to load for this game: the disc itself, or a patched overlay.
+bool PrepareLaunchImage(LibraryEntry &e, std::string &load_path,
+                        std::string &error)
+{
+    load_path = e.path;
+    if (!e.valid) {
+        return true;
+    }
+    SyncPatches(e.title_id);
+    std::vector<std::string> paths = EnabledPatchPaths(e.title_id);
+    if (paths.empty()) {
+        return true;
+    }
+    std::string overlay = OverlayPathFor(e, paths);
+    std::error_code ec;
+    if (!fs::exists(fs::u8path(overlay), ec) &&
+        !BuildPatchedOverlay(e.path, paths, overlay, error)) {
+        return false;
+    }
+    // Remove this game's older overlays (ignore files still in use)
+    std::string prefix = TitleIdHex(e.title_id) + "-";
+    for (fs::directory_iterator it(OverlayDir(), ec), end; !ec && it != end;
+         it.increment(ec)) {
+        std::string name = it->path().filename().u8string();
+        std::string full = it->path().u8string();
+        if (name.compare(0, prefix.size(), prefix) == 0 &&
+            PathKey(it->path()) != PathKey(fs::u8path(overlay))) {
+            std::error_code rec;
+            if (fs::remove(it->path(), rec)) {
+                g_overlay_to_original.erase(full);
+            }
+        }
+    }
+    g_overlay_to_original[overlay] = e.path;
+    SaveLibrary();
+    load_path = overlay;
+    return true;
+}
+
 uint32_t TitleIdForPath(const std::string &path, bool *ok)
 {
     LibraryEntry *e = FindEntry(path);
@@ -790,7 +975,7 @@ const ImU32 kAccent = IM_COL32(0x62, 0xCA, 0x13, 0xFF); // xemu green
 bool IsCurrentDisc(const LibraryEntry &e)
 {
     const char *p = g_config.sys.files.dvd_path;
-    return p && e.path == p;
+    return p && p[0] && e.path == OriginalDiscPath(p);
 }
 
 void SortedFiltered(std::vector<LibraryEntry *> &out)
@@ -836,6 +1021,212 @@ void OpenSettingsFor(LibraryEntry &e)
     g_open_settings_popup = true;
 }
 
+std::string g_patches_path;           // game whose Patches window is open
+bool g_open_patches_popup = false;
+std::string g_patch_check_msg;
+bool g_patch_check_ok = false;
+std::string g_patch_confirm_remove;
+
+void OpenPatchesFor(LibraryEntry &e)
+{
+    g_patches_path = e.path;
+    g_patch_check_msg.clear();
+    g_patch_confirm_remove.clear();
+    SyncPatches(e.title_id);
+    g_open_patches_popup = true;
+}
+
+void AddPatchFile(uint32_t title_id)
+{
+    static const SDL_DialogFileFilter filters[] = {
+        { "Game patches (*.xbe, *.ips, *.bps)", "xbe;ips;bps" },
+        { "All Files", "*" },
+    };
+    ShowOpenFileDialog(filters, 2, NULL, [title_id](const char *path) {
+        fs::path src = fs::u8path(path);
+        if (!IsPatchFile(src)) {
+            xemu_queue_error_message(
+                "Unsupported patch file. Use .xbe, .ips or .bps files.");
+            return;
+        }
+        std::error_code ec;
+        fs::path dir = PatchDir(title_id);
+        fs::create_directories(dir, ec);
+        fs::path dst = dir / src.filename();
+        for (int n = 2; fs::exists(dst, ec) && n < 100; n++) {
+            dst = dir / fs::u8path(src.stem().u8string() + " (" +
+                                   std::to_string(n) + ")" +
+                                   src.extension().u8string());
+        }
+        if (!fs::copy_file(src, dst, ec)) {
+            xemu_queue_error_message("Could not copy the patch file.");
+            return;
+        }
+        SyncPatches(title_id);
+        g_patch_check_msg.clear();
+        SaveLibrary();
+    });
+}
+
+const char *PatchTypeLabel(const std::string &file)
+{
+    std::string ext = Lower(fs::u8path(file).extension().u8string());
+    if (ext == ".xbe") {
+        return "Custom XBE";
+    }
+    if (ext == ".ips") {
+        return "IPS patch";
+    }
+    return "BPS patch";
+}
+
+void DrawPatchesPopup()
+{
+    if (g_open_patches_popup) {
+        ImGui::OpenPopup("Game Patches");
+        g_open_patches_popup = false;
+    }
+    const float s = g_viewport_mgr.m_scale;
+    ImGui::SetNextWindowSize(ImVec2(620 * s, 0), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal("Game Patches", NULL,
+                                ImGuiWindowFlags_AlwaysAutoResize)) {
+        return;
+    }
+    LibraryEntry *e = FindEntry(g_patches_path);
+    if (!e || !e->valid) {
+        ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+    uint32_t id = e->title_id;
+    ImGui::TextUnformatted(e->DisplayName().c_str());
+    ImGui::TextDisabled("%s  -  patch folder: patches\\%s",
+                        FormatTitleId(id).c_str(), TitleIdHex(id).c_str());
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 600 * s);
+    ImGui::TextDisabled("Enabled patches are applied, top to bottom, when you "
+                        "play this game from the library. Your disc image is "
+                        "never modified. A custom .xbe replaces the game's "
+                        "default.xbe; .ips and .bps patches modify it.");
+    ImGui::PopTextWrapPos();
+    ImGui::Separator();
+
+    std::vector<PatchItem> &items = g_patches[id];
+    if (items.empty()) {
+        ImGui::Dummy(ImVec2(0, 4 * s));
+        ImGui::TextUnformatted("No patches yet. Add a .xbe, .ips or .bps file.");
+        ImGui::Dummy(ImVec2(0, 4 * s));
+    } else if (ImGui::BeginTable("##patches", 4,
+                                 ImGuiTableFlags_RowBg |
+                                     ImGuiTableFlags_BordersInnerH |
+                                     ImGuiTableFlags_SizingStretchProp,
+                                 ImVec2(600 * s, 0))) {
+        ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableSetupColumn("Patch", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableHeadersRow();
+        int move_from = -1, move_to = -1;
+        std::string remove;
+        for (size_t i = 0; i < items.size(); i++) {
+            PatchItem &pi = items[i];
+            ImGui::PushID((int)i);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            if (ImGui::Checkbox("##on", &pi.enabled)) {
+                g_dirty = true;
+                g_patch_check_msg.clear();
+            }
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(pi.file.c_str());
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("%s", PatchTypeLabel(pi.file));
+            ImGui::TableNextColumn();
+            ImGui::BeginDisabled(i == 0);
+            if (ImGui::ArrowButton("##up", ImGuiDir_Up)) {
+                move_from = (int)i;
+                move_to = (int)i - 1;
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine(0, 2 * s);
+            ImGui::BeginDisabled(i + 1 == items.size());
+            if (ImGui::ArrowButton("##down", ImGuiDir_Down)) {
+                move_from = (int)i;
+                move_to = (int)i + 1;
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (g_patch_confirm_remove == pi.file) {
+                if (ImGui::SmallButton("Delete file?")) {
+                    remove = pi.file;
+                }
+            } else if (ImGui::SmallButton(ICON_FA_XMARK)) {
+                g_patch_confirm_remove = pi.file;
+            }
+            ImGui::SetItemTooltip("Remove this patch from the patch folder");
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+        if (move_from >= 0) {
+            std::swap(items[move_from], items[move_to]);
+            g_dirty = true;
+            g_patch_check_msg.clear();
+        }
+        if (!remove.empty()) {
+            std::error_code ec;
+            fs::remove(PatchDir(id) / fs::u8path(remove), ec);
+            g_patch_confirm_remove.clear();
+            SyncPatches(id);
+            g_patch_check_msg.clear();
+            SaveLibrary();
+        }
+    }
+
+    ImGui::Dummy(ImVec2(0, 4 * s));
+    if (ImGui::Button(ICON_FA_FOLDER_OPEN "  Add patch...")) {
+        AddPatchFile(id);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Open patch folder")) {
+        std::error_code ec;
+        fs::create_directories(PatchDir(id), ec);
+        SDL_OpenURL(("file:///" + PatchDir(id).generic_u8string()).c_str());
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Refresh")) {
+        SyncPatches(id);
+        g_patch_check_msg.clear();
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(EnabledPatchCount(id) == 0);
+    if (ImGui::Button(ICON_FA_CHECK "  Check patches")) {
+        std::string load, error;
+        g_patch_check_ok = PrepareLaunchImage(*e, load, error);
+        g_patch_check_msg =
+            g_patch_check_ok
+                ? string_format("Ready: %d patch%s will be applied on Play.",
+                                EnabledPatchCount(id),
+                                EnabledPatchCount(id) == 1 ? "" : "es")
+                : error;
+    }
+    ImGui::EndDisabled();
+    if (!g_patch_check_msg.empty()) {
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 600 * s);
+        ImGui::TextColored(g_patch_check_ok ? ImVec4(0.45f, 0.86f, 0.16f, 1)
+                                            : ImVec4(1.0f, 0.45f, 0.4f, 1),
+                           "%s", g_patch_check_msg.c_str());
+        ImGui::PopTextWrapPos();
+    }
+    ImGui::Separator();
+    if (ImGui::Button("Done", ImVec2(120 * s, 0)) ||
+        ImGui::IsKeyPressed(ImGuiKey_Escape) ||
+        ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight)) {
+        SaveLibrary();
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
 void DrawContextMenu(LibraryEntry &e)
 {
     if (!ImGui::BeginPopupContextItem("##ctx")) {
@@ -855,6 +1246,9 @@ void DrawContextMenu(LibraryEntry &e)
     if (ImGui::MenuItem(ICON_FA_GEAR "  Game settings...", NULL, false,
                         e.valid)) {
         OpenSettingsFor(e);
+    }
+    if (ImGui::MenuItem("Patches...", NULL, false, e.valid)) {
+        OpenPatchesFor(e);
     }
     ImGui::Separator();
     if (ImGui::MenuItem("Copy title ID", NULL, false, e.valid)) {
@@ -1328,8 +1722,9 @@ void DrawSaveStates(LibraryEntry &e, float w)
     std::vector<int> mine;
     for (int i = 0; i < g_snapshot_mgr.m_snapshots_len; i++) {
         const XemuSnapshotData &d = g_snapshot_mgr.m_extra_data[i];
-        bool same_disc = d.disc_path && d.disc_path[0] &&
-                         PathKey(fs::u8path(d.disc_path)) == key;
+        bool same_disc =
+            d.disc_path && d.disc_path[0] &&
+            PathKey(fs::u8path(OriginalDiscPath(d.disc_path))) == key;
         bool same_title = !title.empty() && d.xbe_title_name &&
                           Lower(d.xbe_title_name) == title;
         if (same_disc || same_title) {
@@ -1448,6 +1843,12 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
     if (ImGui::Button(ICON_FA_GEAR "  Settings", ImVec2(half, 0))) {
         OpenSettingsFor(e);
     }
+    int npatch = e.valid ? EnabledPatchCount(e.title_id) : 0;
+    std::string patch_label =
+        npatch ? string_format("Patches (%d on)", npatch) : std::string("Patches");
+    if (ImGui::Button(patch_label.c_str(), ImVec2(w, 0))) {
+        OpenPatchesFor(e);
+    }
     ImGui::EndDisabled();
     ImGui::Dummy(ImVec2(0, 8 * s));
 
@@ -1516,10 +1917,22 @@ void GameLibraryWindow::Launch(const std::string &path)
 {
     LibraryEntry *e = FindEntry(path);
     std::string name = e ? e->DisplayName() : fs::u8path(path).stem().u8string();
-    ActionLoadDiscFile(path.c_str());
+    std::string load_path = path;
+    if (e) {
+        std::string error;
+        if (!PrepareLaunchImage(*e, load_path, error)) {
+            std::string msg = "Could not apply patches for " + name + ": " + error;
+            xemu_queue_error_message(msg.c_str());
+            return;
+        }
+    }
+    ActionLoadDiscFile(load_path.c_str());
     const char *loaded = g_config.sys.files.dvd_path;
-    if (!loaded || path != loaded) {
+    if (!loaded || load_path != loaded) {
         return; // the load failed and xemu already showed why
+    }
+    if (load_path != path) {
+        name += " (patched)";
     }
     // Restart the console so it boots the disc, like powering on a real Xbox
     // with the game in the tray. Swapping the disc alone leaves many
@@ -1576,7 +1989,7 @@ void GameLibraryWindow::Update()
 
     // Track disc changes: last played + per-game settings
     const char *dvd = g_config.sys.files.dvd_path;
-    std::string cur = dvd ? dvd : "";
+    std::string cur = (dvd && dvd[0]) ? OriginalDiscPath(dvd) : "";
     if (cur != g_last_dvd_path) {
         if (cur.empty() && !g_last_dvd_path.empty()) {
             Open(); // disc ejected: back to the library to pick the next game
@@ -1801,6 +2214,7 @@ void GameLibraryWindow::Draw()
 
     DrawSettingsPopup();
     DrawFoldersPopup();
+    DrawPatchesPopup();
 
     // Esc / B closes the library when nothing else wants the key
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&

@@ -51,6 +51,7 @@
 #include "menubar.hh"
 #include "compat.hh"
 #include "game-library.hh"
+#include "perf-overlay.hh"
 #if defined(_WIN32)
 #include "update.hh"
 #endif
@@ -328,6 +329,9 @@ void xemu_hud_update(void)
 #endif
     g_scene_mgr.Draw();
     if (!first_boot_window.is_open) notification_manager.Draw();
+    if (!first_boot_window.is_open && !game_library_window.is_open) {
+        DrawPerformanceOverlay();
+    }
     g_snapshot_mgr.Draw();
 
     // static bool show_demo = true;

@@ -81,6 +81,11 @@ void ProcessKeyboardShortcuts(void)
         xemu_toggle_fullscreen();
     }
 
+    if (ImGui::IsKeyPressed(ImGuiKey_F9)) {
+        g_config.display.ui.show_perf_overlay =
+            !g_config.display.ui.show_perf_overlay;
+    }
+
 #ifdef CONFIG_RENDERDOC
     if (ImGui::IsKeyPressed(ImGuiKey_F10) && nv2a_dbg_renderdoc_available()) {
         ImGuiIO& io = ImGui::GetIO();
@@ -255,6 +260,8 @@ void ShowMainMenu()
                                 xemu_is_fullscreen(), true)) {
                 xemu_toggle_fullscreen();
             }
+            ImGui::MenuItem("Performance Overlay", "F9",
+                            &g_config.display.ui.show_perf_overlay);
 
             ImGui::EndMenu();
         }

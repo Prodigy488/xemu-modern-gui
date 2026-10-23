@@ -282,6 +282,9 @@ display:
     show_notifications:
       type: bool
       default: true
+    show_perf_overlay:
+      type: bool
+      default: false
     hide_cursor:
       type: bool
       default: true

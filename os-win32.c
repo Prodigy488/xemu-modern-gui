@@ -47,12 +47,54 @@ static void os_undo_timer_resolution(void)
     timeEndPeriod(mm_tc.wPeriodMin);
 }
 
+/*
+ * Opt out of Windows power throttling (EcoQoS). Without this, Windows may
+ * run the emulator on efficiency cores at reduced clocks, or stop honoring
+ * the timer resolution above while the window is not in focus, which hurts
+ * emulation speed and frame pacing, especially on laptops. Looked up at
+ * runtime: older Windows versions simply skip it.
+ */
+static void os_disable_power_throttling(void)
+{
+    typedef struct {
+        ULONG Version;
+        ULONG ControlMask;
+        ULONG StateMask;
+    } xemu_power_throttling_state;
+    typedef BOOL(WINAPI * set_process_information_fn)(HANDLE, int, LPVOID,
+                                                       DWORD);
+    const int process_power_throttling = 4; /* ProcessPowerThrottling */
+    const ULONG execution_speed = 0x1;
+    const ULONG ignore_timer_resolution = 0x4;
+
+    HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
+    set_process_information_fn set_info =
+        kernel32 ? (set_process_information_fn)(void (*)(void))GetProcAddress(
+                       kernel32, "SetProcessInformation")
+                 : NULL;
+    if (!set_info) {
+        return;
+    }
+    xemu_power_throttling_state state = { 1, /* PROCESS_POWER_THROTTLING_CURRENT_VERSION */
+                                          execution_speed |
+                                              ignore_timer_resolution,
+                                          0 };
+    if (!set_info(GetCurrentProcess(), process_power_throttling, &state,
+                  sizeof(state))) {
+        /* Windows 10 does not know IGNORE_TIMER_RESOLUTION; retry without */
+        state.ControlMask = execution_speed;
+        set_info(GetCurrentProcess(), process_power_throttling, &state,
+                 sizeof(state));
+    }
+}
+
 void os_setup_early_signal_handling(void)
 {
     SetConsoleCtrlHandler(qemu_ctrl_handler, TRUE);
     timeGetDevCaps(&mm_tc, sizeof(mm_tc));
     timeBeginPeriod(mm_tc.wPeriodMin);
     atexit(os_undo_timer_resolution);
+    os_disable_power_throttling();
 }
 
 void os_set_line_buffering(void)

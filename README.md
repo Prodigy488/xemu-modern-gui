@@ -35,6 +35,11 @@ shared.
   the game you're playing, with its cover, title ID, play time and an Insignia
   badge for online-capable games. Turn it off in Settings > General > Discord
   status. Requires the Discord app running on the same PC.
+- **New in v1.4: motion.** The dashboard animates: flowing light ribbons, a
+  slowly turning wireframe orb and drifting specks in the background (plus a
+  grid floor in Neon), content that sweeps in when you switch tabs, a tab
+  highlight that glides, and a selection glow. Turn it off with
+  "Animations and moving background" in Settings.
 - **New in v1.3: Neon theme.** A dark, cyberpunk look for the dashboard:
   near-black backgrounds, cyan and magenta accents, cut-corner panels and HUD
   labels. The previous green look stays available (Games > Library Style).

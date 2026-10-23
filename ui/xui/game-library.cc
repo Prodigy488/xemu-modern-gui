@@ -1527,7 +1527,7 @@ const LibTheme kThemeNeon = {
     IM_COL32(255, 46, 136, 255),  // hot magenta
     IM_COL32(228, 232, 245, 255),
     IM_COL32(118, 128, 162, 255),
-    IM_COL32(14, 13, 26, 200),
+    IM_COL32(14, 13, 26, 165),
     IM_COL32(0, 229, 255, 46),
     IM_COL32(255, 46, 136, 255),
     IM_COL32(0, 229, 255, 255),
@@ -1638,6 +1638,30 @@ std::string Upper(const std::string &t)
         u += (char)toupper((unsigned char)c);
     }
     return u;
+}
+
+// Animation state (all driven by ImGui::GetTime)
+struct DashAnim {
+    double tab_t = -10;      // when the current tab (or the dashboard) appeared
+    double hero_t = -10;     // when the Home hero switched games
+    std::string hero_path;
+    float hl_x = -1, hl_w = 0; // animated tab highlight
+} g_anim;
+
+bool Animations()
+{
+    return g_config.display.ui.use_animations;
+}
+
+// 0 -> 1 over `dur` seconds since `since`, easing out
+float EaseSince(double since, float dur)
+{
+    if (!Animations()) {
+        return 1.0f;
+    }
+    float k = (float)((ImGui::GetTime() - since) / dur);
+    k = std::clamp(k, 0.0f, 1.0f);
+    return 1.0f - (1.0f - k) * (1.0f - k) * (1.0f - k);
 }
 
 // Neon: thin HUD brackets on two opposite corners
@@ -2691,9 +2715,14 @@ void DrawTile(LibraryEntry &e, float tile_w, int &tex_budget)
         if (hovered || selected || focused) {
             ImU32 col = (selected || focused) ? T().accent : IM_COL32(255, 255, 255, 90);
             if (T().neon && (selected || focused)) {
+                // Soft glow that breathes while selected
+                float pulse = Animations()
+                                  ? 0.5f + 0.5f * sinf((float)ImGui::GetTime() * 3.2f)
+                                  : 0.5f;
                 ShapeStroke(dl, ImVec2(a.x - 3 * s, a.y - 3 * s),
                             ImVec2(art_b.x + 3 * s, art_b.y + 3 * s),
-                            Alpha(T().accent, 60), rounding + 3 * s, 5.0f * s);
+                            Alpha(T().accent, (int)(35 + 55 * pulse)), rounding + 3 * s,
+                            5.0f * s);
             }
             ShapeStroke(dl, a, art_b, col, rounding, 2.5f * s);
         }
@@ -4043,6 +4072,7 @@ std::string g_media_path;       // game shown on the Media tab
 bool g_home_focus_play = false; // put controller focus on Play next frame
 
 
+
 // Translucent card behind a region
 void DashCard(ImDrawList *dl, ImVec2 a, ImVec2 b)
 {
@@ -4189,12 +4219,151 @@ LibraryEntry *DefaultHomeGame()
 
 void SwitchTab(int tab)
 {
-    g_dash_tab = (tab + kTabCount) % kTabCount;
+    int next = (tab + kTabCount) % kTabCount;
+    if (next != g_dash_tab) {
+        g_anim.tab_t = ImGui::GetTime();
+    }
+    g_dash_tab = next;
     RequestPreviewStop();
 }
 
+// A soft band of light flowing across the screen (the "wave"): a triangle
+// strip, brightest along its middle and fading to nothing at its edges
+void DrawRibbon(ImDrawList *dl, ImVec2 a, ImVec2 b, float t, float base, float amp,
+                float freq, float speed, float thick, float phase, ImU32 col)
+{
+    const int n = 72;
+    float w = b.x - a.x, h = b.y - a.y;
+    ImVec2 uv = ImGui::GetDrawListSharedData()->TexUvWhitePixel;
+    ImU32 clear = col & 0x00FFFFFF;
+    dl->PrimReserve(n * 12, (n + 1) * 3);
+    ImDrawIdx base_idx = (ImDrawIdx)dl->_VtxCurrentIdx;
+    const float tau = 6.2831853f;
+    for (int i = 0; i <= n; i++) {
+        float u = (float)i / n;
+        float y = a.y + h * (base + amp * sinf(u * freq * tau + t * speed + phase) +
+                             amp * 0.45f * sinf(u * freq * 1.7f * tau - t * speed * 0.6f +
+                                                phase * 2.0f));
+        float th = thick * h * (0.55f + 0.45f * sinf(u * 3.1f + t * 0.35f + phase));
+        float x = a.x + w * u;
+        dl->PrimWriteVtx(ImVec2(x, y - th), uv, clear);
+        dl->PrimWriteVtx(ImVec2(x, y), uv, col);
+        dl->PrimWriteVtx(ImVec2(x, y + th), uv, clear);
+    }
+    for (int i = 0; i < n; i++) {
+        ImDrawIdx c0 = (ImDrawIdx)(base_idx + i * 3), c1 = (ImDrawIdx)(c0 + 3);
+        ImDrawIdx q[12] = { c0, (ImDrawIdx)(c0 + 1), (ImDrawIdx)(c1 + 1),
+                            c0, (ImDrawIdx)(c1 + 1), c1,
+                            (ImDrawIdx)(c0 + 1), (ImDrawIdx)(c0 + 2), (ImDrawIdx)(c1 + 2),
+                            (ImDrawIdx)(c0 + 1), (ImDrawIdx)(c1 + 2), (ImDrawIdx)(c1 + 1) };
+        for (ImDrawIdx v : q) {
+            dl->PrimWriteIdx(v);
+        }
+    }
+}
+
+// A slowly turning wireframe orb: a nod to the original Xbox dashboard's
+// glowing sphere, drawn as a globe of light lines
+void DrawOrb(ImDrawList *dl, ImVec2 c, float r, float t, ImU32 front, ImU32 back)
+{
+    const float pi = 3.14159265f;
+    const int seg = 40;
+    float rot = t * 0.12f;
+    float tilt = 0.28f; // view slightly from above
+    ImVec2 pts[seg + 1];
+    // Meridians
+    for (int k = 0; k < 9; k++) {
+        float lon = rot + k * pi / 9;
+        bool facing = cosf(lon) > 0;
+        for (int i = 0; i <= seg; i++) {
+            float lat = -pi / 2 + pi * i / seg;
+            float x = cosf(lat) * sinf(lon);
+            float z = cosf(lat) * cosf(lon);
+            float y = sinf(lat);
+            pts[i] = ImVec2(c.x + r * x, c.y - r * (y * cosf(tilt) - z * sinf(tilt)));
+        }
+        dl->AddPolyline(pts, seg + 1, facing ? front : back, 0, 1.0f);
+    }
+    // Parallels
+    for (int k = 1; k < 6; k++) {
+        float lat = -pi / 2 + pi * k / 6;
+        for (int i = 0; i <= seg; i++) {
+            float lon = 2 * pi * i / seg;
+            float x = cosf(lat) * sinf(lon);
+            float z = cosf(lat) * cosf(lon);
+            float y = sinf(lat);
+            pts[i] = ImVec2(c.x + r * x, c.y - r * (y * cosf(tilt) - z * sinf(tilt)));
+        }
+        dl->AddPolyline(pts, seg + 1, front, 0, 1.0f);
+    }
+}
+
+// Animated layers behind the dashboard: ribbons, the orb, drifting specks
+// and (Neon) a grid floor. Kept faint so the content stays readable.
+void DrawDashMotion(ImDrawList *dl, ImVec2 a, ImVec2 b)
+{
+    const float s = g_viewport_mgr.m_scale;
+    const LibTheme &th = T();
+    float t = (float)fmod(ImGui::GetTime(), 3600.0);
+    float w = b.x - a.x, h = b.y - a.y;
+
+    if (th.neon) {
+        // Grid floor scrolling toward the viewer
+        float horizon = a.y + h * 0.70f;
+        float cx = a.x + w * 0.5f;
+        for (int j = -14; j <= 14; j++) {
+            float xb = cx + j * w * 0.075f;
+            dl->AddLine(ImVec2(cx + j * w * 0.012f, horizon), ImVec2(xb, b.y),
+                        IM_COL32(255, 46, 136, 12), 1.0f);
+        }
+        for (int k = 0; k < 12; k++) {
+            float z = (float)fmod(k / 12.0 + t * 0.045, 1.0);
+            float y = horizon + (b.y - horizon) * z * z;
+            dl->AddLine(ImVec2(a.x, y), ImVec2(b.x, y),
+                        IM_COL32(255, 46, 136, (int)(4 + 22 * z)), 1.0f);
+        }
+        dl->AddRectFilledMultiColor(ImVec2(a.x, horizon - 2 * s), ImVec2(b.x, horizon + 30 * s),
+                                    IM_COL32(4, 4, 9, 0), IM_COL32(4, 4, 9, 0),
+                                    IM_COL32(4, 4, 9, 120), IM_COL32(4, 4, 9, 120));
+    }
+
+    // Orb, upper right, behind the content
+    ImU32 orb = th.neon ? th.accent : IM_COL32(120, 230, 60, 255);
+    float orb_r = h * 0.34f;
+    ImVec2 oc(a.x + w * 0.80f, a.y + h * 0.40f);
+    for (int i = 0; i < 4; i++) {
+        dl->AddCircleFilled(oc, orb_r * (0.35f + i * 0.2f), Alpha(orb, 6), 48);
+    }
+    DrawOrb(dl, oc, orb_r, t, Alpha(orb, 46), Alpha(orb, 16));
+
+    // Flowing ribbons
+    if (th.neon) {
+        DrawRibbon(dl, a, b, t, 0.60f, 0.07f, 0.9f, 0.22f, 0.08f, 0.0f, IM_COL32(0, 229, 255, 52));
+        DrawRibbon(dl, a, b, t, 0.68f, 0.06f, 1.2f, 0.17f, 0.06f, 2.1f, IM_COL32(255, 46, 136, 44));
+        DrawRibbon(dl, a, b, t, 0.52f, 0.05f, 0.7f, 0.12f, 0.04f, 4.0f, IM_COL32(140, 110, 255, 38));
+    } else {
+        DrawRibbon(dl, a, b, t, 0.62f, 0.07f, 0.9f, 0.20f, 0.08f, 0.0f, IM_COL32(98, 202, 19, 50));
+        DrawRibbon(dl, a, b, t, 0.70f, 0.06f, 1.2f, 0.15f, 0.06f, 2.1f, IM_COL32(170, 240, 90, 34));
+        DrawRibbon(dl, a, b, t, 0.54f, 0.05f, 0.7f, 0.11f, 0.04f, 4.0f, IM_COL32(40, 160, 70, 40));
+    }
+
+    // Drifting specks of light
+    for (int i = 0; i < 42; i++) {
+        uint32_t hsh = (uint32_t)i * 2654435761u;
+        float fx = (hsh & 0xFFFF) / 65535.0f;
+        float fs = ((hsh >> 16) & 0xFF) / 255.0f;
+        float fp = ((hsh >> 24) & 0xFF) / 255.0f;
+        float speed = 6 + 16 * fs;
+        float y = b.y - (float)fmod(t * speed * s + fp * h * 1.2f, h * 1.2f);
+        float x = a.x + w * fx + 12 * s * sinf(t * 0.4f + i);
+        float tw = 0.5f + 0.5f * sinf(t * (1.5f + fs) + i * 1.7f);
+        ImU32 col = th.neon ? (i % 3 == 0 ? th.accent2 : th.accent) : th.accent;
+        dl->AddCircleFilled(ImVec2(x, y), (1.0f + 1.4f * fs) * s, Alpha(col, (int)(25 + 70 * tw)), 8);
+    }
+}
+
 // Background. Green: a soft glow top-right. Neon: near-black violet, faint
-// cyan and magenta glows, and scanlines.
+// cyan and magenta glows, and scanlines. Both animate when enabled.
 void DrawDashBackground(ImDrawList *dl, ImVec2 a, ImVec2 b)
 {
     const float s = g_viewport_mgr.m_scale;
@@ -4207,6 +4376,9 @@ void DrawDashBackground(ImDrawList *dl, ImVec2 a, ImVec2 b)
             dl->AddCircleFilled(ImVec2(a.x + w * 0.80f, a.y - h * 0.05f),
                                 w * (0.12f + i * 0.06f), IM_COL32(98, 202, 19, 7), 64);
         }
+        if (Animations()) {
+            DrawDashMotion(dl, a, b);
+        }
         return;
     }
     dl->AddRectFilledMultiColor(a, b, IM_COL32(9, 8, 18, 150), IM_COL32(6, 10, 20, 150),
@@ -4216,6 +4388,9 @@ void DrawDashBackground(ImDrawList *dl, ImVec2 a, ImVec2 b)
                             w * (0.10f + i * 0.055f), IM_COL32(0, 229, 255, 5), 64);
         dl->AddCircleFilled(ImVec2(a.x + w * 0.04f, b.y + h * 0.06f),
                             w * (0.08f + i * 0.05f), IM_COL32(255, 46, 136, 5), 64);
+    }
+    if (Animations()) {
+        DrawDashMotion(dl, a, b);
     }
     float step = std::max(3.0f, 3 * s);
     for (float y = a.y; y < b.y; y += step) {
@@ -4276,8 +4451,12 @@ void DrawDashTopBar()
     };
     chip("LB");
 
-    // Tabs. Green: pills. Neon: numbered labels with an underline.
+    // Tabs. Green: pills. Neon: numbered labels with an underline. The
+    // highlight is drawn underneath (channel 0) and glides to the active tab.
     ImGui::PushFont(FontOr(g_font_mgr.m_menu_font_small));
+    dl->ChannelsSplit(2);
+    dl->ChannelsSetCurrent(1);
+    ImVec2 hl_a(0, 0), hl_b(0, 0);
     for (int t = 0; t < kTabCount; t++) {
         bool on = g_dash_tab == t;
         ImGui::PushID(t);
@@ -4303,11 +4482,8 @@ void DrawDashTopBar()
             dl->AddText(ImVec2(tx + ns.x + 6 * s, ty),
                         on ? th.accent : hov ? th.text : th.dim, name.c_str());
             if (on) {
-                float ux0 = tx, ux1 = p.x + size.x - 12 * s, uy = p.y + size.y - 2 * s;
-                dl->AddRectFilled(ImVec2(ux0, uy - 6 * s), ImVec2(ux1, uy + 3 * s),
-                                  Alpha(th.accent, 26));
-                dl->AddRectFilled(ImVec2(ux0, uy - 1 * s), ImVec2(ux1, uy + 1 * s),
-                                  th.accent);
+                hl_a = ImVec2(tx, p.y + size.y - 8 * s);
+                hl_b = ImVec2(p.x + size.x - 12 * s, p.y + size.y + 1 * s);
             }
         } else {
             ImGui::SameLine(0, t ? 6 * s : 12 * s);
@@ -4315,12 +4491,18 @@ void DrawDashTopBar()
             ImVec2 size(ts.x + 34 * s, ts.y + 14 * s);
             ImGui::SetCursorScreenPos(
                 ImVec2(ImGui::GetCursorScreenPos().x, y_mid - size.y / 2));
+            ImVec2 tp = ImGui::GetCursorScreenPos();
+            if (on) {
+                hl_a = tp;
+                hl_b = ImVec2(tp.x + size.x, tp.y + size.y);
+            }
+            // The active pill is drawn underneath, so it can glide
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, size.y / 2);
-            ImGui::PushStyleColor(ImGuiCol_Button, on ? th.primary : ImVec4(0, 0, 0, 0));
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                                  on ? th.primary : ImVec4(1, 1, 1, 0.08f));
+                                  on ? ImVec4(0, 0, 0, 0) : ImVec4(1, 1, 1, 0.08f));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                                  on ? th.primary : ImVec4(1, 1, 1, 0.14f));
+                                  on ? ImVec4(0, 0, 0, 0) : ImVec4(1, 1, 1, 0.14f));
             ImGui::PushStyleColor(ImGuiCol_Text,
                                   on ? th.on_primary : ImVec4(0.60f, 0.66f, 0.59f, 1));
             if (ImGui::Button(kTabNames[t], size)) {
@@ -4331,6 +4513,27 @@ void DrawDashTopBar()
         }
         ImGui::PopID();
     }
+    // Glide the highlight toward the active tab
+    dl->ChannelsSetCurrent(0);
+    if (hl_b.x > hl_a.x) {
+        float k = Animations()
+                      ? 1.0f - expf(-ImGui::GetIO().DeltaTime * 16.0f)
+                      : 1.0f;
+        if (g_anim.hl_x < 0) {
+            k = 1.0f;
+        }
+        g_anim.hl_x += (hl_a.x - g_anim.hl_x) * k;
+        g_anim.hl_w += ((hl_b.x - hl_a.x) - g_anim.hl_w) * k;
+        ImVec2 ha(g_anim.hl_x, hl_a.y), hb(g_anim.hl_x + g_anim.hl_w, hl_b.y);
+        if (th.neon) {
+            dl->AddRectFilled(ha, ImVec2(hb.x, hb.y - 2 * s), Alpha(th.accent, 26));
+            dl->AddRectFilled(ImVec2(ha.x, hb.y - 3 * s), ImVec2(hb.x, hb.y - 1 * s),
+                              th.accent);
+        } else {
+            dl->AddRectFilled(ha, hb, ImGui::GetColorU32(th.primary), (hb.y - ha.y) / 2);
+        }
+    }
+    dl->ChannelsMerge();
     ImGui::PopFont();
     chip("RB");
 
@@ -4488,6 +4691,11 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
     EnsureTexture(e, tex_budget);
 
     const bool neon = T().neon;
+    if (e.path != g_anim.hero_path) {
+        g_anim.hero_path = e.path;
+        g_anim.hero_t = ImGui::GetTime();
+    }
+    const float show = EaseSince(g_anim.hero_t, 0.40f); // 0 -> 1 on a new game
     // Backdrop: the cover, zoomed to fill and darkened
     ShapeFill(dl, a, b, neon ? IM_COL32(10, 10, 22, 255) : IM_COL32(16, 34, 52, 255),
               round);
@@ -4504,7 +4712,8 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
             uv1.y = 1 - uv0.y;
         }
         ShapeImage(dl, (ImTextureID)(intptr_t)e.tex, a, b, uv0, uv1,
-                   neon ? IM_COL32(150, 140, 255, 70) : IM_COL32(255, 255, 255, 90),
+                   neon ? IM_COL32(150, 140, 255, (int)(70 * show))
+                        : IM_COL32(255, 255, 255, (int)(90 * show)),
                    round);
     }
     ShapeFill(dl, a, b, neon ? IM_COL32(5, 5, 12, 170) : IM_COL32(6, 12, 9, 150), round);
@@ -4524,7 +4733,7 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
     float art_h = size.y - pad * 2;
     float art_w = std::min(art_h * 0.72f, size.x * 0.3f);
     art_h = std::min(art_h, art_w / 0.72f);
-    ImVec2 art_a(b.x - pad - art_w, a.y + (size.y - art_h) / 2);
+    ImVec2 art_a(b.x - pad - art_w + (1 - show) * 28 * s, a.y + (size.y - art_h) / 2);
     bool show_art = size.x > 620 * s;
     if (show_art) {
         ShapeFill(dl, ImVec2(art_a.x + 6 * s, art_a.y + 10 * s),
@@ -4544,7 +4753,7 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
     ImFont *big = FontOr(g_font_mgr.m_menu_font);
     float title_h = big->FontSize * 1.1f;
     float block_h = fh + 6 * s + title_h + 8 * s + fh + 18 * s + btn_h;
-    ImVec2 t0(a.x + pad, b.y - pad - block_h);
+    ImVec2 t0(a.x + pad - (1 - show) * 18 * s, b.y - pad - block_h);
     ImGui::SetCursorScreenPos(t0);
     ImGui::PushClipRect(a, ImVec2(a.x + pad + text_w, b.y), true);
     DashLabel(IsCurrentDisc(e) ? "Playing now"
@@ -5088,14 +5297,10 @@ void DrawInsigniaTab(int &tex_budget)
                            : gs.last_played > 0 ? "Played " + FormatLastPlayed(gs.last_played)
                                                 : std::string("Not played yet"));
         bool sel = g_selected_path == e->path;
+        // One click (or A) plays: this list exists to get into a game
         if (DashRow(*e, sub, ICON_FA_PLAY "  Play online", w, tex_budget, sel,
                     T().neon ? T().accent : IM_COL32(168, 236, 107, 255))) {
             g_selected_path = e->path;
-            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-                game_library_window.Launch(e->path);
-            }
-        }
-        if (ActivatedByNav()) {
             game_library_window.Launch(e->path);
         }
     }
@@ -5392,6 +5597,8 @@ void DrawDashSettingsTab()
                         &g_config.general.library.show_on_startup);
         ImGui::Checkbox("Show what I'm playing on Discord",
                         &g_config.general.discord_presence);
+        ImGui::Checkbox("Animations and moving background",
+                        &g_config.display.ui.use_animations);
         label("Library style");
         ImGui::Combo("##style", &g_config.general.library.style,
                      "Dashboard (tabs)\0Classic (library window)\0");
@@ -5644,6 +5851,9 @@ void GameLibraryWindow::Open()
     is_open = true;
     g_focus_requested = true;
     g_home_focus_play = !ClassicStyle() && g_dash_tab == kTabHome;
+    if (ImGui::GetCurrentContext()) {
+        g_anim.tab_t = ImGui::GetTime(); // play the appear animation
+    }
 }
 
 void GameLibraryWindow::OpenInsignia()
@@ -6049,6 +6259,25 @@ void GameLibraryWindow::Draw()
         default:
             DrawLibraryTab(tex_budget);
             break;
+        }
+        // Appear: the content fades in under a sweeping scan line. Drawn on
+        // the foreground list so it also covers nested panels.
+        float appear = EaseSince(g_anim.tab_t, 0.32f);
+        if (appear < 1.0f) {
+            ImVec2 ca = ImGui::GetWindowPos();
+            ImVec2 cb(ca.x + ImGui::GetWindowWidth(), ca.y + ImGui::GetWindowHeight());
+            ImDrawList *fg = ImGui::GetForegroundDrawList();
+            fg->PushClipRect(ca, cb, false);
+            fg->AddRectFilled(ca, cb, IM_COL32(4, 4, 10, (int)((1 - appear) * 230)));
+            float y = ca.y + (cb.y - ca.y) * appear;
+            ImU32 line = T().accent;
+            fg->AddRectFilled(ImVec2(ca.x, y - 1 * s), ImVec2(cb.x, y + 1 * s),
+                              Alpha(line, (int)(200 * (1 - appear))));
+            fg->AddRectFilledMultiColor(ImVec2(ca.x, y - 24 * s), ImVec2(cb.x, y),
+                                        Alpha(line, 0), Alpha(line, 0),
+                                        Alpha(line, (int)(40 * (1 - appear))),
+                                        Alpha(line, (int)(40 * (1 - appear))));
+            fg->PopClipRect();
         }
         ImGui::EndChild();
         DrawDashHints(ImVec2(ImGui::GetCursorScreenPos().x,

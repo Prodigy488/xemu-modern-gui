@@ -33,6 +33,7 @@
 #include "insignia-titles.hh"
 #include "jmp-index.hh"
 #include "game-shortcut.hh"
+#include "discord-presence.hh"
 #include "actions.hh"
 #include "misc.hh"
 #include "viewport-manager.hh"
@@ -3758,6 +3759,74 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
     DrawScreenshots(e, w);
 }
 
+// ---------------------------------------------------------------------------
+// Discord status
+// ---------------------------------------------------------------------------
+
+const char kDiscordClientId[] = "1563026828640129095";
+std::string g_presence_game;       // disc shown in the Discord status
+int64_t g_presence_start = 0;      // when it started
+std::string g_presence_cover;      // its cover URL, or "" for the app logo
+bool g_presence_running = false;
+
+// What the Discord status should show right now
+DiscordActivity CurrentPresence()
+{
+    DiscordActivity a;
+    const char *dvd = g_config.sys.files.dvd_path;
+    std::string cur = (dvd && dvd[0]) ? OriginalDiscPath(dvd) : "";
+    LibraryEntry *e = cur.empty() ? NULL : FindEntry(cur);
+    if (cur.empty()) {
+        g_presence_game.clear();
+        a.details = game_library_window.is_open ? "Browsing the game library"
+                                                : "In the Xbox dashboard";
+        a.large_image = "logo";
+        a.large_text = "xemu Modern GUI";
+        return a;
+    }
+    if (cur != g_presence_game) {
+        g_presence_game = cur;
+        g_presence_start = (int64_t)time(NULL);
+        // Discord can only show covers it can download: xemu's game
+        // database ones (the user's own cover files are local)
+        std::error_code ec;
+        g_presence_cover = e && e->valid && !CoverUrl(e->title_id).empty() &&
+                                   fs::exists(DownloadedCoverPath(e->title_id), ec)
+                               ? CoverUrl(e->title_id)
+                               : "";
+    }
+    std::string name = e ? e->DisplayName() : fs::u8path(cur).stem().u8string();
+    a.details = name;
+    a.state = e && e->valid ? FormatTitleId(e->title_id) : "Original Xbox";
+    if (!runstate_is_running()) {
+        a.state += "  -  Paused";
+    }
+    a.large_image = g_presence_cover.empty() ? "logo" : g_presence_cover;
+    a.large_text = name;
+    if (e && SupportsOnline(*e)) {
+        a.small_image = "online";
+        a.small_text = "Plays online with Insignia";
+    }
+    a.start = g_presence_start;
+    return a;
+}
+
+void UpdateDiscordPresence()
+{
+    if (!g_config.general.discord_presence) {
+        if (g_presence_running) {
+            DiscordPresenceStop(); // clears the status
+            g_presence_running = false;
+        }
+        return;
+    }
+    if (!g_presence_running) {
+        DiscordPresenceStart(kDiscordClientId);
+        g_presence_running = true;
+    }
+    DiscordPresenceSet(CurrentPresence());
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -3946,6 +4015,7 @@ void GameLibraryWindow::Update()
     MergeCoverResults();
     MergePatchResults();
     UploadDecodedImages(2);
+    UpdateDiscordPresence();
 
     // Track disc changes: last played + per-game settings
     const char *dvd = g_config.sys.files.dvd_path;
@@ -4298,6 +4368,7 @@ static void GameLibraryShutdown(void)
     if (g_patchdl_thread.joinable()) {
         g_patchdl_thread.join();
     }
+    DiscordPresenceStop();
     g_preview->Close(false);
     StopImageWorker();
     if (g_insignia_thread.joinable()) {

@@ -10,6 +10,7 @@ xemu_ss.add(files(
   'game-preview.cc',
   'perf-overlay.cc',
   'game-shortcut.cc',
+  'discord-presence.cc',
   'gl-helpers.cc',
   'input-manager.cc',
   'main-menu.cc',

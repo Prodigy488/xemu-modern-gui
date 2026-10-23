@@ -43,6 +43,9 @@
 #include "../xemu-snapshots.h"
 #include "qemu/http.h"
 #include "snapshot-manager.hh"
+extern "C" {
+#include "hw/xbox/eeprom_video.h"
+}
 
 namespace fs = std::filesystem;
 
@@ -3423,9 +3426,9 @@ void ImportPreview(const LibraryEntry &e)
 }
 
 // xemu snapshots taken while playing this game, newest first
-void DrawSaveStates(LibraryEntry &e, float w)
+// Indices into g_snapshot_mgr of this game's save states, newest first
+std::vector<int> SnapshotsFor(const LibraryEntry &e)
 {
-    const float s = g_viewport_mgr.m_scale;
     g_snapshot_mgr.Refresh(); // cached by xemu; cheap unless snapshots changed
 
     std::string key = PathKeyCached(e.path);
@@ -3442,13 +3445,20 @@ void DrawSaveStates(LibraryEntry &e, float w)
             mine.push_back(i);
         }
     }
-    if (mine.empty()) {
-        return;
-    }
     std::sort(mine.begin(), mine.end(), [](int a, int b) {
         return g_snapshot_mgr.m_snapshots[a].date_sec >
                g_snapshot_mgr.m_snapshots[b].date_sec;
     });
+    return mine;
+}
+
+void DrawSaveStates(LibraryEntry &e, float w, int max_shown = 6)
+{
+    const float s = g_viewport_mgr.m_scale;
+    std::vector<int> mine = SnapshotsFor(e);
+    if (mine.empty()) {
+        return;
+    }
 
     ImGui::Dummy(ImVec2(0, 6 * s));
     ImGui::Separator();
@@ -3457,7 +3467,7 @@ void DrawSaveStates(LibraryEntry &e, float w)
     int shown = 0;
     std::string load_name; // loaded after the loop: loading refreshes the list
     for (int i : mine) {
-        if (shown++ >= 6) {
+        if (shown++ >= max_shown) {
             ImGui::TextDisabled("More in Settings > Snapshots");
             break;
         }
@@ -3534,7 +3544,8 @@ std::vector<std::string> ScreenshotsFor(uint32_t title_id)
     return out;
 }
 
-void DrawScreenshots(const LibraryEntry &e, float w)
+void DrawScreenshots(const LibraryEntry &e, float w, int per_row = 3,
+                     int max_shown = 6)
 {
     if (!e.valid) {
         return;
@@ -3553,12 +3564,11 @@ void DrawScreenshots(const LibraryEntry &e, float w)
         std::string p = fs::absolute(fs::u8path(dir && dir[0] ? dir : ".")).generic_u8string();
         SDL_OpenURL(("file:///" + p).c_str());
     }
-    const int per_row = 3;
     float gap = 4 * s;
     float tw = (w - gap * (per_row - 1)) / per_row, th = tw * 3 / 4;
     int shown = 0;
     for (auto &path : shots) {
-        if (shown == 6) {
+        if (shown == max_shown) {
             break;
         }
         if (shown % per_row) {
@@ -3586,6 +3596,22 @@ void DrawScreenshots(const LibraryEntry &e, float w)
             dl->AddRect(p, ImVec2(p.x + tw, p.y + th), kAccent, 3 * s, 0, 2 * s);
         }
         ImGui::PopID();
+    }
+}
+
+// Load a game's resume point, warning first if the BIOS has changed
+void ResumeGame(const LibraryEntry &e, const std::string &snapshot_name)
+{
+    std::string name = snapshot_name; // the list may refresh on load
+    auto saved = g_resume_machine.find(e.title_id);
+    if (saved != g_resume_machine.end() && saved->second != MachineSignature()) {
+        g_resume_warn_name = name;
+        g_resume_warn_saved_with = saved->second;
+        g_open_resume_warning = true;
+    } else {
+        RequestPreviewStop();
+        ActionLoadSnapshotChecked(name.c_str());
+        game_library_window.is_open = false;
     }
 }
 
@@ -3670,18 +3696,7 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.5f, 0.88f, 1));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.36f, 0.68f, 1));
         if (ImGui::Button(label.c_str(), ImVec2(w, 40 * s))) {
-            std::string name = info.name; // the list may refresh on load
-            auto saved = g_resume_machine.find(e.title_id);
-            if (saved != g_resume_machine.end() &&
-                saved->second != MachineSignature()) {
-                g_resume_warn_name = name;
-                g_resume_warn_saved_with = saved->second;
-                g_open_resume_warning = true;
-            } else {
-                RequestPreviewStop();
-                ActionLoadSnapshotChecked(name.c_str());
-                game_library_window.is_open = false;
-            }
+            ResumeGame(e, info.name);
         }
         ImGui::PopStyleColor(3);
         ImGui::SetItemTooltip("Continue from where you left off");
@@ -3758,6 +3773,1364 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
     DrawScreenshots(e, w);
 }
 
+// ---------------------------------------------------------------------------
+// Dashboard: a console-style home screen with tabs (Home, Library, Insignia,
+// Media, Patches, Settings), switched with LB/RB
+// ---------------------------------------------------------------------------
+
+enum DashTab { kTabHome, kTabLibrary, kTabInsignia, kTabMedia, kTabPatches,
+               kTabSettings, kTabCount };
+const char *const kTabNames[kTabCount] = { "Home",    "Library",
+                                           "Insignia", "Media",
+                                           "Patches", "Settings" };
+int g_dash_tab = kTabHome;
+std::string g_home_path;        // game shown in the Home hero
+std::string g_home_seen_select; // g_selected_path as last seen on Home
+std::string g_media_path;       // game shown on the Media tab
+bool g_home_focus_play = false; // put controller focus on Play next frame
+
+const ImU32 kDashText = IM_COL32(232, 239, 230, 255);
+const ImU32 kDashDim = IM_COL32(150, 165, 147, 255);
+const ImU32 kDashPanel = IM_COL32(255, 255, 255, 12);
+const ImU32 kDashBorder = IM_COL32(255, 255, 255, 22);
+const ImU32 kOnlineGreen = IM_COL32(16, 124, 16, 255);
+
+ImFont *FontOr(ImFont *f)
+{
+    return f ? f : ImGui::GetFont();
+}
+
+// Rounded translucent card behind a region
+void DashCard(ImDrawList *dl, ImVec2 a, ImVec2 b)
+{
+    const float s = g_viewport_mgr.m_scale;
+    dl->AddRectFilled(a, b, kDashPanel, 16 * s);
+    dl->AddRect(a, b, kDashBorder, 16 * s, 0, 1.0f * s);
+}
+
+// Small spaced-out uppercase label ("CONTINUE PLAYING")
+void DashLabel(const char *text)
+{
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(kDashDim));
+    std::string up;
+    for (const char *c = text; *c; c++) {
+        up += (char)toupper((unsigned char)*c);
+        if (c[1]) {
+            up += ' ';
+        }
+    }
+    ImGui::TextUnformatted(up.c_str());
+    ImGui::PopStyleColor();
+}
+
+void DashTitle(const char *text)
+{
+    ImGui::PushFont(FontOr(g_font_mgr.m_menu_font_small));
+    ImGui::TextUnformatted(text);
+    ImGui::PopFont();
+}
+
+// "ONLINE"-style pill drawn inline
+void DashPill(const char *text, ImU32 bg, ImU32 fg = IM_COL32_WHITE)
+{
+    const float s = g_viewport_mgr.m_scale;
+    ImVec2 ts = ImGui::CalcTextSize(text);
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    ImVec2 pad(6 * s, 2 * s);
+    ImGui::Dummy(ImVec2(ts.x + pad.x * 2, ts.y + pad.y * 2));
+    ImGui::GetWindowDrawList()->AddRectFilled(
+        p, ImVec2(p.x + ts.x + pad.x * 2, p.y + ts.y + pad.y * 2), bg, 5 * s);
+    ImGui::GetWindowDrawList()->AddText(ImVec2(p.x + pad.x, p.y + pad.y), fg, text);
+}
+
+// Big colored button (Play, Resume...)
+bool DashButton(const char *label, ImVec4 bg, ImVec4 fg, ImVec2 size)
+{
+    ImGui::PushStyleColor(ImGuiCol_Button, bg);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                          ImVec4(std::min(bg.x * 1.15f + 0.04f, 1.f),
+                                 std::min(bg.y * 1.15f + 0.04f, 1.f),
+                                 std::min(bg.z * 1.15f + 0.04f, 1.f), bg.w));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(bg.x * 0.85f, bg.y * 0.85f,
+                                                        bg.z * 0.85f, bg.w));
+    ImGui::PushStyleColor(ImGuiCol_Text, fg);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 12 * g_viewport_mgr.m_scale);
+    bool pressed = ImGui::Button(label, size);
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(4);
+    return pressed;
+}
+
+const ImVec4 kBtnGreen(0.384f, 0.792f, 0.075f, 1);
+const ImVec4 kBtnBlue(0.18f, 0.50f, 0.88f, 1);
+const ImVec4 kBtnGlass(1, 1, 1, 0.10f);
+const ImVec4 kInk(0.03f, 0.06f, 0.04f, 1);
+const ImVec4 kWhite(0.95f, 0.97f, 0.94f, 1);
+
+LibraryEntry *DefaultHomeGame()
+{
+    auto recent = game_library_window.GetRecentGames(1);
+    if (!recent.empty()) {
+        if (LibraryEntry *e = FindEntry(recent[0].path)) {
+            return e;
+        }
+    }
+    std::vector<LibraryEntry *> items;
+    SortedFiltered(items);
+    return items.empty() ? NULL : items[0];
+}
+
+void SwitchTab(int tab)
+{
+    g_dash_tab = (tab + kTabCount) % kTabCount;
+    RequestPreviewStop();
+}
+
+// Background: dark, with a soft green glow in the top-right corner
+void DrawDashBackground(ImDrawList *dl, ImVec2 a, ImVec2 b)
+{
+    float w = b.x - a.x, h = b.y - a.y;
+    dl->AddRectFilledMultiColor(a, b, IM_COL32(8, 14, 10, 120),
+                                IM_COL32(40, 90, 20, 120), IM_COL32(8, 10, 9, 120),
+                                IM_COL32(14, 40, 22, 120));
+    for (int i = 0; i < 6; i++) {
+        dl->AddCircleFilled(ImVec2(a.x + w * 0.80f, a.y - h * 0.05f),
+                            w * (0.12f + i * 0.06f), IM_COL32(98, 202, 19, 7), 64);
+    }
+}
+
+// Top bar: brand, LB, tabs, RB, then status, clock and close on the right
+void DrawDashTopBar()
+{
+    const float s = g_viewport_mgr.m_scale;
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    float bar_h = 46 * s;
+    ImVec2 start = ImGui::GetCursorScreenPos();
+    float y_mid = start.y + bar_h / 2;
+
+    // Brand: glowing green orb + "xemu"
+    float r = 11 * s;
+    ImVec2 c(start.x + r + 2 * s, y_mid);
+    dl->AddCircleFilled(c, r * 1.8f, IM_COL32(98, 202, 19, 40), 32);
+    dl->AddCircleFilled(c, r, IM_COL32(98, 202, 19, 255), 32);
+    dl->AddCircleFilled(ImVec2(c.x - r * 0.3f, c.y - r * 0.3f), r * 0.45f,
+                        IM_COL32(200, 255, 140, 200), 24);
+    ImGui::SetCursorScreenPos(ImVec2(c.x + r + 10 * s, start.y));
+    ImGui::PushFont(FontOr(g_font_mgr.m_menu_font_small));
+    float fh = ImGui::GetFontSize();
+    ImGui::SetCursorScreenPos(ImVec2(c.x + r + 10 * s, y_mid - fh / 2));
+    ImGui::TextUnformatted("xemu");
+    ImGui::PopFont();
+
+    auto chip = [&](const char *t) {
+        ImGui::SameLine(0, 18 * s);
+        ImVec2 ts = ImGui::CalcTextSize(t);
+        ImVec2 p(ImGui::GetCursorScreenPos().x, y_mid - ts.y / 2 - 3 * s);
+        ImGui::SetCursorScreenPos(p);
+        ImGui::Dummy(ImVec2(ts.x + 12 * s, ts.y + 6 * s));
+        dl->AddRectFilled(p, ImVec2(p.x + ts.x + 12 * s, p.y + ts.y + 6 * s),
+                          IM_COL32(42, 51, 42, 255), 6 * s);
+        dl->AddText(ImVec2(p.x + 6 * s, p.y + 3 * s), IM_COL32(220, 230, 218, 255), t);
+    };
+    chip("LB");
+
+    // Tabs as pills
+    ImGui::PushFont(FontOr(g_font_mgr.m_menu_font_small));
+    for (int t = 0; t < kTabCount; t++) {
+        ImGui::SameLine(0, t ? 6 * s : 12 * s);
+        ImVec2 ts = ImGui::CalcTextSize(kTabNames[t]);
+        ImVec2 size(ts.x + 34 * s, ts.y + 14 * s);
+        ImGui::SetCursorScreenPos(
+            ImVec2(ImGui::GetCursorScreenPos().x, y_mid - size.y / 2));
+        bool on = g_dash_tab == t;
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, size.y / 2);
+        ImGui::PushStyleColor(ImGuiCol_Button, on ? kBtnGreen : ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                              on ? kBtnGreen : ImVec4(1, 1, 1, 0.08f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                              on ? kBtnGreen : ImVec4(1, 1, 1, 0.14f));
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              on ? kInk : ImVec4(0.60f, 0.66f, 0.59f, 1));
+        ImGui::PushID(t);
+        if (ImGui::Button(kTabNames[t], size)) {
+            SwitchTab(t);
+        }
+        ImGui::PopID();
+        ImGui::PopStyleColor(4);
+        ImGui::PopStyleVar();
+    }
+    ImGui::PopFont();
+    chip("RB");
+
+    // Right side: scan progress, Insignia status, clock, close
+    const char *dvd = g_config.sys.files.dvd_path;
+    const char *close_label = (dvd && dvd[0]) ? ICON_FA_XMARK "  Back to game"
+                                              : ICON_FA_XMARK "  Close";
+    float close_w = ImGui::CalcTextSize(close_label).x + 28 * s;
+    char clock[32] = "";
+    time_t now = time(NULL);
+    struct tm *tm = localtime(&now);
+    if (tm) {
+        strftime(clock, sizeof(clock), "%H:%M", tm);
+    }
+    CheckInsigniaStatus(false);
+    const char *ins = "Insignia";
+    ImU32 ins_col = IM_COL32(140, 140, 140, 255);
+    switch ((InsigniaStatus)(int)g_insignia_status) {
+    case InsigniaStatus::Up:
+        ins = "Insignia online";
+        ins_col = IM_COL32(98, 202, 19, 255);
+        break;
+    case InsigniaStatus::Maintenance:
+        ins = "Insignia maintenance";
+        ins_col = IM_COL32(235, 180, 40, 255);
+        break;
+    case InsigniaStatus::Down:
+        ins = "Insignia unreachable";
+        ins_col = IM_COL32(230, 70, 60, 255);
+        break;
+    default:
+        break;
+    }
+    std::string scan = g_scan_running
+                           ? string_format(ICON_FA_ARROWS_ROTATE "  %d / %d",
+                                           (int)g_scan_done, (int)g_scan_total)
+                           : std::string();
+    float gap = 22 * s;
+    float ins_w = ImGui::CalcTextSize(ins).x + 18 * s;
+    float clock_w = ImGui::CalcTextSize(clock).x;
+    float scan_w = scan.empty() ? 0 : ImGui::CalcTextSize(scan.c_str()).x + gap;
+    float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+    float x = right - close_w - gap - clock_w - gap - ins_w - scan_w;
+    float min_x = ImGui::GetItemRectMax().x + gap;
+    if (x >= min_x) {
+        float ty = y_mid - ImGui::GetFontSize() / 2;
+        if (!scan.empty()) {
+            dl->AddText(ImVec2(x, ty), kDashDim, scan.c_str());
+            x += scan_w;
+        }
+        dl->AddCircleFilled(ImVec2(x + 5 * s, y_mid), 5 * s, ins_col, 16);
+        dl->AddText(ImVec2(x + 18 * s, ty), IM_COL32(183, 196, 180, 255), ins);
+        x += ins_w + gap;
+        dl->AddText(ImVec2(x, ty), IM_COL32(183, 196, 180, 255), clock);
+    }
+    ImGui::SetCursorScreenPos(ImVec2(right - close_w, y_mid - 16 * s));
+    if (DashButton(close_label, kBtnGlass, kWhite, ImVec2(close_w, 32 * s))) {
+        game_library_window.is_open = false;
+    }
+    ImGui::SetItemTooltip("Esc or B");
+    ImGui::SetCursorScreenPos(ImVec2(start.x, start.y + bar_h + 10 * s));
+}
+
+// Controller hints along the bottom
+void DrawDashHints(ImVec2 a, float w)
+{
+    const float s = g_viewport_mgr.m_scale;
+    struct Hint {
+        const char *key;
+        ImU32 col;
+        const char *text;
+    };
+    std::vector<Hint> hints;
+    const ImU32 ka = IM_COL32(63, 163, 27, 255), kb = IM_COL32(200, 50, 42, 255),
+                kx = IM_COL32(43, 111, 214, 255), ky = IM_COL32(226, 180, 23, 255);
+    switch (g_dash_tab) {
+    case kTabHome:
+    case kTabLibrary:
+        hints = { { "A", ka, "Play" }, { "Y", ky, "Favorite" },
+                  { "B", kb, "Back to game" } };
+        break;
+    case kTabInsignia:
+        hints = { { "A", ka, "Play online" }, { "B", kb, "Back to game" } };
+        break;
+    default:
+        hints = { { "A", ka, "Select" }, { "B", kb, "Back to game" } };
+        break;
+    }
+    (void)kx;
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    float fh = ImGui::GetFontSize();
+    float x = a.x, y = a.y + fh * 0.2f;
+    float r = fh * 0.62f;
+    for (auto &h : hints) {
+        ImVec2 c(x + r, y + fh / 2);
+        dl->AddCircleFilled(c, r, h.col, 24);
+        ImVec2 ks = ImGui::CalcTextSize(h.key);
+        dl->AddText(ImVec2(c.x - ks.x / 2, c.y - ks.y / 2),
+                    h.col == ky ? IM_COL32(30, 30, 30, 255) : IM_COL32_WHITE, h.key);
+        dl->AddText(ImVec2(x + r * 2 + 8 * s, y), kDashDim, h.text);
+        x += r * 2 + 8 * s + ImGui::CalcTextSize(h.text).x + 26 * s;
+    }
+    const char *tabs = "LB / RB  Switch tab";
+    if (x + ImGui::CalcTextSize(tabs).x < a.x + w) {
+        dl->AddText(ImVec2(x, y), kDashDim, tabs);
+    }
+}
+
+// --- Home --------------------------------------------------------------------
+
+void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
+{
+    const float s = g_viewport_mgr.m_scale;
+    GameStats &st = g_stats[e.path];
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 a = ImGui::GetCursorScreenPos();
+    ImVec2 b(a.x + size.x, a.y + size.y);
+    float round = 18 * s;
+    EnsureTexture(e, tex_budget);
+
+    // Backdrop: the cover, zoomed to fill and darkened
+    dl->AddRectFilled(a, b, IM_COL32(16, 34, 52, 255), round);
+    if (e.tex && e.tex_w > 0 && e.tex_h > 0) {
+        float ra = size.x / size.y, ri = (float)e.tex_w / e.tex_h;
+        ImVec2 uv0(0, 0), uv1(1, 1);
+        if (ri > ra) {
+            float u = ra / ri;
+            uv0.x = (1 - u) / 2;
+            uv1.x = 1 - uv0.x;
+        } else {
+            float v = ri / ra;
+            uv0.y = (1 - v) / 2;
+            uv1.y = 1 - uv0.y;
+        }
+        dl->AddImageRounded((ImTextureID)(intptr_t)e.tex, a, b, uv0, uv1,
+                            IM_COL32(255, 255, 255, 90), round);
+    }
+    dl->AddRectFilled(a, b, IM_COL32(6, 12, 9, 150), round);
+    dl->AddRect(a, b, kDashBorder, round, 0, 1.0f * s);
+
+    // Box art on the right
+    float pad = 30 * s;
+    float art_h = size.y - pad * 2;
+    float art_w = std::min(art_h * 0.72f, size.x * 0.3f);
+    art_h = std::min(art_h, art_w / 0.72f);
+    ImVec2 art_a(b.x - pad - art_w, a.y + (size.y - art_h) / 2);
+    bool show_art = size.x > 620 * s;
+    if (show_art) {
+        dl->AddRectFilled(ImVec2(art_a.x + 6 * s, art_a.y + 10 * s),
+                          ImVec2(art_a.x + art_w + 6 * s, art_a.y + art_h + 10 * s),
+                          IM_COL32(0, 0, 0, 90), 12 * s);
+        DrawArtwork(dl, art_a, ImVec2(art_a.x + art_w, art_a.y + art_h), e, 12 * s);
+    }
+    float text_w = (show_art ? art_a.x - 24 * s : b.x - pad) - (a.x + pad);
+
+    // Text and buttons, anchored to the bottom left
+    float btn_h = 44 * s;
+    float fh = ImGui::GetFontSize();
+    ImFont *big = FontOr(g_font_mgr.m_menu_font);
+    float title_h = big->FontSize * 1.1f;
+    float block_h = fh + 6 * s + title_h + 8 * s + fh + 18 * s + btn_h;
+    ImVec2 t0(a.x + pad, b.y - pad - block_h);
+    ImGui::SetCursorScreenPos(t0);
+    ImGui::PushClipRect(a, ImVec2(a.x + pad + text_w, b.y), true);
+    DashLabel(IsCurrentDisc(e) ? "Playing now"
+                               : is_recent ? "Continue playing" : "Selected");
+    ImGui::SetCursorScreenPos(ImVec2(t0.x, ImGui::GetCursorScreenPos().y + 2 * s));
+    ImGui::PushFont(big);
+    ImGui::TextUnformatted(e.DisplayName().c_str());
+    ImGui::PopFont();
+    ImGui::SetCursorScreenPos(ImVec2(t0.x, ImGui::GetCursorScreenPos().y + 4 * s));
+
+    // Meta line
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.72f, 0.78f, 0.71f, 1));
+    bool first = true;
+    auto meta = [&](const std::string &t) {
+        if (!first) {
+            ImGui::SameLine(0, 18 * s);
+        }
+        first = false;
+        ImGui::TextUnformatted(t.c_str());
+    };
+    if (e.valid) {
+        meta(FormatTitleId(e.title_id));
+    }
+    meta(FormatPlayTime(st.play_seconds) + " played");
+    if (!IsCurrentDisc(e) && st.last_played > 0) {
+        meta("Last played " + FormatLastPlayed(st.last_played));
+    }
+    ImGui::PopStyleColor();
+    if (SupportsOnline(e)) {
+        ImGui::SameLine(0, 18 * s);
+        DashPill("ONLINE", kOnlineGreen);
+    }
+    int npatch = e.valid ? EnabledPatchCount(e.title_id) : 0;
+    if (npatch) {
+        ImGui::SameLine(0, 18 * s);
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kAccent),
+                           ICON_FA_WRENCH "  %d patch%s on", npatch,
+                           npatch == 1 ? "" : "es");
+    }
+    ImGui::PopClipRect();
+
+    // Buttons
+    ImGui::SetCursorScreenPos(ImVec2(t0.x, b.y - pad - btn_h));
+    int resume = FindResumeSnapshot(e);
+    if (resume >= 0) {
+        std::string name = g_snapshot_mgr.m_snapshots[resume].name;
+        if (DashButton(ICON_FA_FORWARD "  Resume", kBtnBlue, kWhite,
+                       ImVec2(150 * s, btn_h))) {
+            ResumeGame(e, name);
+        }
+        ImGui::SetItemTooltip("Continue from where you left off");
+        ImGui::SameLine(0, 12 * s);
+    }
+    if (g_home_focus_play) {
+        ImGui::SetKeyboardFocusHere(); // controller focus starts on Play
+        if (ImGui::GetIO().BackendFlags & ImGuiBackendFlags_HasGamepad) {
+            ImGui::SetNavCursorVisible(true); // so the first A press plays
+        }
+        g_home_focus_play = false;
+    }
+    if (DashButton(IsCurrentDisc(e) ? ICON_FA_ROTATE_RIGHT "  Restart"
+                                    : ICON_FA_PLAY "  Play",
+                   kBtnGreen, kInk, ImVec2(140 * s, btn_h))) {
+        game_library_window.Launch(e.path);
+    }
+    ImGui::SameLine(0, 12 * s);
+    if (DashButton(st.favorite ? ICON_FA_STAR "  Favorited" : ICON_FA_STAR "  Favorite",
+                   kBtnGlass, kWhite, ImVec2(150 * s, btn_h))) {
+        st.favorite = !st.favorite;
+        g_dirty = true;
+    }
+    ImGui::BeginDisabled(!e.valid);
+    ImGui::SameLine(0, 12 * s);
+    if (DashButton(ICON_FA_GEAR, kBtnGlass, kWhite, ImVec2(btn_h, btn_h))) {
+        OpenSettingsFor(e);
+    }
+    ImGui::SetItemTooltip("Settings for this game");
+    ImGui::SameLine(0, 12 * s);
+    if (DashButton(ICON_FA_WRENCH, kBtnGlass, kWhite, ImVec2(btn_h, btn_h))) {
+        OpenPatchesFor(e);
+    }
+    ImGui::SetItemTooltip("Patches for this game");
+    ImGui::EndDisabled();
+    ImGui::SetCursorScreenPos(ImVec2(a.x, b.y));
+    ImGui::Dummy(ImVec2(size.x, 0));
+}
+
+// One row in a list card: thumbnail, title, subtitle, right-aligned note
+bool DashRow(LibraryEntry &e, const std::string &sub, const std::string &note,
+             float w, int &tex_budget, bool selected = false,
+             ImU32 note_col = 0)
+{
+    const float s = g_viewport_mgr.m_scale;
+    float fh = ImGui::GetFontSize();
+    float h = std::max(48 * s, fh * 2 + 18 * s);
+    ImGui::PushID(e.path.c_str());
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(98, 202, 19, 30));
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(255, 255, 255, 16));
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(255, 255, 255, 26));
+    bool clicked = ImGui::Selectable("##row", selected,
+                                     ImGuiSelectableFlags_AllowDoubleClick |
+                                         ImGuiSelectableFlags_NoPadWithHalfSpacing,
+                                     ImVec2(w, h));
+    ImGui::PopStyleColor(3);
+    DrawContextMenu(e);
+    if (ImGui::IsItemVisible()) {
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        EnsureTexture(e, tex_budget);
+        float th = h - 8 * s;
+        DrawArtwork(dl, ImVec2(p.x + 4 * s, p.y + 4 * s),
+                    ImVec2(p.x + 4 * s + th * 0.8f, p.y + 4 * s + th), e, 6 * s);
+        float tx = p.x + th * 0.8f + 16 * s;
+        float nw = note.empty() ? 0 : ImGui::CalcTextSize(note.c_str()).x;
+        ImVec4 clip(tx, p.y, p.x + w - nw - 16 * s, p.y + h);
+        float ty = p.y + (h - fh * 2 - 4 * s) / 2;
+        dl->AddText(ImGui::GetFont(), fh, ImVec2(tx, ty), kDashText,
+                    e.DisplayName().c_str(), NULL, 0, &clip);
+        dl->AddText(ImGui::GetFont(), fh * 0.88f, ImVec2(tx, ty + fh + 4 * s),
+                    kDashDim, sub.c_str(), NULL, 0, &clip);
+        if (!note.empty()) {
+            dl->AddText(ImVec2(p.x + w - nw - 8 * s, p.y + (h - fh) / 2),
+                        note_col ? note_col : IM_COL32(183, 196, 180, 255),
+                        note.c_str());
+        }
+        if (selected) {
+            dl->AddRect(p, ImVec2(p.x + w, p.y + h), kAccent, 10 * s, 0, 2 * s);
+        }
+    }
+    ImGui::PopID();
+    return clicked;
+}
+
+// Library games that have online patches but none downloaded yet
+int GamesWithNewPatches()
+{
+    int n = 0;
+    std::set<uint32_t> seen;
+    for (auto &e : g_entries) {
+        if (e.valid && !seen.count(e.title_id)) {
+            seen.insert(e.title_id);
+            bool fetched = false;
+            for (auto &p : OnlinePatchPaths(e.title_id)) {
+                fetched |= g_jmp_fetched.count(p) > 0;
+            }
+            n += (!fetched && OnlinePatchCount(e.title_id)) ? 1 : 0;
+        }
+    }
+    return n;
+}
+
+void DrawHomeActivity(ImVec2 size, int &tex_budget)
+{
+    const float s = g_viewport_mgr.m_scale;
+    ImVec2 a = ImGui::GetCursorScreenPos();
+    DashCard(ImGui::GetWindowDrawList(), a, ImVec2(a.x + size.x, a.y + size.y));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(22 * s, 18 * s));
+    ImGui::BeginChild("##activity", size,
+                      ImGuiChildFlags_AlwaysUseWindowPadding |
+                          ImGuiChildFlags_NavFlattened,
+                      ImGuiWindowFlags_NoScrollbar);
+    float w = ImGui::GetContentRegionAvail().x;
+    DashLabel("Activity");
+    DashTitle("Recently played");
+    ImGui::Dummy(ImVec2(0, 4 * s));
+    auto recent = game_library_window.GetRecentGames(6);
+    int shown = 0;
+    float row_h = std::max(48 * s, ImGui::GetFontSize() * 2 + 18 * s);
+    int new_patches = GamesWithNewPatches();
+    float reserve = new_patches ? row_h + 10 * s : 0;
+    for (auto &r : recent) {
+        LibraryEntry *e = FindEntry(r.path);
+        if (!e || e->path == g_home_path) {
+            continue;
+        }
+        if (ImGui::GetContentRegionAvail().y < row_h + reserve) {
+            break;
+        }
+        GameStats &st = g_stats[e->path];
+        std::string sub = (IsCurrentDisc(*e) ? std::string("Playing now")
+                                             : FormatLastPlayed(st.last_played)) +
+                          "  -  " + FormatPlayTime(st.play_seconds);
+        std::string note = FindResumeSnapshot(*e) >= 0 ? "Resume point"
+                           : st.favorite                ? ICON_FA_STAR
+                                                        : "";
+        if (DashRow(*e, sub, note, w, tex_budget, false,
+                    st.favorite && note == ICON_FA_STAR ? IM_COL32(255, 205, 60, 255)
+                                                        : 0)) {
+            g_home_path = e->path;
+            g_selected_path = e->path;
+            g_home_seen_select = e->path;
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                game_library_window.Launch(e->path);
+            }
+        }
+        if (ActivatedByNav()) {
+            game_library_window.Launch(e->path);
+        }
+        shown++;
+    }
+    if (!shown) {
+        ImGui::TextDisabled("Games you play show up here.");
+    }
+    if (new_patches) {
+        ImGui::SetCursorPosY(std::max(ImGui::GetCursorPosY(),
+                                      ImGui::GetWindowHeight() - 18 * s - row_h));
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        bool go = ImGui::Selectable("##newpatches", false,
+                                    ImGuiSelectableFlags_NoPadWithHalfSpacing,
+                                    ImVec2(w, row_h));
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        float th = row_h - 8 * s;
+        dl->AddRectFilled(ImVec2(p.x + 4 * s, p.y + 4 * s),
+                          ImVec2(p.x + 4 * s + th * 0.8f, p.y + 4 * s + th),
+                          IM_COL32(30, 110, 80, 255), 6 * s);
+        ImVec2 is = ImGui::CalcTextSize(ICON_FA_WRENCH);
+        dl->AddText(ImVec2(p.x + 4 * s + (th * 0.8f - is.x) / 2,
+                           p.y + 4 * s + (th - is.y) / 2),
+                    IM_COL32_WHITE, ICON_FA_WRENCH);
+        float fh = ImGui::GetFontSize();
+        float tx = p.x + th * 0.8f + 16 * s, ty = p.y + (row_h - fh * 2 - 4 * s) / 2;
+        dl->AddText(ImVec2(tx, ty), kDashText, "New patches available");
+        std::string sub = string_format("Widescreen, 60 FPS and more for %d of your "
+                                        "games",
+                                        new_patches);
+        ImVec4 clip(tx, p.y, p.x + w - 60 * s, p.y + row_h);
+        dl->AddText(ImGui::GetFont(), fh * 0.88f, ImVec2(tx, ty + fh + 4 * s),
+                    kDashDim, sub.c_str(), NULL, 0, &clip);
+        ImVec2 gs = ImGui::CalcTextSize("Get  " ICON_FA_CHEVRON_RIGHT);
+        dl->AddText(ImVec2(p.x + w - gs.x - 8 * s, p.y + (row_h - fh) / 2), kAccent,
+                    "Get  " ICON_FA_CHEVRON_RIGHT);
+        if (go || ActivatedByNav()) {
+            SwitchTab(kTabPatches);
+            StartPatchDownload(0, false);
+        }
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+}
+
+void DrawHomeShelf(int &tex_budget)
+{
+    const float s = g_viewport_mgr.m_scale;
+    DashLabel(string_format("Your library  -  %d games", (int)g_entries.size()).c_str());
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 12 * s);
+    if (ImGui::SmallButton("See all  " ICON_FA_CHEVRON_RIGHT)) {
+        SwitchTab(kTabLibrary);
+    }
+    // Recently played first, then favorites, then the rest by title
+    std::vector<LibraryEntry *> order;
+    std::set<std::string> added;
+    for (auto &r : game_library_window.GetRecentGames(12)) {
+        if (LibraryEntry *e = FindEntry(r.path)) {
+            if (added.insert(e->path).second) {
+                order.push_back(e);
+            }
+        }
+    }
+    std::vector<LibraryEntry *> rest;
+    SortedFiltered(rest);
+    for (LibraryEntry *e : rest) {
+        if (order.size() >= 40) {
+            break;
+        }
+        if (added.insert(e->path).second) {
+            order.push_back(e);
+        }
+    }
+    float avail_h = ImGui::GetContentRegionAvail().y;
+    float fh = ImGui::GetFontSize();
+    float text_h = 8 * s + fh * 3 + 4 * s;
+    float tile_w = std::floor(std::max(80 * s, std::min(210 * s, avail_h - text_h - 24 * s)));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::BeginChild("##shelf", ImVec2(0, 0), ImGuiChildFlags_NavFlattened,
+                      ImGuiWindowFlags_HorizontalScrollbar);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(18 * s, 0));
+    for (size_t i = 0; i < order.size(); i++) {
+        if (i) {
+            ImGui::SameLine();
+        }
+        DrawTile(*order[i], tile_w, tex_budget);
+        if (ImGui::IsItemFocused() && ImGui::GetIO().NavVisible) {
+            g_home_path = order[i]->path; // the hero follows controller focus
+        }
+    }
+    ImGui::PopStyleVar();
+    // Mouse wheel scrolls the shelf sideways
+    if (ImGui::IsWindowHovered() && ImGui::GetIO().MouseWheel != 0 &&
+        !ImGui::GetIO().KeyShift) {
+        ImGui::SetScrollX(ImGui::GetScrollX() - ImGui::GetIO().MouseWheel * 120 * s);
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+}
+
+void DrawHomeTab(int &tex_budget)
+{
+    const float s = g_viewport_mgr.m_scale;
+    // The hero shows the most recently played game, or whatever the user
+    // picked on the shelf or in the library
+    if (g_selected_path != g_home_seen_select) {
+        g_home_seen_select = g_selected_path;
+        if (FindEntry(g_selected_path)) {
+            g_home_path = g_selected_path;
+        }
+    }
+    LibraryEntry *hero = FindEntry(g_home_path);
+    if (!hero) {
+        hero = DefaultHomeGame();
+        if (hero) {
+            g_home_path = hero->path;
+        }
+    }
+    if (!hero) {
+        ImGui::Dummy(ImVec2(0, 30 * s));
+        ImGui::TextDisabled(g_scan_running ? "Looking for games..."
+                                           : "No games yet. Add a folder on the "
+                                             "Library tab.");
+        return;
+    }
+    auto recent = game_library_window.GetRecentGames(1);
+    bool is_recent = !recent.empty() && recent[0].path == hero->path;
+
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    float gap = 22 * s;
+    float side_w = avail.x > 1000 * s ? std::floor(avail.x * 0.35f) : 0;
+    float hero_h = std::floor(std::clamp(avail.y * 0.52f, 230 * s, 440 * s));
+    ImVec2 hero_a = ImGui::GetCursorScreenPos();
+    DrawHomeHero(*hero, ImVec2(side_w ? avail.x - side_w - gap : avail.x, hero_h),
+                 tex_budget, is_recent);
+    if (side_w) {
+        ImGui::SetCursorScreenPos(ImVec2(hero_a.x + avail.x - side_w, hero_a.y));
+        DrawHomeActivity(ImVec2(side_w, hero_h), tex_budget);
+        ImGui::SetCursorScreenPos(ImVec2(hero_a.x, hero_a.y + hero_h));
+    }
+    ImGui::Dummy(ImVec2(0, 18 * s));
+    DrawHomeShelf(tex_budget);
+}
+
+// --- Insignia ------------------------------------------------------------------
+
+void DrawInsigniaTab(int &tex_budget)
+{
+    const float s = g_viewport_mgr.m_scale;
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    float gap = 22 * s;
+    float left_w = std::floor(std::max(360 * s, avail.x * 0.36f));
+    bool two_col = avail.x > 820 * s;
+    if (!two_col) {
+        left_w = avail.x;
+    }
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 a = ImGui::GetCursorScreenPos();
+
+    // Status card
+    CheckInsigniaStatus(false);
+    InsigniaStatus st = (InsigniaStatus)(int)g_insignia_status;
+    int owned = 0;
+    for (auto &e : g_entries) {
+        owned += SupportsOnline(e) ? 1 : 0;
+    }
+    float status_h = 250 * s;
+    DashCard(dl, a, ImVec2(a.x + left_w, a.y + status_h));
+    ImGui::SetCursorScreenPos(ImVec2(a.x + 26 * s, a.y + 22 * s));
+    ImGui::BeginGroup();
+    DashLabel("Insignia  -  Xbox Live revival");
+    ImGui::Dummy(ImVec2(0, 8 * s));
+    ImVec2 rc = ImGui::GetCursorScreenPos();
+    float rr = 28 * s;
+    ImU32 ring = st == InsigniaStatus::Up            ? IM_COL32(98, 202, 19, 255)
+                 : st == InsigniaStatus::Maintenance ? IM_COL32(235, 180, 40, 255)
+                 : st == InsigniaStatus::Down        ? IM_COL32(230, 70, 60, 255)
+                                                     : IM_COL32(140, 140, 140, 255);
+    ImVec2 cc(rc.x + rr, rc.y + rr);
+    dl->AddCircleFilled(cc, rr + 8 * s, (ring & 0x00FFFFFF) | 0x28000000, 48);
+    dl->AddCircle(cc, rr, ring, 48, 5 * s);
+    const char *icon = st == InsigniaStatus::Up            ? ICON_FA_CHECK
+                       : st == InsigniaStatus::Checking    ? ICON_FA_ELLIPSIS
+                       : st == InsigniaStatus::Maintenance ? ICON_FA_WRENCH
+                       : st == InsigniaStatus::Down        ? ICON_FA_XMARK
+                                                           : ICON_FA_QUESTION;
+    ImVec2 is = ImGui::CalcTextSize(icon);
+    dl->AddText(ImVec2(cc.x - is.x / 2, cc.y - is.y / 2), ring, icon);
+    ImGui::SetCursorScreenPos(ImVec2(rc.x + rr * 2 + 18 * s, rc.y + 2 * s));
+    ImGui::BeginGroup();
+    ImGui::PushFont(FontOr(g_font_mgr.m_menu_font_medium));
+    ImGui::TextUnformatted(st == InsigniaStatus::Up            ? "Service online"
+                           : st == InsigniaStatus::Maintenance ? "Maintenance"
+                           : st == InsigniaStatus::Down        ? "Unreachable"
+                           : st == InsigniaStatus::Checking    ? "Checking..."
+                                                               : "Status unknown");
+    ImGui::PopFont();
+    uint64_t ago = (SDL_GetTicks() - g_insignia_checked_at) / 60000;
+    if (st == InsigniaStatus::Checking || st == InsigniaStatus::Unknown) {
+        ImGui::TextDisabled("insignia.live");
+    } else {
+        ImGui::TextDisabled("Checked %s  -  insignia.live",
+                            ago == 0 ? "just now"
+                                     : string_format("%d min ago", (int)ago).c_str());
+    }
+    ImGui::EndGroup();
+    ImGui::SetCursorScreenPos(ImVec2(rc.x, rc.y + rr * 2 + 20 * s));
+    float stat_w = (left_w - 52 * s - 14 * s) / 2;
+    auto stat = [&](const std::string &big, const char *what) {
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        float h = 64 * s;
+        dl->AddRectFilled(p, ImVec2(p.x + stat_w, p.y + h), IM_COL32(255, 255, 255, 12),
+                          12 * s);
+        ImGui::SetCursorScreenPos(ImVec2(p.x + 14 * s, p.y + 8 * s));
+        ImGui::BeginGroup();
+        ImGui::PushFont(FontOr(g_font_mgr.m_menu_font_small));
+        ImGui::TextUnformatted(big.c_str());
+        ImGui::PopFont();
+        ImGui::TextDisabled("%s", what);
+        ImGui::EndGroup();
+        ImGui::SetCursorScreenPos(ImVec2(p.x + stat_w + 14 * s, p.y));
+    };
+    stat(std::to_string(owned), "of your games play online");
+    stat(std::to_string((int)(sizeof(kInsigniaTitleIds) / sizeof(kInsigniaTitleIds[0]))),
+         "supported games");
+    ImGui::EndGroup();
+
+    // Setup checklist
+    float setup_y = a.y + status_h + gap;
+    float setup_h = two_col ? avail.y - status_h - gap : 300 * s;
+    DashCard(dl, ImVec2(a.x, setup_y), ImVec2(a.x + left_w, setup_y + setup_h));
+    ImGui::SetCursorScreenPos(ImVec2(a.x + 26 * s, setup_y + 22 * s));
+    ImGui::BeginGroup();
+    ImGui::PushTextWrapPos(a.x + left_w - 26 * s);
+    DashLabel("Get online in xemu");
+    ImGui::Dummy(ImVec2(0, 6 * s));
+    bool net_ok = g_config.net.enable &&
+                  g_config.net.backend == CONFIG_NET_BACKEND_NAT;
+    auto step = [&](int n, bool done, const char *title, const char *sub) {
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        float r = 13 * s;
+        ImVec2 c(p.x + r, p.y + r);
+        if (done) {
+            dl->AddCircleFilled(c, r, IM_COL32(98, 202, 19, 255), 24);
+            ImVec2 ts = ImGui::CalcTextSize(ICON_FA_CHECK);
+            dl->AddText(ImVec2(c.x - ts.x / 2, c.y - ts.y / 2), IM_COL32(7, 16, 10, 255),
+                        ICON_FA_CHECK);
+        } else {
+            dl->AddCircle(c, r, IM_COL32(110, 125, 108, 255), 24, 2 * s);
+            std::string num = std::to_string(n);
+            ImVec2 ts = ImGui::CalcTextSize(num.c_str());
+            dl->AddText(ImVec2(c.x - ts.x / 2, c.y - ts.y / 2), kDashDim, num.c_str());
+        }
+        ImGui::SetCursorScreenPos(ImVec2(p.x + r * 2 + 14 * s, p.y));
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted(title);
+        ImGui::TextDisabled("%s", sub);
+        ImGui::EndGroup();
+        ImGui::SetCursorScreenPos(ImVec2(p.x, ImGui::GetItemRectMax().y + 12 * s));
+    };
+    step(1, net_ok, "Turn on networking",
+         "Settings > Network: Enable, with the NAT backend");
+    step(2, false, "Point the Xbox at Insignia",
+         "Set the DNS from Insignia's Connect guide in the dashboard's network "
+         "settings");
+    step(3, false, "Create your account",
+         "Register with the Insignia Setup Assistant, then run the network test");
+    step(4, false, "Play", "Start a supported game and sign in to Xbox Live");
+    if (ImGui::Button("Connect guide")) {
+        SDL_OpenURL("https://insignia.live/connect");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Who's playing")) {
+        SDL_OpenURL("https://insignia.live/games");
+    }
+    ImGui::SetItemTooltip("Players online and active sessions per game, on "
+                          "insignia.live");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(st == InsigniaStatus::Checking);
+    if (ImGui::Button("Check again")) {
+        CheckInsigniaStatus(true);
+    }
+    ImGui::EndDisabled();
+    ImGui::PopTextWrapPos();
+    ImGui::EndGroup();
+
+    // Your online games
+    ImVec2 la = two_col ? ImVec2(a.x + left_w + gap, a.y)
+                        : ImVec2(a.x, setup_y + setup_h + gap);
+    float list_w = two_col ? avail.x - left_w - gap : avail.x;
+    float list_h = two_col ? avail.y : 420 * s;
+    ImGui::SetCursorScreenPos(la);
+    DashCard(dl, la, ImVec2(la.x + list_w, la.y + list_h));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(26 * s, 22 * s));
+    ImGui::BeginChild("##online", ImVec2(list_w, list_h),
+                      ImGuiChildFlags_AlwaysUseWindowPadding |
+                          ImGuiChildFlags_NavFlattened);
+    DashLabel("Your library");
+    DashTitle("Ready for online play");
+    ImGui::TextDisabled("Games you own that Insignia supports. Live player counts "
+                        "are on insignia.live.");
+    ImGui::Dummy(ImVec2(0, 8 * s));
+    std::vector<LibraryEntry *> mine;
+    for (auto &e : g_entries) {
+        if (SupportsOnline(e)) {
+            mine.push_back(&e);
+        }
+    }
+    std::stable_sort(mine.begin(), mine.end(), [](LibraryEntry *x, LibraryEntry *y) {
+        int64_t lx = g_stats[x->path].last_played, ly = g_stats[y->path].last_played;
+        if (lx != ly) {
+            return lx > ly;
+        }
+        return Lower(x->DisplayName()) < Lower(y->DisplayName());
+    });
+    if (mine.empty()) {
+        ImGui::TextDisabled("None of your games are on Insignia's list yet.");
+    }
+    float w = ImGui::GetContentRegionAvail().x;
+    for (LibraryEntry *e : mine) {
+        GameStats &gs = g_stats[e->path];
+        std::string sub = FormatTitleId(e->title_id) + "  -  " +
+                          (IsCurrentDisc(*e)   ? std::string("Playing now")
+                           : gs.last_played > 0 ? "Played " + FormatLastPlayed(gs.last_played)
+                                                : std::string("Not played yet"));
+        bool sel = g_selected_path == e->path;
+        if (DashRow(*e, sub, ICON_FA_PLAY "  Play online", w, tex_budget, sel,
+                    IM_COL32(168, 236, 107, 255))) {
+            g_selected_path = e->path;
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                game_library_window.Launch(e->path);
+            }
+        }
+        if (ActivatedByNav()) {
+            game_library_window.Launch(e->path);
+        }
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+}
+
+// --- Media ---------------------------------------------------------------------
+
+void DrawMediaTab(int &tex_budget)
+{
+    const float s = g_viewport_mgr.m_scale;
+    LibraryEntry *e = FindEntry(g_media_path);
+    if (!e) {
+        e = FindEntry(g_home_path);
+        if (!e) {
+            e = DefaultHomeGame();
+        }
+        if (!e) {
+            ImGui::TextDisabled("No games yet.");
+            return;
+        }
+        g_media_path = e->path;
+    }
+    // Game picker: games with save states or screenshots first
+    ImGui::AlignTextToFramePadding();
+    DashLabel("Showing");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(std::min(420 * s, ImGui::GetContentRegionAvail().x * 0.5f));
+    if (ImGui::BeginCombo("##mediagame", e->DisplayName().c_str())) {
+        std::vector<LibraryEntry *> items;
+        SortedFiltered(items);
+        for (LibraryEntry *it : items) {
+            size_t saves = SnapshotsFor(*it).size();
+            size_t shots = it->valid ? ScreenshotsFor(it->title_id).size() : 0;
+            std::string label = it->DisplayName();
+            if (saves || shots) {
+                label += string_format("   (%zu save%s, %zu screenshot%s)", saves,
+                                       saves == 1 ? "" : "s", shots,
+                                       shots == 1 ? "" : "s");
+            }
+            ImGui::PushID(it->path.c_str());
+            if (ImGui::Selectable(label.c_str(), it == e)) {
+                g_media_path = it->path;
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(ICON_FA_FOLDER_OPEN "  Screenshot folder")) {
+        const char *dir = g_config.general.screenshot_dir;
+        std::string p =
+            fs::absolute(fs::u8path(dir && dir[0] ? dir : ".")).generic_u8string();
+        SDL_OpenURL(("file:///" + p).c_str());
+    }
+    ImGui::Dummy(ImVec2(0, 10 * s));
+
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    float gap = 22 * s;
+    float col_w = std::floor((avail.x - gap) / 2);
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 a = ImGui::GetCursorScreenPos();
+    for (int col = 0; col < 2; col++) {
+        ImVec2 ca(a.x + col * (col_w + gap), a.y);
+        DashCard(dl, ca, ImVec2(ca.x + col_w, ca.y + avail.y));
+        ImGui::SetCursorScreenPos(ca);
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(24 * s, 20 * s));
+        ImGui::BeginChild(col ? "##shots" : "##saves", ImVec2(col_w, avail.y),
+                          ImGuiChildFlags_AlwaysUseWindowPadding |
+                              ImGuiChildFlags_NavFlattened);
+        float w = ImGui::GetContentRegionAvail().x;
+        if (col == 0) {
+            DashLabel("Save states");
+            DashTitle(e->DisplayName().c_str());
+            if (SnapshotsFor(*e).empty()) {
+                ImGui::Dummy(ImVec2(0, 8 * s));
+                ImGui::TextDisabled("No save states for this game yet. Create one "
+                                    "from Machine > Snapshot while playing.");
+            } else {
+                DrawSaveStates(*e, w, 50);
+            }
+        } else {
+            DashLabel("Screenshots");
+            DashTitle(e->DisplayName().c_str());
+            if (!e->valid || ScreenshotsFor(e->title_id).empty()) {
+                ImGui::Dummy(ImVec2(0, 8 * s));
+                ImGui::TextDisabled("No screenshots yet. Press F12 while playing.");
+            } else {
+                DrawScreenshots(*e, w, w > 600 * s ? 3 : 2, 60);
+            }
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+    }
+    (void)tex_budget;
+}
+
+// --- Patches -------------------------------------------------------------------
+
+void DrawPatchesTab(int &tex_budget)
+{
+    const float s = g_viewport_mgr.m_scale;
+    DashLabel("Patches");
+    DashTitle("Widescreen, 60 FPS, HD and fixes for your games");
+    ImGui::TextDisabled("From Jay's Magic Patches collection on GitHub, plus any "
+                        "patches you add yourself. Downloaded patches start "
+                        "switched off.");
+    ImGui::Dummy(ImVec2(0, 6 * s));
+    ImGui::BeginDisabled(g_patchdl_running);
+    if (DashButton(g_patchdl_running
+                       ? ICON_FA_DOWNLOAD "  Downloading..."
+                       : ICON_FA_DOWNLOAD "  Download patches for all games",
+                   kBtnGreen, kInk, ImVec2(0, 38 * s))) {
+        StartPatchDownload(0, false);
+    }
+    ImGui::SameLine(0, 12 * s);
+    if (DashButton(ICON_FA_MAGNIFYING_GLASS "  Check for new patches", kBtnGlass,
+                   kWhite, ImVec2(0, 38 * s))) {
+        StartPatchDownload(0, true);
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine(0, 18 * s);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("Built-in list from %s", kJmpIndexDate);
+    ImGui::Dummy(ImVec2(0, 12 * s));
+
+    // Games with patches installed or available
+    std::vector<LibraryEntry *> games;
+    std::set<uint32_t> seen;
+    std::vector<LibraryEntry *> items;
+    SortedFiltered(items);
+    for (LibraryEntry *e : items) {
+        if (!e->valid || seen.count(e->title_id)) {
+            continue;
+        }
+        auto it = g_patches.find(e->title_id);
+        bool installed = it != g_patches.end() && !it->second.empty();
+        if (installed || OnlinePatchCount(e->title_id)) {
+            seen.insert(e->title_id);
+            games.push_back(e);
+        }
+    }
+    std::stable_sort(games.begin(), games.end(), [](LibraryEntry *x, LibraryEntry *y) {
+        return EnabledPatchCount(x->title_id) > EnabledPatchCount(y->title_id);
+    });
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    ImVec2 a = ImGui::GetCursorScreenPos();
+    DashCard(ImGui::GetWindowDrawList(), a, ImVec2(a.x + avail.x, a.y + avail.y));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(22 * s, 18 * s));
+    ImGui::BeginChild("##patchgames", avail,
+                      ImGuiChildFlags_AlwaysUseWindowPadding |
+                          ImGuiChildFlags_NavFlattened);
+    if (games.empty()) {
+        ImGui::TextDisabled("None of your games have patches yet.");
+    }
+    float w = ImGui::GetContentRegionAvail().x;
+    float btn_w = 120 * s;
+    for (LibraryEntry *e : games) {
+        auto it = g_patches.find(e->title_id);
+        int installed = it == g_patches.end() ? 0 : (int)it->second.size();
+        int on = EnabledPatchCount(e->title_id);
+        int online = OnlinePatchCount(e->title_id);
+        std::string sub = FormatTitleId(e->title_id) + "  -  " +
+                          string_format("%d installed, %d available online",
+                                        installed, online);
+        std::string note = on ? string_format(ICON_FA_WRENCH "  %d on", on)
+                              : installed ? std::string("all off") : std::string();
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        if (DashRow(*e, sub, note, w - btn_w - 12 * s, tex_budget, false,
+                    on ? kAccent : 0) ||
+            ActivatedByNav()) {
+            OpenPatchesFor(*e);
+        }
+        ImVec2 q = ImGui::GetItemRectMax();
+        ImGui::SetCursorScreenPos(
+            ImVec2(p.x + w - btn_w, p.y + (q.y - p.y - 32 * s) / 2));
+        ImGui::PushID(e->path.c_str());
+        if (DashButton("Manage", kBtnGlass, kWhite, ImVec2(btn_w, 32 * s))) {
+            OpenPatchesFor(*e);
+        }
+        ImGui::PopID();
+        ImGui::SetCursorScreenPos(ImVec2(p.x, q.y + 4 * s));
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+}
+
+// --- Settings ------------------------------------------------------------------
+
+void DrawDashSettingsTab()
+{
+    const float s = g_viewport_mgr.m_scale;
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    float gap = 22 * s;
+    bool two_col = avail.x > 900 * s;
+    float col_w = two_col ? std::floor((avail.x - gap) / 2) : avail.x;
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 a = ImGui::GetCursorScreenPos();
+
+    auto card = [&](int col, const char *id, auto body) {
+        ImVec2 ca(a.x + (two_col ? col * (col_w + gap) : 0), a.y);
+        float h = avail.y;
+        DashCard(dl, ca, ImVec2(ca.x + col_w, ca.y + h));
+        ImGui::SetCursorScreenPos(ca);
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(26 * s, 22 * s));
+        ImGui::BeginChild(id, ImVec2(col_w, h),
+                          ImGuiChildFlags_AlwaysUseWindowPadding |
+                              ImGuiChildFlags_NavFlattened);
+        ImGui::PushItemWidth(-FLT_MIN);
+        body();
+        ImGui::PopItemWidth();
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+    };
+    auto label = [&](const char *t) {
+        ImGui::Dummy(ImVec2(0, 4 * s));
+        ImGui::TextUnformatted(t);
+    };
+
+    card(0, "##picture", [&] {
+        DashLabel("Picture");
+        DashTitle("Display and upscaling");
+        label("Internal resolution");
+        int scale = std::clamp(g_config.display.quality.surface_scale, 1, 10) - 1;
+        if (ImGui::Combo("##scale", &scale,
+                         "1x (native)\0" "2x\0" "3x\0" "4x\0" "5x\0" "6x\0" "7x\0"
+                         "8x\0" "9x\0" "10x\0")) {
+            nv2a_set_surface_scale_factor(scale + 1);
+        }
+        ImGui::TextDisabled("The heaviest setting. 1x-2x with FSR is fast and sharp.");
+        label("Upscaling filter");
+        ImGui::Combo("##filter", &g_config.display.filtering,
+                     "Linear\0Nearest\0AMD FidelityFX FSR 1.0\0Bicubic (Catmull-Rom)\0"
+                     "Lanczos\0Snapdragon GSR 1\0");
+        if (g_config.display.filtering >= 2) {
+            label("Sharpening");
+            ImGui::SliderFloat("##sharp", &g_config.display.fsr_sharpness, 0.0f, 1.0f,
+                               "%.2f");
+        }
+        ImGui::Dummy(ImVec2(0, 8 * s));
+        ImGui::Checkbox("Performance overlay (F9)",
+                        &g_config.display.ui.show_perf_overlay);
+
+        ImGui::Dummy(ImVec2(0, 14 * s));
+        DashLabel("Console");
+        DashTitle("Video modes");
+        uint32_t flags = 0;
+        if (!xbox_eeprom_get_video_flags(&flags)) {
+            ImGui::TextDisabled("Available once the console is running.");
+        } else {
+            static const struct {
+                const char *label;
+                uint32_t flag;
+            } modes[] = { { "Widescreen (16:9)", XBOX_EEPROM_VIDEO_WIDESCREEN },
+                          { "480p", XBOX_EEPROM_VIDEO_480P },
+                          { "720p", XBOX_EEPROM_VIDEO_720P },
+                          { "1080i", XBOX_EEPROM_VIDEO_1080I } };
+            for (auto &m : modes) {
+                bool v = (flags & m.flag) != 0;
+                if (ImGui::Checkbox(m.label, &v)) {
+                    uint32_t nf = v ? (flags | m.flag) : (flags & ~m.flag);
+                    if (xbox_eeprom_set_video_flags(nf)) {
+                        flags = nf;
+                        xemu_queue_notification("Video modes saved. Games use "
+                                                "them the next time they start.");
+                    } else {
+                        xemu_queue_error_message("Could not save the video modes "
+                                                 "to the EEPROM file");
+                    }
+                }
+            }
+            ImGui::TextDisabled("Same as the Xbox dashboard's video settings. "
+                                "Games read them when they start.");
+        }
+    });
+    if (!two_col) {
+        return; // the second card only fits side by side
+    }
+    card(1, "##general", [&] {
+        DashLabel("General");
+        DashTitle("Library and play");
+        ImGui::Checkbox("Resume where you left off",
+                        &g_config.general.library.auto_resume);
+        ImGui::TextDisabled("Save a resume point whenever you leave a game.");
+        ImGui::Checkbox("Show this dashboard when xemu starts",
+                        &g_config.general.library.show_on_startup);
+        ImGui::Dummy(ImVec2(0, 10 * s));
+        if (DashButton(ICON_FA_FOLDER_OPEN "  Game folders...", kBtnGlass, kWhite,
+                       ImVec2(0, 36 * s))) {
+            g_open_folders_popup = true;
+        }
+        ImGui::SameLine();
+        if (DashButton(ICON_FA_IMAGE "  Get covers", kBtnGlass, kWhite,
+                       ImVec2(0, 36 * s))) {
+            StartCoverDownload();
+        }
+        ImGui::Dummy(ImVec2(0, 14 * s));
+        DashLabel("Everything else");
+        DashTitle("All settings");
+        ImGui::TextDisabled("Input, audio, network, system files, snapshots and "
+                            "more.");
+        ImGui::Dummy(ImVec2(0, 4 * s));
+        if (DashButton(ICON_FA_GEAR "  Open all settings", kBtnGreen, kInk,
+                       ImVec2(0, 38 * s))) {
+            GameLibraryShowAllSettings();
+        }
+    });
+}
+
+// The full library: toolbar, grid or list, and the details panel
+void DrawLibraryTab(int &tex_budget)
+{
+    const float s = g_viewport_mgr.m_scale;
+    auto folders = AllFolders();
+    // Toolbar
+    float search_w = std::max(180 * s, ImGui::GetContentRegionAvail().x * 0.28f);
+    ImGui::SetNextItemWidth(search_w);
+    if (ImGui::IsWindowAppearing()) {
+        ImGui::SetKeyboardFocusHere();
+    }
+    ImGui::InputTextWithHint("##search", ICON_FA_MAGNIFYING_GLASS "  Search by name or title ID",
+                             &g_search);
+    ImGui::SameLine();
+    bool grid = g_config.general.library.view == CONFIG_GENERAL_LIBRARY_VIEW_GRID;
+    auto toggle = [&](const char *label, bool active, const char *tip) {
+        if (active) {
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                                  ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        }
+        bool pressed = ImGui::Button(label);
+        if (active) {
+            ImGui::PopStyleColor();
+        }
+        ImGui::SetItemTooltip("%s", tip);
+        return pressed;
+    };
+    if (toggle(ICON_FA_TABLE_CELLS, grid, "Grid view")) {
+        g_config.general.library.view = CONFIG_GENERAL_LIBRARY_VIEW_GRID;
+    }
+    ImGui::SameLine(0, 2 * s);
+    if (toggle(ICON_FA_LIST, !grid, "List view")) {
+        g_config.general.library.view = CONFIG_GENERAL_LIBRARY_VIEW_LIST;
+    }
+    ImGui::SameLine();
+    if (toggle(ICON_FA_STAR, g_favorites_only, "Show favorites only")) {
+        g_favorites_only = !g_favorites_only;
+    }
+    ImGui::SameLine(0, 2 * s);
+    if (toggle("Online", g_online_only,
+               "Show only games playable online with Insignia")) {
+        g_online_only = !g_online_only;
+    }
+    ImGui::SameLine(0, 2 * s);
+    if (ImGui::Button("Insignia")) {
+        SwitchTab(kTabInsignia);
+    }
+    {
+        int st = g_insignia_status;
+        if (st == (int)InsigniaStatus::Up || st == (int)InsigniaStatus::Maintenance ||
+            st == (int)InsigniaStatus::Down) {
+            ImVec2 mx = ImGui::GetItemRectMax(), mn = ImGui::GetItemRectMin();
+            ImU32 col = st == (int)InsigniaStatus::Up ? IM_COL32(70, 200, 70, 255)
+                        : st == (int)InsigniaStatus::Maintenance
+                            ? IM_COL32(235, 180, 40, 255)
+                            : IM_COL32(230, 70, 60, 255);
+            ImGui::GetWindowDrawList()->AddCircleFilled(
+                ImVec2(mx.x - 4 * s, mn.y + 4 * s), 3.5f * s, col);
+        }
+    }
+    ImGui::SetItemTooltip("Play original Xbox Live games online again");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(150 * s);
+    ImGui::Combo("##sort", &g_config.general.library.sort,
+                 "Sort: Title\0Sort: Last played\0Sort: Play time\0");
+    if (grid) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(110 * s);
+        ImGui::SliderFloat("##size", &g_config.general.library.tile_size, 0.0f,
+                           1.0f, "");
+        ImGui::SetItemTooltip("Tile size");
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(g_covers_running);
+    if (ImGui::Button(g_covers_running
+                          ? string_format("Covers %d/%d", (int)g_covers_done,
+                                          (int)g_covers_total).c_str()
+                          : "Get covers")) {
+        StartCoverDownload();
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("Download box art for games without a cover, from "
+                          "xemu's game database (xemu-project/xdb on GitHub). "
+                          "Your own covers always take priority.");
+    ImGui::SameLine(0, 2 * s);
+    if (ImGui::Button("+ Add game")) {
+        AddGameFile();
+    }
+    ImGui::SetItemTooltip("Add a single disc image to the library");
+    ImGui::SameLine(0, 2 * s);
+    if (ImGui::Button(ICON_FA_FOLDER_OPEN "  Folders")) {
+        g_open_folders_popup = true;
+    }
+    ImGui::SetItemTooltip("%d game folder%s", (int)folders.size(),
+                          folders.size() == 1 ? "" : "s");
+    ImGui::SameLine(0, 2 * s);
+    ImGui::BeginDisabled(g_scan_running);
+    if (ImGui::Button(ICON_FA_ARROWS_ROTATE "  Scan folders")) {
+        game_library_window.Rescan();
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("Look for new or removed games and covers");
+    ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%d games", (int)g_entries.size());
+    ImGui::Dummy(ImVec2(0, 4 * s));
+
+    std::vector<LibraryEntry *> items;
+    SortedFiltered(items);
+    LibraryEntry *selected = FindEntry(g_selected_path);
+    if (!selected && !items.empty()) {
+        selected = items[0];
+        g_selected_path = selected->path;
+    }
+
+    float avail_w = ImGui::GetContentRegionAvail().x;
+    bool show_panel = selected && avail_w > 720 * s;
+    float panel_w = std::min(340 * s, avail_w * 0.3f);
+    float gap = 16 * s;
+
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::BeginChild("##content",
+                      ImVec2(show_panel ? avail_w - panel_w - gap : 0, 0),
+                      ImGuiChildFlags_NavFlattened);
+    ImGui::PopStyleColor();
+    if (items.empty()) {
+        ImGui::Dummy(ImVec2(0, 20 * s));
+        ImGui::TextDisabled(g_entries.empty() && !g_scan_running
+                                ? "No disc images found in your game folders."
+                                : "No games match.");
+    }
+    if (grid) {
+        if (g_search.empty() && !g_favorites_only) {
+            DrawRecentRow(tex_budget);
+        }
+        DrawGrid(items, tex_budget);
+    } else if (!items.empty()) {
+        DrawList(items, tex_budget);
+    }
+    ImGui::EndChild();
+
+    if (show_panel) {
+        ImGui::SameLine(0, gap);
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.11f, 0.11f, 0.12f, 0.88f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10 * s);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14 * s, 14 * s));
+        // Always reserve the scrollbar, so content arriving (save states,
+        // screenshots) never changes the panel's width
+        ImGui::BeginChild("##details", ImVec2(0, 0),
+                          ImGuiChildFlags_AlwaysUseWindowPadding |
+                              ImGuiChildFlags_NavFlattened,
+                          ImGuiWindowFlags_AlwaysVerticalScrollbar);
+        DrawDetailsPanel(*selected, tex_budget);
+        ImGui::EndChild();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor();
+    }
+
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -3771,12 +5144,13 @@ void GameLibraryWindow::Open()
 {
     is_open = true;
     g_focus_requested = true;
+    g_home_focus_play = g_dash_tab == kTabHome;
 }
 
 void GameLibraryWindow::OpenInsignia()
 {
     Open();
-    g_open_insignia_popup = true;
+    SwitchTab(kTabInsignia);
 }
 
 void GameLibraryWindow::DownloadCovers()
@@ -4001,8 +5375,36 @@ void GameLibraryWindow::Draw()
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20 * s, 14 * s));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6 * s);
+    // Dashboard colors: glassy controls with green accents (popped at End)
+    static const struct {
+        ImGuiCol idx;
+        ImVec4 col;
+    } theme[] = {
+        { ImGuiCol_Button, ImVec4(1, 1, 1, 0.08f) },
+        { ImGuiCol_ButtonHovered, ImVec4(1, 1, 1, 0.15f) },
+        { ImGuiCol_ButtonActive, ImVec4(0.384f, 0.792f, 0.075f, 0.55f) },
+        { ImGuiCol_FrameBg, ImVec4(1, 1, 1, 0.07f) },
+        { ImGuiCol_FrameBgHovered, ImVec4(1, 1, 1, 0.11f) },
+        { ImGuiCol_FrameBgActive, ImVec4(1, 1, 1, 0.15f) },
+        { ImGuiCol_CheckMark, ImVec4(0.384f, 0.792f, 0.075f, 1) },
+        { ImGuiCol_SliderGrab, ImVec4(0.384f, 0.792f, 0.075f, 1) },
+        { ImGuiCol_SliderGrabActive, ImVec4(0.55f, 0.90f, 0.25f, 1) },
+        { ImGuiCol_Header, ImVec4(0.384f, 0.792f, 0.075f, 0.22f) },
+        { ImGuiCol_HeaderHovered, ImVec4(1, 1, 1, 0.08f) },
+        { ImGuiCol_HeaderActive, ImVec4(0.384f, 0.792f, 0.075f, 0.35f) },
+        { ImGuiCol_PopupBg, ImVec4(0.07f, 0.09f, 0.08f, 0.98f) },
+        { ImGuiCol_ScrollbarBg, ImVec4(0, 0, 0, 0) },
+        { ImGuiCol_ScrollbarGrab, ImVec4(1, 1, 1, 0.16f) },
+        { ImGuiCol_Separator, ImVec4(1, 1, 1, 0.09f) },
+        { ImGuiCol_NavCursor, ImVec4(0.384f, 0.792f, 0.075f, 1) },
+        { ImGuiCol_TextSelectedBg, ImVec4(0.384f, 0.792f, 0.075f, 0.35f) },
+    };
+    const int theme_count = (int)(sizeof(theme) / sizeof(theme[0]));
+    for (auto &c : theme) {
+        ImGui::PushStyleColor(c.idx, c.col);
+    }
     // Slightly see-through so the boot animation or game shows behind it
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.06f, 0.06f, 0.07f, 0.80f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.06f, 0.05f, 0.82f));
     bool visible = ImGui::Begin(
         "###Game Library", NULL,
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
@@ -4013,35 +5415,31 @@ void GameLibraryWindow::Draw()
     ImGui::PopStyleVar(3);
     if (!visible) {
         ImGui::End();
+        ImGui::PopStyleColor(theme_count);
         ImGui::PopStyleVar();
         return;
     }
 
-    // Header: title, game count, close
-    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kAccent), ICON_FA_GAMEPAD);
-    ImGui::SameLine();
-    ImGui::PushFont(g_font_mgr.m_menu_font_medium);
-    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 5 * s);
-    ImGui::TextUnformatted("Game Library");
-    ImGui::PopFont();
-    ImGui::SameLine();
-    if (g_scan_running) {
-        ImGui::TextDisabled("Scanning... %d / %d", (int)g_scan_done,
-                            (int)g_scan_total);
-    } else {
-        ImGui::TextDisabled("%d games", (int)g_entries.size());
+    // Dashboard: background, top bar with tabs (LB/RB to switch)
+    {
+        ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+        DrawDashBackground(ImGui::GetWindowDrawList(), wp,
+                           ImVec2(wp.x + ws.x, wp.y + ws.y));
     }
-    const char *dvd = g_config.sys.files.dvd_path;
-    const char *close_label = (dvd && dvd[0]) ? ICON_FA_XMARK "  Back to game"
-                                              : ICON_FA_XMARK "  Close";
-    float close_w = ImGui::CalcTextSize(close_label).x +
-                    ImGui::GetStyle().FramePadding.x * 2;
-    ImGui::SameLine(ImGui::GetContentRegionMax().x - close_w);
-    if (ImGui::Button(close_label)) {
-        is_open = false;
+    DrawDashTopBar();
+    if (!ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) &&
+        !ImGui::IsAnyItemActive() &&
+        ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
+        ImGuiIO &io = ImGui::GetIO();
+        if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false) ||
+            (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_PageUp, false))) {
+            SwitchTab(g_dash_tab - 1);
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false) ||
+            (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_PageDown, false))) {
+            SwitchTab(g_dash_tab + 1);
+        }
     }
-    ImGui::SetItemTooltip("Esc or B");
-    ImGui::Dummy(ImVec2(0, 2 * s));
 
     auto folders = AllFolders();
     if (folders.empty() && g_extra_files.empty()) {
@@ -4067,160 +5465,41 @@ void GameLibraryWindow::Draw()
         }
         DrawFoldersPopup();
         ImGui::End();
+        ImGui::PopStyleColor(theme_count);
         ImGui::PopStyleVar();
         return;
     }
 
-    // Toolbar
-    float search_w = std::max(180 * s, ImGui::GetContentRegionAvail().x * 0.28f);
-    ImGui::SetNextItemWidth(search_w);
-    if (ImGui::IsWindowAppearing()) {
-        ImGui::SetKeyboardFocusHere();
-    }
-    ImGui::InputTextWithHint("##search", ICON_FA_MAGNIFYING_GLASS "  Search by name or title ID",
-                             &g_search);
-    ImGui::SameLine();
-    bool grid = g_config.general.library.view == CONFIG_GENERAL_LIBRARY_VIEW_GRID;
-    auto toggle = [&](const char *label, bool active, const char *tip) {
-        if (active) {
-            ImGui::PushStyleColor(ImGuiCol_Button,
-                                  ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-        }
-        bool pressed = ImGui::Button(label);
-        if (active) {
-            ImGui::PopStyleColor();
-        }
-        ImGui::SetItemTooltip("%s", tip);
-        return pressed;
-    };
-    if (toggle(ICON_FA_TABLE_CELLS, grid, "Grid view")) {
-        g_config.general.library.view = CONFIG_GENERAL_LIBRARY_VIEW_GRID;
-    }
-    ImGui::SameLine(0, 2 * s);
-    if (toggle(ICON_FA_LIST, !grid, "List view")) {
-        g_config.general.library.view = CONFIG_GENERAL_LIBRARY_VIEW_LIST;
-    }
-    ImGui::SameLine();
-    if (toggle(ICON_FA_STAR, g_favorites_only, "Show favorites only")) {
-        g_favorites_only = !g_favorites_only;
-    }
-    ImGui::SameLine(0, 2 * s);
-    if (toggle("Online", g_online_only,
-               "Show only games playable online with Insignia")) {
-        g_online_only = !g_online_only;
-    }
-    ImGui::SameLine(0, 2 * s);
-    if (ImGui::Button("Insignia")) {
-        g_open_insignia_popup = true;
-    }
-    {
-        int st = g_insignia_status;
-        if (st == (int)InsigniaStatus::Up || st == (int)InsigniaStatus::Maintenance ||
-            st == (int)InsigniaStatus::Down) {
-            ImVec2 mx = ImGui::GetItemRectMax(), mn = ImGui::GetItemRectMin();
-            ImU32 col = st == (int)InsigniaStatus::Up ? IM_COL32(70, 200, 70, 255)
-                        : st == (int)InsigniaStatus::Maintenance
-                            ? IM_COL32(235, 180, 40, 255)
-                            : IM_COL32(230, 70, 60, 255);
-            ImGui::GetWindowDrawList()->AddCircleFilled(
-                ImVec2(mx.x - 4 * s, mn.y + 4 * s), 3.5f * s, col);
-        }
-    }
-    ImGui::SetItemTooltip("Play original Xbox Live games online again");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(150 * s);
-    ImGui::Combo("##sort", &g_config.general.library.sort,
-                 "Sort: Title\0Sort: Last played\0Sort: Play time\0");
-    if (grid) {
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(110 * s);
-        ImGui::SliderFloat("##size", &g_config.general.library.tile_size, 0.0f,
-                           1.0f, "");
-        ImGui::SetItemTooltip("Tile size");
-    }
-    ImGui::SameLine();
-    ImGui::BeginDisabled(g_covers_running);
-    if (ImGui::Button(g_covers_running
-                          ? string_format("Covers %d/%d", (int)g_covers_done,
-                                          (int)g_covers_total).c_str()
-                          : "Get covers")) {
-        StartCoverDownload();
-    }
-    ImGui::EndDisabled();
-    ImGui::SetItemTooltip("Download box art for games without a cover, from "
-                          "xemu's game database (xemu-project/xdb on GitHub). "
-                          "Your own covers always take priority.");
-    ImGui::SameLine(0, 2 * s);
-    if (ImGui::Button("+ Add game")) {
-        AddGameFile();
-    }
-    ImGui::SetItemTooltip("Add a single disc image to the library");
-    ImGui::SameLine(0, 2 * s);
-    if (ImGui::Button(ICON_FA_FOLDER_OPEN "  Folders")) {
-        g_open_folders_popup = true;
-    }
-    ImGui::SetItemTooltip("%d game folder%s", (int)folders.size(),
-                          folders.size() == 1 ? "" : "s");
-    ImGui::SameLine(0, 2 * s);
-    ImGui::BeginDisabled(g_scan_running);
-    if (ImGui::Button(ICON_FA_ARROWS_ROTATE "  Scan folders")) {
-        game_library_window.Rescan();
-    }
-    ImGui::EndDisabled();
-    ImGui::SetItemTooltip("Look for new or removed games and covers");
-    ImGui::Dummy(ImVec2(0, 4 * s));
-
-    std::vector<LibraryEntry *> items;
-    SortedFiltered(items);
-    LibraryEntry *selected = FindEntry(g_selected_path);
-    if (!selected && !items.empty()) {
-        selected = items[0];
-        g_selected_path = selected->path;
-    }
-
-    int tex_budget = 6; // decode at most a few images per frame
-    float avail_w = ImGui::GetContentRegionAvail().x;
-    bool show_panel = selected && avail_w > 720 * s;
-    float panel_w = std::min(340 * s, avail_w * 0.3f);
-    float gap = 16 * s;
-
+    const float hints_h = ImGui::GetFontSize() * 2.2f;
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
-    ImGui::BeginChild("##content",
-                      ImVec2(show_panel ? avail_w - panel_w - gap : 0, 0),
-                      ImGuiChildFlags_NavFlattened);
+    ImGui::BeginChild("##tabcontent", ImVec2(0, -hints_h), ImGuiChildFlags_NavFlattened,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleColor();
-    if (items.empty()) {
-        ImGui::Dummy(ImVec2(0, 20 * s));
-        ImGui::TextDisabled(g_entries.empty() && !g_scan_running
-                                ? "No disc images found in your game folders."
-                                : "No games match.");
-    }
-    if (grid) {
-        if (g_search.empty() && !g_favorites_only) {
-            DrawRecentRow(tex_budget);
-        }
-        DrawGrid(items, tex_budget);
-    } else if (!items.empty()) {
-        DrawList(items, tex_budget);
+    int tex_budget = 6; // decode at most a few images per frame
+    switch (g_dash_tab) {
+    case kTabHome:
+        DrawHomeTab(tex_budget);
+        break;
+    case kTabInsignia:
+        DrawInsigniaTab(tex_budget);
+        break;
+    case kTabMedia:
+        DrawMediaTab(tex_budget);
+        break;
+    case kTabPatches:
+        DrawPatchesTab(tex_budget);
+        break;
+    case kTabSettings:
+        DrawDashSettingsTab();
+        break;
+    default:
+        DrawLibraryTab(tex_budget);
+        break;
     }
     ImGui::EndChild();
-
-    if (show_panel) {
-        ImGui::SameLine(0, gap);
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.11f, 0.11f, 0.12f, 0.88f));
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10 * s);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14 * s, 14 * s));
-        // Always reserve the scrollbar, so content arriving (save states,
-        // screenshots) never changes the panel's width
-        ImGui::BeginChild("##details", ImVec2(0, 0),
-                          ImGuiChildFlags_AlwaysUseWindowPadding |
-                              ImGuiChildFlags_NavFlattened,
-                          ImGuiWindowFlags_AlwaysVerticalScrollbar);
-        DrawDetailsPanel(*selected, tex_budget);
-        ImGui::EndChild();
-        ImGui::PopStyleVar(2);
-        ImGui::PopStyleColor();
-    }
+    DrawDashHints(ImVec2(ImGui::GetCursorScreenPos().x,
+                         ImGui::GetCursorScreenPos().y + 6 * s),
+                  ImGui::GetContentRegionAvail().x);
 
     DrawSettingsPopup();
     DrawFoldersPopup();
@@ -4237,6 +5516,7 @@ void GameLibraryWindow::Draw()
         is_open = false;
     }
     ImGui::End();
+    ImGui::PopStyleColor(theme_count);
     ImGui::PopStyleVar();
 }
 

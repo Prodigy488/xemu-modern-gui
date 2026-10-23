@@ -50,6 +50,9 @@ extern GameLibraryWindow game_library_window;
 // xemu_settings_save() around writing the config file.
 void GameLibraryBeforeSettingsSave(void);
 
+// Opens xemu's full settings (defined with the main menu)
+void GameLibraryShowAllSettings(void);
+
 // Called by ActionEjectDisc(): returns true if the library will save a
 // resume point and then eject itself.
 bool GameLibraryInterceptEject(void);

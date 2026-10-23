@@ -43,6 +43,11 @@ bool g_capture_renderdoc_frame = false;
 #define SHORTCUT_MENU_TEXT(c) "Ctrl+" #c
 #endif
 
+void GameLibraryShowAllSettings(void)
+{
+    g_main_menu.ShowSettings();
+}
+
 void ProcessKeyboardShortcuts(void)
 {
     if (IsShortcutKeyPressed(ImGuiKey_E)) {

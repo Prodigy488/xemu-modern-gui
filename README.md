@@ -11,6 +11,14 @@ quality-of-life features on top of the official release.
 > **Agent Declaration**: These changes were created with assistance from
 > Claude Code (Anthropic, Claude Opus 5.5).
 
+![Home tab, Neon theme](docs/screenshots/home.jpg)
+
+| Library | Insignia | Classic style |
+|---|---|---|
+| ![Library](docs/screenshots/library.jpg) | ![Insignia](docs/screenshots/insignia.jpg) | ![Classic](docs/screenshots/classic.jpg) |
+
+<sub>Screenshots use placeholder cover art.</sub>
+
 ## Download
 
 Windows builds are on the [Releases](../../releases) page. Unzip and run
@@ -27,6 +35,9 @@ shared.
   the game you're playing, with its cover, title ID, play time and an Insignia
   badge for online-capable games. Turn it off in Settings > General > Discord
   status. Requires the Discord app running on the same PC.
+- **New in v1.3: Neon theme.** A dark, cyberpunk look for the dashboard:
+  near-black backgrounds, cyan and magenta accents, cut-corner panels and HUD
+  labels. The previous green look stays available (Games > Library Style).
 - **Two library styles**, switchable any time from Games > Library Style or
   Settings: the tabbed **Dashboard** or the **Classic** single library window.
 - **Dashboard** with tabs, switched with LB / RB:

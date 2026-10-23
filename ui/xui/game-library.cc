@@ -1488,7 +1488,166 @@ void ApplyOverridesFor(const std::string &path)
 // Drawing
 // ---------------------------------------------------------------------------
 
-const ImU32 kAccent = IM_COL32(0x62, 0xCA, 0x13, 0xFF); // xemu green
+// ---------------------------------------------------------------------------
+// Themes: Neon (dark, cyan/magenta, cut corners) and Green (rounded, xemu
+// green). The classic library window always uses Green.
+// ---------------------------------------------------------------------------
+
+struct LibTheme {
+    bool neon;
+    ImU32 accent;  // selection, focus, highlights
+    ImU32 accent2; // secondary highlights (Resume, ONLINE)
+    ImU32 text, dim, panel, border, online;
+    ImU32 ok, warn, bad; // status colors
+    ImVec4 primary, on_primary, resume, glass, white;
+};
+
+const LibTheme kThemeGreen = {
+    false,
+    IM_COL32(0x62, 0xCA, 0x13, 0xFF), // xemu green
+    IM_COL32(46, 127, 224, 255),
+    IM_COL32(232, 239, 230, 255),
+    IM_COL32(150, 165, 147, 255),
+    IM_COL32(255, 255, 255, 12),
+    IM_COL32(255, 255, 255, 22),
+    IM_COL32(16, 124, 16, 255),
+    IM_COL32(98, 202, 19, 255),
+    IM_COL32(235, 180, 40, 255),
+    IM_COL32(230, 70, 60, 255),
+    ImVec4(0.384f, 0.792f, 0.075f, 1),
+    ImVec4(0.03f, 0.06f, 0.04f, 1),
+    ImVec4(0.18f, 0.50f, 0.88f, 1),
+    ImVec4(1, 1, 1, 0.10f),
+    ImVec4(0.95f, 0.97f, 0.94f, 1),
+};
+
+const LibTheme kThemeNeon = {
+    true,
+    IM_COL32(0, 229, 255, 255),   // electric cyan
+    IM_COL32(255, 46, 136, 255),  // hot magenta
+    IM_COL32(228, 232, 245, 255),
+    IM_COL32(118, 128, 162, 255),
+    IM_COL32(14, 13, 26, 200),
+    IM_COL32(0, 229, 255, 46),
+    IM_COL32(255, 46, 136, 255),
+    IM_COL32(0, 229, 255, 255),
+    IM_COL32(247, 214, 30, 255),
+    IM_COL32(255, 60, 100, 255),
+    ImVec4(0.0f, 0.898f, 1.0f, 1),
+    ImVec4(0.02f, 0.02f, 0.05f, 1),
+    ImVec4(1.0f, 0.18f, 0.53f, 0.10f), // Resume: outlined magenta
+    ImVec4(0.0f, 0.898f, 1.0f, 0.06f),
+    ImVec4(0.90f, 0.93f, 1.0f, 1),
+};
+
+// Library style: the tabbed dashboard, or the classic single library window
+bool ClassicStyle()
+{
+    return g_config.general.library.style == CONFIG_GENERAL_LIBRARY_STYLE_CLASSIC;
+}
+
+const LibTheme &T()
+{
+    return (ClassicStyle() ||
+            g_config.general.library.theme == CONFIG_GENERAL_LIBRARY_THEME_GREEN)
+               ? kThemeGreen
+               : kThemeNeon;
+}
+
+ImU32 Alpha(ImU32 c, int a)
+{
+    return (c & 0x00FFFFFF) | ((ImU32)a << 24);
+}
+
+// Neon cuts the top-left and bottom-right corners; Green rounds them
+int ChamferPoints(ImVec2 a, ImVec2 b, float r, ImVec2 *pts)
+{
+    float c = std::min(r * 0.9f, std::min(b.x - a.x, b.y - a.y) * 0.3f);
+    pts[0] = ImVec2(a.x + c, a.y);
+    pts[1] = ImVec2(b.x, a.y);
+    pts[2] = ImVec2(b.x, b.y - c);
+    pts[3] = ImVec2(b.x - c, b.y);
+    pts[4] = ImVec2(a.x, b.y);
+    pts[5] = ImVec2(a.x, a.y + c);
+    return 6;
+}
+
+void ShapeFill(ImDrawList *dl, ImVec2 a, ImVec2 b, ImU32 col, float r)
+{
+    if (!T().neon) {
+        dl->AddRectFilled(a, b, col, r);
+        return;
+    }
+    ImVec2 pts[6];
+    dl->AddConvexPolyFilled(pts, ChamferPoints(a, b, r, pts), col);
+}
+
+void ShapeStroke(ImDrawList *dl, ImVec2 a, ImVec2 b, ImU32 col, float r, float th)
+{
+    if (!T().neon) {
+        dl->AddRect(a, b, col, r, 0, th);
+        return;
+    }
+    ImVec2 pts[6];
+    dl->AddPolyline(pts, ChamferPoints(a, b, r, pts), col, ImDrawFlags_Closed, th);
+}
+
+// An image filling a shape: the box [a, b] shows the texture region uv0-uv1
+void ShapeImage(ImDrawList *dl, ImTextureID tex, ImVec2 a, ImVec2 b, ImVec2 uv0,
+                ImVec2 uv1, ImU32 col, float r)
+{
+    if (!T().neon) {
+        dl->AddImageRounded(tex, a, b, uv0, uv1, col, r);
+        return;
+    }
+    ImVec2 pts[6];
+    int n = ChamferPoints(a, b, r, pts);
+    dl->PushTextureID(tex);
+    dl->PrimReserve((n - 2) * 3, n);
+    ImDrawIdx base = (ImDrawIdx)dl->_VtxCurrentIdx;
+    for (int i = 0; i < n; i++) {
+        ImVec2 t((pts[i].x - a.x) / (b.x - a.x), (pts[i].y - a.y) / (b.y - a.y));
+        dl->PrimWriteVtx(pts[i],
+                         ImVec2(uv0.x + t.x * (uv1.x - uv0.x),
+                                uv0.y + t.y * (uv1.y - uv0.y)),
+                         col);
+    }
+    for (int i = 1; i + 1 < n; i++) {
+        dl->PrimWriteIdx(base);
+        dl->PrimWriteIdx((ImDrawIdx)(base + i));
+        dl->PrimWriteIdx((ImDrawIdx)(base + i + 1));
+    }
+    dl->PopTextureID();
+}
+
+ImFont *FontOr(ImFont *f)
+{
+    return f ? f : ImGui::GetFont();
+}
+
+// Neon's small HUD labels use xemu's pixel font
+ImFont *HudFont()
+{
+    return T().neon ? FontOr(g_font_mgr.m_fixed_width_font) : ImGui::GetFont();
+}
+
+std::string Upper(const std::string &t)
+{
+    std::string u;
+    for (char c : t) {
+        u += (char)toupper((unsigned char)c);
+    }
+    return u;
+}
+
+// Neon: thin HUD brackets on two opposite corners
+void Brackets(ImDrawList *dl, ImVec2 a, ImVec2 b, ImU32 col, float len, float th)
+{
+    dl->AddLine(ImVec2(b.x - len, a.y - th * 2), ImVec2(b.x + th * 2, a.y - th * 2), col, th);
+    dl->AddLine(ImVec2(b.x + th * 2, a.y - th * 2), ImVec2(b.x + th * 2, a.y + len), col, th);
+    dl->AddLine(ImVec2(a.x - th * 2, b.y - len), ImVec2(a.x - th * 2, b.y + th * 2), col, th);
+    dl->AddLine(ImVec2(a.x - th * 2, b.y + th * 2), ImVec2(a.x + len, b.y + th * 2), col, th);
+}
 
 bool IsCurrentDisc(const LibraryEntry &e)
 {
@@ -2423,11 +2582,20 @@ void DrawPlaceholder(ImDrawList *dl, ImVec2 a, ImVec2 b, const LibraryEntry &e,
                          : (uint32_t)std::hash<std::string>()(e.path);
     ImVec4 c1 = ImColor::HSV((h % 360) / 360.0f, 0.45f, 0.38f);
     ImVec4 c2 = ImColor::HSV((h % 360) / 360.0f, 0.55f, 0.18f);
-    dl->AddRectFilled(a, b, ImGui::GetColorU32(c2), rounding);
-    dl->AddRectFilledMultiColor(ImVec2(a.x, a.y + rounding),
-                                ImVec2(b.x, b.y - rounding),
-                                ImGui::GetColorU32(c1), ImGui::GetColorU32(c1),
-                                ImGui::GetColorU32(c2), ImGui::GetColorU32(c2));
+    if (T().neon) {
+        // Dark violet slab with a thin hue line
+        ShapeFill(dl, a, b, IM_COL32(16, 15, 30, 255), rounding);
+        ImVec4 line = ImColor::HSV((h % 360) / 360.0f, 0.7f, 0.9f);
+        dl->AddRectFilled(ImVec2(a.x + rounding, b.y - 6 * g_viewport_mgr.m_scale),
+                          ImVec2(b.x - rounding * 2, b.y - 4 * g_viewport_mgr.m_scale),
+                          ImGui::GetColorU32(line));
+    } else {
+        dl->AddRectFilled(a, b, ImGui::GetColorU32(c2), rounding);
+        dl->AddRectFilledMultiColor(ImVec2(a.x, a.y + rounding),
+                                    ImVec2(b.x, b.y - rounding),
+                                    ImGui::GetColorU32(c1), ImGui::GetColorU32(c1),
+                                    ImGui::GetColorU32(c2), ImGui::GetColorU32(c2));
+    }
     const char *icon = ICON_FA_COMPACT_DISC;
     float size = (b.x - a.x) * 0.35f;
     ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(size, FLT_MAX, 0, icon);
@@ -2444,14 +2612,14 @@ void DrawArtwork(ImDrawList *dl, ImVec2 a, ImVec2 b, const LibraryEntry &e,
         return;
     }
     // Fit the image inside the box, keeping its aspect ratio
-    dl->AddRectFilled(a, b, IM_COL32(16, 16, 16, 255), rounding);
+    ShapeFill(dl, a, b, T().neon ? IM_COL32(12, 12, 22, 255) : IM_COL32(16, 16, 16, 255),
+              rounding);
     float bw = b.x - a.x, bh = b.y - a.y;
     float s = std::min(bw / e.tex_w, bh / e.tex_h);
     float w = e.tex_w * s, h = e.tex_h * s;
     ImVec2 ia((a.x + b.x - w) / 2, (a.y + b.y - h) / 2);
-    dl->AddImageRounded((ImTextureID)(intptr_t)e.tex, ia,
-                        ImVec2(ia.x + w, ia.y + h), ImVec2(0, 0), ImVec2(1, 1),
-                        IM_COL32_WHITE, rounding);
+    ShapeImage(dl, (ImTextureID)(intptr_t)e.tex, ia, ImVec2(ia.x + w, ia.y + h),
+               ImVec2(0, 0), ImVec2(1, 1), IM_COL32_WHITE, rounding);
 }
 
 bool ActivatedByNav()
@@ -2521,20 +2689,29 @@ void DrawTile(LibraryEntry &e, float tile_w, int &tex_budget)
 
         bool focused = ImGui::IsItemFocused() && ImGui::GetIO().NavVisible;
         if (hovered || selected || focused) {
-            dl->AddRect(a, art_b,
-                        (selected || focused) ? kAccent
-                                              : IM_COL32(255, 255, 255, 90),
-                        rounding, 0, 2.5f * s);
+            ImU32 col = (selected || focused) ? T().accent : IM_COL32(255, 255, 255, 90);
+            if (T().neon && (selected || focused)) {
+                ShapeStroke(dl, ImVec2(a.x - 3 * s, a.y - 3 * s),
+                            ImVec2(art_b.x + 3 * s, art_b.y + 3 * s),
+                            Alpha(T().accent, 60), rounding + 3 * s, 5.0f * s);
+            }
+            ShapeStroke(dl, a, art_b, col, rounding, 2.5f * s);
         }
         if (SupportsOnline(e)) {
             const char *badge = "ONLINE";
+            ImFont *bf = ImGui::GetFont();
             float fs = font_h * 0.75f;
-            ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, 0, badge);
+            ImVec2 ts = bf->CalcTextSizeA(fs, FLT_MAX, 0, badge);
             ImVec2 p(a.x + 6 * s, a.y + 6 * s);
-            dl->AddRectFilled(ImVec2(p.x - 3 * s, p.y - 2 * s),
-                              ImVec2(p.x + ts.x + 3 * s, p.y + ts.y + 2 * s),
-                              IM_COL32(16, 124, 16, 230), 3 * s);
-            dl->AddText(ImGui::GetFont(), fs, p, IM_COL32(255, 255, 255, 255), badge);
+            ImVec2 b0(p.x - 3 * s, p.y - 2 * s), b1(p.x + ts.x + 3 * s, p.y + ts.y + 2 * s);
+            if (T().neon) {
+                ShapeFill(dl, b0, b1, IM_COL32(10, 6, 16, 220), 4 * s);
+                ShapeStroke(dl, b0, b1, T().online, 4 * s, 1.0f * s);
+                dl->AddText(bf, fs, p, T().online, badge);
+            } else {
+                dl->AddRectFilled(b0, b1, IM_COL32(16, 124, 16, 230), 3 * s);
+                dl->AddText(bf, fs, p, IM_COL32(255, 255, 255, 255), badge);
+            }
         }
         if (e.valid && (EnabledPatchCount(e.title_id) || OnlinePatchCount(e.title_id))) {
             // Wrench: green when patches are on, grey when some are online
@@ -2543,7 +2720,7 @@ void DrawTile(LibraryEntry &e, float tile_w, int &tex_budget)
             dl->AddCircleFilled(c, font_h * 0.75f, IM_COL32(0, 0, 0, 150));
             ImVec2 ts = ImGui::CalcTextSize(ICON_FA_WRENCH);
             dl->AddText(ImVec2(c.x - ts.x / 2, c.y - ts.y / 2),
-                        on ? kAccent : IM_COL32(220, 220, 220, 230), ICON_FA_WRENCH);
+                        on ? T().accent : IM_COL32(220, 220, 220, 230), ICON_FA_WRENCH);
         }
         if (st.favorite) {
             ImVec2 p(art_b.x - font_h - 6 * s, a.y + 6 * s);
@@ -2557,7 +2734,7 @@ void DrawTile(LibraryEntry &e, float tile_w, int &tex_budget)
             ImVec2 p(a.x + 6 * s, art_b.y - ts.y - 10 * s);
             dl->AddRectFilled(ImVec2(p.x - 4 * s, p.y - 2 * s),
                               ImVec2(p.x + ts.x + 4 * s, p.y + ts.y + 2 * s),
-                              kAccent, 4 * s);
+                              T().accent, 4 * s);
             dl->AddText(p, IM_COL32(0, 0, 0, 255), badge);
         }
 
@@ -3579,7 +3756,7 @@ void DrawScreenshots(const LibraryEntry &e, float w, int per_row = 3,
         RequestScreenshotThumb(path);
         ImGui::PushID(path.c_str());
         ImVec2 p = ImGui::GetCursorScreenPos();
-        if (ImGui::InvisibleButton("##shot", ImVec2(tw, th))) {
+        if (ImGui::InvisibleButton("##shot", ImVec2(tw, th), ImGuiButtonFlags_EnableNav)) {
             SDL_OpenURL(("file:///" + fs::u8path(path).generic_u8string()).c_str());
         }
         ImGui::SetItemTooltip("%s", fs::u8path(path).filename().u8string().c_str());
@@ -3594,7 +3771,7 @@ void DrawScreenshots(const LibraryEntry &e, float w, int per_row = 3,
                                 ImVec2(1, 1), IM_COL32_WHITE, 3 * s);
         }
         if (ImGui::IsItemHovered()) {
-            dl->AddRect(p, ImVec2(p.x + tw, p.y + th), kAccent, 3 * s, 0, 2 * s);
+            dl->AddRect(p, ImVec2(p.x + tw, p.y + th), T().accent, 3 * s, 0, 2 * s);
         }
         ImGui::PopID();
     }
@@ -3693,18 +3870,24 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
             strftime(when, sizeof(when), "%b %d, %H:%M", tm);
         }
         std::string label = std::string(ICON_FA_PLAY "  Resume  ") + when;
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.42f, 0.78f, 1));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.5f, 0.88f, 1));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.36f, 0.68f, 1));
+        const bool neon = T().neon;
+        ImGui::PushStyleColor(ImGuiCol_Button, neon ? ImVec4(0.75f, 0.10f, 0.42f, 1)
+                                                    : ImVec4(0.16f, 0.42f, 0.78f, 1));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, neon ? ImVec4(1.0f, 0.18f, 0.53f, 1)
+                                                           : ImVec4(0.22f, 0.5f, 0.88f, 1));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, neon ? ImVec4(0.6f, 0.08f, 0.33f, 1)
+                                                          : ImVec4(0.12f, 0.36f, 0.68f, 1));
         if (ImGui::Button(label.c_str(), ImVec2(w, 40 * s))) {
             ResumeGame(e, info.name);
         }
         ImGui::PopStyleColor(3);
         ImGui::SetItemTooltip("Continue from where you left off");
     }
-    ImGui::PushStyleColor(ImGuiCol_Button, ImGui::ColorConvertU32ToFloat4(kAccent));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.45f, 0.86f, 0.16f, 1));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.32f, 0.70f, 0.06f, 1));
+    ImGui::PushStyleColor(ImGuiCol_Button, ImGui::ColorConvertU32ToFloat4(T().accent));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, T().neon ? ImVec4(0.45f, 0.94f, 1, 1)
+                                                           : ImVec4(0.45f, 0.86f, 0.16f, 1));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, T().neon ? ImVec4(0, 0.70f, 0.80f, 1)
+                                                          : ImVec4(0.32f, 0.70f, 0.06f, 1));
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0, 0, 0, 1));
     if (ImGui::Button(IsCurrentDisc(e) ? ICON_FA_PLAY "  Playing - restart"
                                        : ICON_FA_PLAY "  Play",
@@ -3854,39 +4037,33 @@ const char *const kTabNames[kTabCount] = { "Home",    "Library",
                                            "Patches", "Settings" };
 int g_dash_tab = kTabHome;
 
-// Library style: the tabbed dashboard, or the classic single library window
-bool ClassicStyle()
-{
-    return g_config.general.library.style == CONFIG_GENERAL_LIBRARY_STYLE_CLASSIC;
-}
 std::string g_home_path;        // game shown in the Home hero
 std::string g_home_seen_select; // g_selected_path as last seen on Home
 std::string g_media_path;       // game shown on the Media tab
 bool g_home_focus_play = false; // put controller focus on Play next frame
 
-const ImU32 kDashText = IM_COL32(232, 239, 230, 255);
-const ImU32 kDashDim = IM_COL32(150, 165, 147, 255);
-const ImU32 kDashPanel = IM_COL32(255, 255, 255, 12);
-const ImU32 kDashBorder = IM_COL32(255, 255, 255, 22);
-const ImU32 kOnlineGreen = IM_COL32(16, 124, 16, 255);
 
-ImFont *FontOr(ImFont *f)
-{
-    return f ? f : ImGui::GetFont();
-}
-
-// Rounded translucent card behind a region
+// Translucent card behind a region
 void DashCard(ImDrawList *dl, ImVec2 a, ImVec2 b)
 {
     const float s = g_viewport_mgr.m_scale;
-    dl->AddRectFilled(a, b, kDashPanel, 16 * s);
-    dl->AddRect(a, b, kDashBorder, 16 * s, 0, 1.0f * s);
+    ShapeFill(dl, a, b, T().panel, T().neon ? 18 * s : 16 * s);
+    ShapeStroke(dl, a, b, T().border, T().neon ? 18 * s : 16 * s, 1.0f * s);
 }
 
-// Small spaced-out uppercase label ("CONTINUE PLAYING")
+// Small label above a section ("CONTINUE PLAYING", or "// CONTINUE PLAYING")
 void DashLabel(const char *text)
 {
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(kDashDim));
+    if (T().neon) {
+        ImGui::PushFont(HudFont());
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              ImGui::ColorConvertU32ToFloat4(Alpha(T().accent, 210)));
+        ImGui::TextUnformatted(("// " + Upper(text)).c_str());
+        ImGui::PopStyleColor();
+        ImGui::PopFont();
+        return;
+    }
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(T().dim));
     std::string up;
     for (const char *c = text; *c; c++) {
         up += (char)toupper((unsigned char)*c);
@@ -3905,42 +4082,97 @@ void DashTitle(const char *text)
     ImGui::PopFont();
 }
 
-// "ONLINE"-style pill drawn inline
+// "ONLINE"-style badge drawn inline
 void DashPill(const char *text, ImU32 bg, ImU32 fg = IM_COL32_WHITE)
 {
     const float s = g_viewport_mgr.m_scale;
+    ImGui::PushFont(ImGui::GetFont());
     ImVec2 ts = ImGui::CalcTextSize(text);
     ImVec2 p = ImGui::GetCursorScreenPos();
     ImVec2 pad(6 * s, 2 * s);
     ImGui::Dummy(ImVec2(ts.x + pad.x * 2, ts.y + pad.y * 2));
-    ImGui::GetWindowDrawList()->AddRectFilled(
-        p, ImVec2(p.x + ts.x + pad.x * 2, p.y + ts.y + pad.y * 2), bg, 5 * s);
-    ImGui::GetWindowDrawList()->AddText(ImVec2(p.x + pad.x, p.y + pad.y), fg, text);
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 q(p.x + ts.x + pad.x * 2, p.y + ts.y + pad.y * 2);
+    if (T().neon) {
+        ShapeFill(dl, p, q, Alpha(bg, 40), 6 * s);
+        ShapeStroke(dl, p, q, bg, 6 * s, 1.0f * s);
+        dl->AddText(ImVec2(p.x + pad.x, p.y + pad.y), bg, text);
+    } else {
+        dl->AddRectFilled(p, q, bg, 5 * s);
+        dl->AddText(ImVec2(p.x + pad.x, p.y + pad.y), fg, text);
+    }
+    ImGui::PopFont();
 }
 
-// Big colored button (Play, Resume...)
+// Big button (Play, Resume...). Neon draws a cut-corner shape: solid when
+// the color is opaque, outlined when it's translucent.
 bool DashButton(const char *label, ImVec4 bg, ImVec4 fg, ImVec2 size)
 {
-    ImGui::PushStyleColor(ImGuiCol_Button, bg);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                          ImVec4(std::min(bg.x * 1.15f + 0.04f, 1.f),
-                                 std::min(bg.y * 1.15f + 0.04f, 1.f),
-                                 std::min(bg.z * 1.15f + 0.04f, 1.f), bg.w));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(bg.x * 0.85f, bg.y * 0.85f,
-                                                        bg.z * 0.85f, bg.w));
-    ImGui::PushStyleColor(ImGuiCol_Text, fg);
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 12 * g_viewport_mgr.m_scale);
-    bool pressed = ImGui::Button(label, size);
-    ImGui::PopStyleVar();
-    ImGui::PopStyleColor(4);
+    const float s = g_viewport_mgr.m_scale;
+    if (!T().neon) {
+        ImGui::PushStyleColor(ImGuiCol_Button, bg);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                              ImVec4(std::min(bg.x * 1.15f + 0.04f, 1.f),
+                                     std::min(bg.y * 1.15f + 0.04f, 1.f),
+                                     std::min(bg.z * 1.15f + 0.04f, 1.f), bg.w));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(bg.x * 0.85f, bg.y * 0.85f,
+                                                            bg.z * 0.85f, bg.w));
+        ImGui::PushStyleColor(ImGuiCol_Text, fg);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 12 * s);
+        bool pressed = ImGui::Button(label, size);
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(4);
+        return pressed;
+    }
+    const char *end = ImGui::FindRenderedTextEnd(label);
+    ImVec2 ts = ImGui::CalcTextSize(label, end);
+    ImVec2 pad = ImGui::GetStyle().FramePadding;
+    if (size.x <= 0) {
+        size.x = ts.x + pad.x * 2 + 16 * s;
+    }
+    if (size.y <= 0) {
+        size.y = ts.y + pad.y * 2;
+    }
+    ImVec2 a = ImGui::GetCursorScreenPos();
+    ImVec2 b(a.x + size.x, a.y + size.y);
+    // EnableNav: invisible buttons are skipped by controller navigation
+    // unless asked
+    bool pressed = ImGui::InvisibleButton(label, size, ImGuiButtonFlags_EnableNav);
+    bool hovered = ImGui::IsItemHovered(), held = ImGui::IsItemActive();
+    bool focused = ImGui::IsItemFocused() && ImGui::GetIO().NavVisible;
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    float r = std::min(12 * s, size.y * 0.35f);
+    bool solid = bg.w > 0.5f;
+    ImVec4 fill = bg;
+    if (solid) {
+        float k = held ? 0.85f : hovered ? 1.12f : 1.0f;
+        fill = ImVec4(std::min(bg.x * k, 1.f), std::min(bg.y * k, 1.f),
+                      std::min(bg.z * k, 1.f), bg.w);
+        if (hovered || focused) {
+            ShapeFill(dl, ImVec2(a.x - 3 * s, a.y - 3 * s),
+                      ImVec2(b.x + 3 * s, b.y + 3 * s),
+                      ImGui::GetColorU32(ImVec4(bg.x, bg.y, bg.z, 0.22f)), r + 3 * s);
+        }
+        ShapeFill(dl, a, b, ImGui::GetColorU32(fill), r);
+    } else {
+        ShapeFill(dl, a, b,
+                  ImGui::GetColorU32(ImVec4(bg.x, bg.y, bg.z,
+                                            held ? 0.22f : hovered ? 0.14f : bg.w)),
+                  r);
+        ShapeStroke(dl, a, b,
+                    ImGui::GetColorU32(ImVec4(bg.x, bg.y, bg.z,
+                                              hovered || focused ? 0.9f : 0.45f)),
+                    r, 1.0f * s);
+    }
+    if (focused) {
+        ShapeStroke(dl, ImVec2(a.x - 4 * s, a.y - 4 * s), ImVec2(b.x + 4 * s, b.y + 4 * s),
+                    ImGui::GetColorU32(ImGui::ColorConvertU32ToFloat4(T().accent)),
+                    r + 4 * s, 1.5f * s);
+    }
+    dl->AddText(ImVec2(a.x + (size.x - ts.x) / 2, a.y + (size.y - ts.y) / 2),
+                ImGui::GetColorU32(fg), label, end);
     return pressed;
 }
-
-const ImVec4 kBtnGreen(0.384f, 0.792f, 0.075f, 1);
-const ImVec4 kBtnBlue(0.18f, 0.50f, 0.88f, 1);
-const ImVec4 kBtnGlass(1, 1, 1, 0.10f);
-const ImVec4 kInk(0.03f, 0.06f, 0.04f, 1);
-const ImVec4 kWhite(0.95f, 0.97f, 0.94f, 1);
 
 LibraryEntry *DefaultHomeGame()
 {
@@ -3961,16 +4193,33 @@ void SwitchTab(int tab)
     RequestPreviewStop();
 }
 
-// Background: dark, with a soft green glow in the top-right corner
+// Background. Green: a soft glow top-right. Neon: near-black violet, faint
+// cyan and magenta glows, and scanlines.
 void DrawDashBackground(ImDrawList *dl, ImVec2 a, ImVec2 b)
 {
+    const float s = g_viewport_mgr.m_scale;
     float w = b.x - a.x, h = b.y - a.y;
-    dl->AddRectFilledMultiColor(a, b, IM_COL32(8, 14, 10, 120),
-                                IM_COL32(40, 90, 20, 120), IM_COL32(8, 10, 9, 120),
-                                IM_COL32(14, 40, 22, 120));
-    for (int i = 0; i < 6; i++) {
-        dl->AddCircleFilled(ImVec2(a.x + w * 0.80f, a.y - h * 0.05f),
-                            w * (0.12f + i * 0.06f), IM_COL32(98, 202, 19, 7), 64);
+    if (!T().neon) {
+        dl->AddRectFilledMultiColor(a, b, IM_COL32(8, 14, 10, 120),
+                                    IM_COL32(40, 90, 20, 120), IM_COL32(8, 10, 9, 120),
+                                    IM_COL32(14, 40, 22, 120));
+        for (int i = 0; i < 6; i++) {
+            dl->AddCircleFilled(ImVec2(a.x + w * 0.80f, a.y - h * 0.05f),
+                                w * (0.12f + i * 0.06f), IM_COL32(98, 202, 19, 7), 64);
+        }
+        return;
+    }
+    dl->AddRectFilledMultiColor(a, b, IM_COL32(9, 8, 18, 150), IM_COL32(6, 10, 20, 150),
+                                IM_COL32(4, 4, 9, 170), IM_COL32(12, 5, 16, 170));
+    for (int i = 0; i < 5; i++) {
+        dl->AddCircleFilled(ImVec2(a.x + w * 0.86f, a.y + h * 0.02f),
+                            w * (0.10f + i * 0.055f), IM_COL32(0, 229, 255, 5), 64);
+        dl->AddCircleFilled(ImVec2(a.x + w * 0.04f, b.y + h * 0.06f),
+                            w * (0.08f + i * 0.05f), IM_COL32(255, 46, 136, 5), 64);
+    }
+    float step = std::max(3.0f, 3 * s);
+    for (float y = a.y; y < b.y; y += step) {
+        dl->AddLine(ImVec2(a.x, y), ImVec2(b.x, y), IM_COL32(0, 0, 0, 34), 1.0f);
     }
 }
 
@@ -3978,61 +4227,109 @@ void DrawDashBackground(ImDrawList *dl, ImVec2 a, ImVec2 b)
 void DrawDashTopBar()
 {
     const float s = g_viewport_mgr.m_scale;
+    const LibTheme &th = T();
     ImDrawList *dl = ImGui::GetWindowDrawList();
     float bar_h = 46 * s;
     ImVec2 start = ImGui::GetCursorScreenPos();
     float y_mid = start.y + bar_h / 2;
 
-    // Brand: glowing green orb + "xemu"
+    // Brand: Green has a glowing orb; Neon a diamond and spaced letters
     float r = 11 * s;
     ImVec2 c(start.x + r + 2 * s, y_mid);
-    dl->AddCircleFilled(c, r * 1.8f, IM_COL32(98, 202, 19, 40), 32);
-    dl->AddCircleFilled(c, r, IM_COL32(98, 202, 19, 255), 32);
-    dl->AddCircleFilled(ImVec2(c.x - r * 0.3f, c.y - r * 0.3f), r * 0.45f,
-                        IM_COL32(200, 255, 140, 200), 24);
-    ImGui::SetCursorScreenPos(ImVec2(c.x + r + 10 * s, start.y));
+    std::string brand = "xemu";
+    if (th.neon) {
+        ImVec2 d[4] = { ImVec2(c.x, c.y - r), ImVec2(c.x + r, c.y), ImVec2(c.x, c.y + r),
+                        ImVec2(c.x - r, c.y) };
+        dl->AddPolyline(d, 4, th.accent, ImDrawFlags_Closed, 2.0f * s);
+        ImVec2 di[4] = { ImVec2(c.x, c.y - r * 0.45f), ImVec2(c.x + r * 0.45f, c.y),
+                         ImVec2(c.x, c.y + r * 0.45f), ImVec2(c.x - r * 0.45f, c.y) };
+        dl->AddConvexPolyFilled(di, 4, th.accent2);
+        brand = "X E M U";
+    } else {
+        dl->AddCircleFilled(c, r * 1.8f, IM_COL32(98, 202, 19, 40), 32);
+        dl->AddCircleFilled(c, r, IM_COL32(98, 202, 19, 255), 32);
+        dl->AddCircleFilled(ImVec2(c.x - r * 0.3f, c.y - r * 0.3f), r * 0.45f,
+                            IM_COL32(200, 255, 140, 200), 24);
+    }
     ImGui::PushFont(FontOr(g_font_mgr.m_menu_font_small));
     float fh = ImGui::GetFontSize();
     ImGui::SetCursorScreenPos(ImVec2(c.x + r + 10 * s, y_mid - fh / 2));
-    ImGui::TextUnformatted("xemu");
+    ImGui::TextUnformatted(brand.c_str());
     ImGui::PopFont();
 
     auto chip = [&](const char *t) {
         ImGui::SameLine(0, 18 * s);
+        ImGui::PushFont(HudFont());
         ImVec2 ts = ImGui::CalcTextSize(t);
         ImVec2 p(ImGui::GetCursorScreenPos().x, y_mid - ts.y / 2 - 3 * s);
         ImGui::SetCursorScreenPos(p);
         ImGui::Dummy(ImVec2(ts.x + 12 * s, ts.y + 6 * s));
-        dl->AddRectFilled(p, ImVec2(p.x + ts.x + 12 * s, p.y + ts.y + 6 * s),
-                          IM_COL32(42, 51, 42, 255), 6 * s);
-        dl->AddText(ImVec2(p.x + 6 * s, p.y + 3 * s), IM_COL32(220, 230, 218, 255), t);
+        ImVec2 q(p.x + ts.x + 12 * s, p.y + ts.y + 6 * s);
+        if (th.neon) {
+            ShapeStroke(dl, p, q, Alpha(th.accent, 110), 5 * s, 1.0f * s);
+            dl->AddText(ImVec2(p.x + 6 * s, p.y + 3 * s), Alpha(th.accent, 220), t);
+        } else {
+            dl->AddRectFilled(p, q, IM_COL32(42, 51, 42, 255), 6 * s);
+            dl->AddText(ImVec2(p.x + 6 * s, p.y + 3 * s), IM_COL32(220, 230, 218, 255), t);
+        }
+        ImGui::PopFont();
     };
     chip("LB");
 
-    // Tabs as pills
+    // Tabs. Green: pills. Neon: numbered labels with an underline.
     ImGui::PushFont(FontOr(g_font_mgr.m_menu_font_small));
     for (int t = 0; t < kTabCount; t++) {
-        ImGui::SameLine(0, t ? 6 * s : 12 * s);
-        ImVec2 ts = ImGui::CalcTextSize(kTabNames[t]);
-        ImVec2 size(ts.x + 34 * s, ts.y + 14 * s);
-        ImGui::SetCursorScreenPos(
-            ImVec2(ImGui::GetCursorScreenPos().x, y_mid - size.y / 2));
         bool on = g_dash_tab == t;
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, size.y / 2);
-        ImGui::PushStyleColor(ImGuiCol_Button, on ? kBtnGreen : ImVec4(0, 0, 0, 0));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                              on ? kBtnGreen : ImVec4(1, 1, 1, 0.08f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                              on ? kBtnGreen : ImVec4(1, 1, 1, 0.14f));
-        ImGui::PushStyleColor(ImGuiCol_Text,
-                              on ? kInk : ImVec4(0.60f, 0.66f, 0.59f, 1));
         ImGui::PushID(t);
-        if (ImGui::Button(kTabNames[t], size)) {
-            SwitchTab(t);
+        if (th.neon) {
+            ImGui::SameLine(0, t ? 4 * s : 14 * s);
+            std::string name = Upper(kTabNames[t]);
+            char num[16];
+            snprintf(num, sizeof(num), "%02d", t + 1);
+            ImVec2 ts = ImGui::CalcTextSize(name.c_str());
+            ImFont *hud = HudFont();
+            ImVec2 ns = hud->CalcTextSizeA(hud->FontSize, FLT_MAX, 0, num);
+            ImVec2 size(ns.x + 6 * s + ts.x + 24 * s, ts.y + 18 * s);
+            ImVec2 p(ImGui::GetCursorScreenPos().x, y_mid - size.y / 2);
+            ImGui::SetCursorScreenPos(p);
+            if (ImGui::InvisibleButton(kTabNames[t], size, ImGuiButtonFlags_EnableNav)) {
+                SwitchTab(t);
+            }
+            bool hov = ImGui::IsItemHovered();
+            float tx = p.x + 12 * s;
+            float ty = p.y + (size.y - ts.y) / 2;
+            dl->AddText(hud, hud->FontSize, ImVec2(tx, ty + ts.y - ns.y - 2 * s),
+                        on ? th.accent2 : Alpha(th.dim, 160), num);
+            dl->AddText(ImVec2(tx + ns.x + 6 * s, ty),
+                        on ? th.accent : hov ? th.text : th.dim, name.c_str());
+            if (on) {
+                float ux0 = tx, ux1 = p.x + size.x - 12 * s, uy = p.y + size.y - 2 * s;
+                dl->AddRectFilled(ImVec2(ux0, uy - 6 * s), ImVec2(ux1, uy + 3 * s),
+                                  Alpha(th.accent, 26));
+                dl->AddRectFilled(ImVec2(ux0, uy - 1 * s), ImVec2(ux1, uy + 1 * s),
+                                  th.accent);
+            }
+        } else {
+            ImGui::SameLine(0, t ? 6 * s : 12 * s);
+            ImVec2 ts = ImGui::CalcTextSize(kTabNames[t]);
+            ImVec2 size(ts.x + 34 * s, ts.y + 14 * s);
+            ImGui::SetCursorScreenPos(
+                ImVec2(ImGui::GetCursorScreenPos().x, y_mid - size.y / 2));
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, size.y / 2);
+            ImGui::PushStyleColor(ImGuiCol_Button, on ? th.primary : ImVec4(0, 0, 0, 0));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                  on ? th.primary : ImVec4(1, 1, 1, 0.08f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                                  on ? th.primary : ImVec4(1, 1, 1, 0.14f));
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  on ? th.on_primary : ImVec4(0.60f, 0.66f, 0.59f, 1));
+            if (ImGui::Button(kTabNames[t], size)) {
+                SwitchTab(t);
+            }
+            ImGui::PopStyleColor(4);
+            ImGui::PopStyleVar();
         }
         ImGui::PopID();
-        ImGui::PopStyleColor(4);
-        ImGui::PopStyleVar();
     }
     ImGui::PopFont();
     chip("RB");
@@ -4049,51 +4346,74 @@ void DrawDashTopBar()
         strftime(clock, sizeof(clock), "%H:%M", tm);
     }
     CheckInsigniaStatus(false);
-    const char *ins = "Insignia";
+    std::string ins = "Insignia";
     ImU32 ins_col = IM_COL32(140, 140, 140, 255);
     switch ((InsigniaStatus)(int)g_insignia_status) {
     case InsigniaStatus::Up:
         ins = "Insignia online";
-        ins_col = IM_COL32(98, 202, 19, 255);
+        ins_col = th.ok;
         break;
     case InsigniaStatus::Maintenance:
         ins = "Insignia maintenance";
-        ins_col = IM_COL32(235, 180, 40, 255);
+        ins_col = th.warn;
         break;
     case InsigniaStatus::Down:
         ins = "Insignia unreachable";
-        ins_col = IM_COL32(230, 70, 60, 255);
+        ins_col = th.bad;
         break;
     default:
         break;
+    }
+    if (th.neon) {
+        ins = Upper(ins);
     }
     std::string scan = g_scan_running
                            ? string_format(ICON_FA_ARROWS_ROTATE "  %d / %d",
                                            (int)g_scan_done, (int)g_scan_total)
                            : std::string();
+    ImFont *hud = HudFont();
+    float hsz = hud->FontSize;
+    auto text_w = [&](const std::string &t) {
+        return hud->CalcTextSizeA(hsz, FLT_MAX, 0, t.c_str()).x;
+    };
     float gap = 22 * s;
-    float ins_w = ImGui::CalcTextSize(ins).x + 18 * s;
-    float clock_w = ImGui::CalcTextSize(clock).x;
+    float ins_w = text_w(ins) + 18 * s;
+    float clock_w = text_w(clock);
     float scan_w = scan.empty() ? 0 : ImGui::CalcTextSize(scan.c_str()).x + gap;
     float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
     float x = right - close_w - gap - clock_w - gap - ins_w - scan_w;
     float min_x = ImGui::GetItemRectMax().x + gap;
     if (x >= min_x) {
-        float ty = y_mid - ImGui::GetFontSize() / 2;
+        float ty = y_mid - hsz / 2;
         if (!scan.empty()) {
-            dl->AddText(ImVec2(x, ty), kDashDim, scan.c_str());
+            dl->AddText(ImVec2(x, y_mid - ImGui::GetFontSize() / 2), th.dim, scan.c_str());
             x += scan_w;
         }
-        dl->AddCircleFilled(ImVec2(x + 5 * s, y_mid), 5 * s, ins_col, 16);
-        dl->AddText(ImVec2(x + 18 * s, ty), IM_COL32(183, 196, 180, 255), ins);
+        if (th.neon) {
+            dl->AddRectFilled(ImVec2(x + 1 * s, y_mid - 4 * s),
+                              ImVec2(x + 9 * s, y_mid + 4 * s), ins_col);
+        } else {
+            dl->AddCircleFilled(ImVec2(x + 5 * s, y_mid), 5 * s, ins_col, 16);
+        }
+        ImU32 tcol = th.neon ? th.text : IM_COL32(183, 196, 180, 255);
+        dl->AddText(hud, hsz, ImVec2(x + 18 * s, ty), tcol, ins.c_str());
         x += ins_w + gap;
-        dl->AddText(ImVec2(x, ty), IM_COL32(183, 196, 180, 255), clock);
+        dl->AddText(hud, hsz, ImVec2(x, ty), th.neon ? th.accent : tcol, clock);
     }
     ImGui::SetCursorScreenPos(ImVec2(right - close_w, y_mid - 16 * s));
-    if (DashButton(close_label, kBtnGlass, kWhite, ImVec2(close_w, 32 * s))) {
+    if (DashButton(close_label, th.glass, th.white, ImVec2(close_w, 32 * s))) {
         game_library_window.is_open = false;
     }
     ImGui::SetItemTooltip("Esc or B");
+    if (th.neon) {
+        // Thin divider under the bar
+        float y = start.y + bar_h + 4 * s;
+        float wx = ImGui::GetWindowPos().x;
+        float ww = ImGui::GetWindowSize().x;
+        dl->AddRectFilledMultiColor(ImVec2(wx, y), ImVec2(wx + ww, y + 1 * s),
+                                    Alpha(th.accent, 0), Alpha(th.accent, 90),
+                                    Alpha(th.accent2, 90), Alpha(th.accent2, 0));
+    }
     ImGui::SetCursorScreenPos(ImVec2(start.x, start.y + bar_h + 10 * s));
 }
 
@@ -4108,7 +4428,7 @@ void DrawDashHints(ImVec2 a, float w)
     };
     std::vector<Hint> hints;
     const ImU32 ka = IM_COL32(63, 163, 27, 255), kb = IM_COL32(200, 50, 42, 255),
-                kx = IM_COL32(43, 111, 214, 255), ky = IM_COL32(226, 180, 23, 255);
+                ky = IM_COL32(226, 180, 23, 255);
     switch (g_dash_tab) {
     case kTabHome:
     case kTabLibrary:
@@ -4122,23 +4442,36 @@ void DrawDashHints(ImVec2 a, float w)
         hints = { { "A", ka, "Select" }, { "B", kb, "Back to game" } };
         break;
     }
-    (void)kx;
+    const bool neon = T().neon;
     ImDrawList *dl = ImGui::GetWindowDrawList();
     float fh = ImGui::GetFontSize();
     float x = a.x, y = a.y + fh * 0.2f;
     float r = fh * 0.62f;
     for (auto &h : hints) {
         ImVec2 c(x + r, y + fh / 2);
-        dl->AddCircleFilled(c, r, h.col, 24);
         ImVec2 ks = ImGui::CalcTextSize(h.key);
-        dl->AddText(ImVec2(c.x - ks.x / 2, c.y - ks.y / 2),
-                    h.col == ky ? IM_COL32(30, 30, 30, 255) : IM_COL32_WHITE, h.key);
-        dl->AddText(ImVec2(x + r * 2 + 8 * s, y), kDashDim, h.text);
-        x += r * 2 + 8 * s + ImGui::CalcTextSize(h.text).x + 26 * s;
+        if (neon) {
+            ImVec2 p(c.x - r, c.y - r), q(c.x + r, c.y + r);
+            ShapeFill(dl, p, q, Alpha(h.col, 40), 5 * s);
+            ShapeStroke(dl, p, q, h.col, 5 * s, 1.0f * s);
+            dl->AddText(ImVec2(c.x - ks.x / 2, c.y - ks.y / 2), h.col, h.key);
+        } else {
+            dl->AddCircleFilled(c, r, h.col, 24);
+            dl->AddText(ImVec2(c.x - ks.x / 2, c.y - ks.y / 2),
+                        h.col == ky ? IM_COL32(30, 30, 30, 255) : IM_COL32_WHITE, h.key);
+        }
+        std::string label = neon ? Upper(h.text) : std::string(h.text);
+        ImFont *f = neon ? HudFont() : ImGui::GetFont();
+        float fs = neon ? f->FontSize : fh;
+        dl->AddText(f, fs, ImVec2(x + r * 2 + 8 * s, y + (fh - fs) / 2), T().dim,
+                    label.c_str());
+        x += r * 2 + 8 * s + f->CalcTextSizeA(fs, FLT_MAX, 0, label.c_str()).x + 26 * s;
     }
-    const char *tabs = "LB / RB  Switch tab";
-    if (x + ImGui::CalcTextSize(tabs).x < a.x + w) {
-        dl->AddText(ImVec2(x, y), kDashDim, tabs);
+    std::string tabs = neon ? "LB / RB  SWITCH TAB" : "LB / RB  Switch tab";
+    ImFont *f = neon ? HudFont() : ImGui::GetFont();
+    float fs = neon ? f->FontSize : fh;
+    if (x + f->CalcTextSizeA(fs, FLT_MAX, 0, tabs.c_str()).x < a.x + w) {
+        dl->AddText(f, fs, ImVec2(x, y + (fh - fs) / 2), T().dim, tabs.c_str());
     }
 }
 
@@ -4154,8 +4487,10 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
     float round = 18 * s;
     EnsureTexture(e, tex_budget);
 
+    const bool neon = T().neon;
     // Backdrop: the cover, zoomed to fill and darkened
-    dl->AddRectFilled(a, b, IM_COL32(16, 34, 52, 255), round);
+    ShapeFill(dl, a, b, neon ? IM_COL32(10, 10, 22, 255) : IM_COL32(16, 34, 52, 255),
+              round);
     if (e.tex && e.tex_w > 0 && e.tex_h > 0) {
         float ra = size.x / size.y, ri = (float)e.tex_w / e.tex_h;
         ImVec2 uv0(0, 0), uv1(1, 1);
@@ -4168,11 +4503,21 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
             uv0.y = (1 - v) / 2;
             uv1.y = 1 - uv0.y;
         }
-        dl->AddImageRounded((ImTextureID)(intptr_t)e.tex, a, b, uv0, uv1,
-                            IM_COL32(255, 255, 255, 90), round);
+        ShapeImage(dl, (ImTextureID)(intptr_t)e.tex, a, b, uv0, uv1,
+                   neon ? IM_COL32(150, 140, 255, 70) : IM_COL32(255, 255, 255, 90),
+                   round);
     }
-    dl->AddRectFilled(a, b, IM_COL32(6, 12, 9, 150), round);
-    dl->AddRect(a, b, kDashBorder, round, 0, 1.0f * s);
+    ShapeFill(dl, a, b, neon ? IM_COL32(5, 5, 12, 170) : IM_COL32(6, 12, 9, 150), round);
+    if (neon) {
+        // Left accent bar, a magenta-to-cyan rule and HUD brackets
+        dl->AddRectFilledMultiColor(ImVec2(a.x, a.y + round), ImVec2(a.x + 3 * s, b.y),
+                                    T().accent, T().accent, Alpha(T().accent2, 200),
+                                    Alpha(T().accent2, 200));
+        ShapeStroke(dl, a, b, Alpha(T().accent, 60), round, 1.0f * s);
+        Brackets(dl, a, b, Alpha(T().accent, 200), 22 * s, 2.0f * s);
+    } else {
+        dl->AddRect(a, b, T().border, round, 0, 1.0f * s);
+    }
 
     // Box art on the right
     float pad = 30 * s;
@@ -4182,10 +4527,14 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
     ImVec2 art_a(b.x - pad - art_w, a.y + (size.y - art_h) / 2);
     bool show_art = size.x > 620 * s;
     if (show_art) {
-        dl->AddRectFilled(ImVec2(art_a.x + 6 * s, art_a.y + 10 * s),
-                          ImVec2(art_a.x + art_w + 6 * s, art_a.y + art_h + 10 * s),
-                          IM_COL32(0, 0, 0, 90), 12 * s);
+        ShapeFill(dl, ImVec2(art_a.x + 6 * s, art_a.y + 10 * s),
+                  ImVec2(art_a.x + art_w + 6 * s, art_a.y + art_h + 10 * s),
+                  neon ? Alpha(T().accent2, 50) : IM_COL32(0, 0, 0, 90), 12 * s);
         DrawArtwork(dl, art_a, ImVec2(art_a.x + art_w, art_a.y + art_h), e, 12 * s);
+        if (neon) {
+            ShapeStroke(dl, art_a, ImVec2(art_a.x + art_w, art_a.y + art_h),
+                        Alpha(T().accent, 120), 12 * s, 1.0f * s);
+        }
     }
     float text_w = (show_art ? art_a.x - 24 * s : b.x - pad) - (a.x + pad);
 
@@ -4202,12 +4551,14 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
                                : is_recent ? "Continue playing" : "Selected");
     ImGui::SetCursorScreenPos(ImVec2(t0.x, ImGui::GetCursorScreenPos().y + 2 * s));
     ImGui::PushFont(big);
-    ImGui::TextUnformatted(e.DisplayName().c_str());
+    ImGui::TextUnformatted(neon ? Upper(e.DisplayName()).c_str()
+                                : e.DisplayName().c_str());
     ImGui::PopFont();
     ImGui::SetCursorScreenPos(ImVec2(t0.x, ImGui::GetCursorScreenPos().y + 4 * s));
 
     // Meta line
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.72f, 0.78f, 0.71f, 1));
+    ImGui::PushStyleColor(ImGuiCol_Text, neon ? ImVec4(0.66f, 0.70f, 0.82f, 1)
+                                              : ImVec4(0.72f, 0.78f, 0.71f, 1));
     bool first = true;
     auto meta = [&](const std::string &t) {
         if (!first) {
@@ -4226,12 +4577,12 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
     ImGui::PopStyleColor();
     if (SupportsOnline(e)) {
         ImGui::SameLine(0, 18 * s);
-        DashPill("ONLINE", kOnlineGreen);
+        DashPill("ONLINE", T().online);
     }
     int npatch = e.valid ? EnabledPatchCount(e.title_id) : 0;
     if (npatch) {
         ImGui::SameLine(0, 18 * s);
-        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kAccent),
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(T().accent),
                            ICON_FA_WRENCH "  %d patch%s on", npatch,
                            npatch == 1 ? "" : "es");
     }
@@ -4242,7 +4593,7 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
     int resume = FindResumeSnapshot(e);
     if (resume >= 0) {
         std::string name = g_snapshot_mgr.m_snapshots[resume].name;
-        if (DashButton(ICON_FA_FORWARD "  Resume", kBtnBlue, kWhite,
+        if (DashButton(ICON_FA_FORWARD "  Resume", T().resume, T().white,
                        ImVec2(150 * s, btn_h))) {
             ResumeGame(e, name);
         }
@@ -4258,23 +4609,23 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
     }
     if (DashButton(IsCurrentDisc(e) ? ICON_FA_ROTATE_RIGHT "  Restart"
                                     : ICON_FA_PLAY "  Play",
-                   kBtnGreen, kInk, ImVec2(140 * s, btn_h))) {
+                   T().primary, T().on_primary, ImVec2(140 * s, btn_h))) {
         game_library_window.Launch(e.path);
     }
     ImGui::SameLine(0, 12 * s);
     if (DashButton(st.favorite ? ICON_FA_STAR "  Favorited" : ICON_FA_STAR "  Favorite",
-                   kBtnGlass, kWhite, ImVec2(150 * s, btn_h))) {
+                   T().glass, T().white, ImVec2(150 * s, btn_h))) {
         st.favorite = !st.favorite;
         g_dirty = true;
     }
     ImGui::BeginDisabled(!e.valid);
     ImGui::SameLine(0, 12 * s);
-    if (DashButton(ICON_FA_GEAR, kBtnGlass, kWhite, ImVec2(btn_h, btn_h))) {
+    if (DashButton(ICON_FA_GEAR, T().glass, T().white, ImVec2(btn_h, btn_h))) {
         OpenSettingsFor(e);
     }
     ImGui::SetItemTooltip("Settings for this game");
     ImGui::SameLine(0, 12 * s);
-    if (DashButton(ICON_FA_WRENCH, kBtnGlass, kWhite, ImVec2(btn_h, btn_h))) {
+    if (DashButton(ICON_FA_WRENCH, T().glass, T().white, ImVec2(btn_h, btn_h))) {
         OpenPatchesFor(e);
     }
     ImGui::SetItemTooltip("Patches for this game");
@@ -4293,7 +4644,7 @@ bool DashRow(LibraryEntry &e, const std::string &sub, const std::string &note,
     float h = std::max(48 * s, fh * 2 + 18 * s);
     ImGui::PushID(e.path.c_str());
     ImVec2 p = ImGui::GetCursorScreenPos();
-    ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(98, 202, 19, 30));
+    ImGui::PushStyleColor(ImGuiCol_Header, Alpha(T().accent, 30));
     ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(255, 255, 255, 16));
     ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(255, 255, 255, 26));
     bool clicked = ImGui::Selectable("##row", selected,
@@ -4312,17 +4663,17 @@ bool DashRow(LibraryEntry &e, const std::string &sub, const std::string &note,
         float nw = note.empty() ? 0 : ImGui::CalcTextSize(note.c_str()).x;
         ImVec4 clip(tx, p.y, p.x + w - nw - 16 * s, p.y + h);
         float ty = p.y + (h - fh * 2 - 4 * s) / 2;
-        dl->AddText(ImGui::GetFont(), fh, ImVec2(tx, ty), kDashText,
+        dl->AddText(ImGui::GetFont(), fh, ImVec2(tx, ty), T().text,
                     e.DisplayName().c_str(), NULL, 0, &clip);
         dl->AddText(ImGui::GetFont(), fh * 0.88f, ImVec2(tx, ty + fh + 4 * s),
-                    kDashDim, sub.c_str(), NULL, 0, &clip);
+                    T().dim, sub.c_str(), NULL, 0, &clip);
         if (!note.empty()) {
             dl->AddText(ImVec2(p.x + w - nw - 8 * s, p.y + (h - fh) / 2),
                         note_col ? note_col : IM_COL32(183, 196, 180, 255),
                         note.c_str());
         }
         if (selected) {
-            dl->AddRect(p, ImVec2(p.x + w, p.y + h), kAccent, 10 * s, 0, 2 * s);
+            ShapeStroke(dl, p, ImVec2(p.x + w, p.y + h), T().accent, 10 * s, 2 * s);
         }
     }
     ImGui::PopID();
@@ -4409,24 +4760,24 @@ void DrawHomeActivity(ImVec2 size, int &tex_budget)
                                     ImVec2(w, row_h));
         ImDrawList *dl = ImGui::GetWindowDrawList();
         float th = row_h - 8 * s;
-        dl->AddRectFilled(ImVec2(p.x + 4 * s, p.y + 4 * s),
-                          ImVec2(p.x + 4 * s + th * 0.8f, p.y + 4 * s + th),
-                          IM_COL32(30, 110, 80, 255), 6 * s);
+        ShapeFill(dl, ImVec2(p.x + 4 * s, p.y + 4 * s),
+                  ImVec2(p.x + 4 * s + th * 0.8f, p.y + 4 * s + th),
+                  T().neon ? Alpha(T().accent2, 90) : IM_COL32(30, 110, 80, 255), 6 * s);
         ImVec2 is = ImGui::CalcTextSize(ICON_FA_WRENCH);
         dl->AddText(ImVec2(p.x + 4 * s + (th * 0.8f - is.x) / 2,
                            p.y + 4 * s + (th - is.y) / 2),
                     IM_COL32_WHITE, ICON_FA_WRENCH);
         float fh = ImGui::GetFontSize();
         float tx = p.x + th * 0.8f + 16 * s, ty = p.y + (row_h - fh * 2 - 4 * s) / 2;
-        dl->AddText(ImVec2(tx, ty), kDashText, "New patches available");
+        dl->AddText(ImVec2(tx, ty), T().text, "New patches available");
         std::string sub = string_format("Widescreen, 60 FPS and more for %d of your "
                                         "games",
                                         new_patches);
         ImVec4 clip(tx, p.y, p.x + w - 60 * s, p.y + row_h);
         dl->AddText(ImGui::GetFont(), fh * 0.88f, ImVec2(tx, ty + fh + 4 * s),
-                    kDashDim, sub.c_str(), NULL, 0, &clip);
+                    T().dim, sub.c_str(), NULL, 0, &clip);
         ImVec2 gs = ImGui::CalcTextSize("Get  " ICON_FA_CHEVRON_RIGHT);
-        dl->AddText(ImVec2(p.x + w - gs.x - 8 * s, p.y + (row_h - fh) / 2), kAccent,
+        dl->AddText(ImVec2(p.x + w - gs.x - 8 * s, p.y + (row_h - fh) / 2), T().accent,
                     "Get  " ICON_FA_CHEVRON_RIGHT);
         if (go || ActivatedByNav()) {
             SwitchTab(kTabPatches);
@@ -4568,13 +4919,18 @@ void DrawInsigniaTab(int &tex_budget)
     ImGui::Dummy(ImVec2(0, 8 * s));
     ImVec2 rc = ImGui::GetCursorScreenPos();
     float rr = 28 * s;
-    ImU32 ring = st == InsigniaStatus::Up            ? IM_COL32(98, 202, 19, 255)
-                 : st == InsigniaStatus::Maintenance ? IM_COL32(235, 180, 40, 255)
-                 : st == InsigniaStatus::Down        ? IM_COL32(230, 70, 60, 255)
+    ImU32 ring = st == InsigniaStatus::Up            ? T().ok
+                 : st == InsigniaStatus::Maintenance ? T().warn
+                 : st == InsigniaStatus::Down        ? T().bad
                                                      : IM_COL32(140, 140, 140, 255);
     ImVec2 cc(rc.x + rr, rc.y + rr);
-    dl->AddCircleFilled(cc, rr + 8 * s, (ring & 0x00FFFFFF) | 0x28000000, 48);
-    dl->AddCircle(cc, rr, ring, 48, 5 * s);
+    if (T().neon) { // a hexagon reads more "HUD" than a ring
+        dl->AddNgonFilled(cc, rr + 8 * s, Alpha(ring, 30), 6);
+        dl->AddNgon(cc, rr, ring, 6, 3 * s);
+    } else {
+        dl->AddCircleFilled(cc, rr + 8 * s, (ring & 0x00FFFFFF) | 0x28000000, 48);
+        dl->AddCircle(cc, rr, ring, 48, 5 * s);
+    }
     const char *icon = st == InsigniaStatus::Up            ? ICON_FA_CHECK
                        : st == InsigniaStatus::Checking    ? ICON_FA_ELLIPSIS
                        : st == InsigniaStatus::Maintenance ? ICON_FA_WRENCH
@@ -4636,7 +4992,18 @@ void DrawInsigniaTab(int &tex_budget)
         ImVec2 p = ImGui::GetCursorScreenPos();
         float r = 13 * s;
         ImVec2 c(p.x + r, p.y + r);
-        if (done) {
+        if (done && T().neon) {
+            ShapeFill(dl, ImVec2(c.x - r, c.y - r), ImVec2(c.x + r, c.y + r), T().ok, 6 * s);
+            ImVec2 ts = ImGui::CalcTextSize(ICON_FA_CHECK);
+            dl->AddText(ImVec2(c.x - ts.x / 2, c.y - ts.y / 2), IM_COL32(4, 6, 12, 255),
+                        ICON_FA_CHECK);
+        } else if (!done && T().neon) {
+            ShapeStroke(dl, ImVec2(c.x - r, c.y - r), ImVec2(c.x + r, c.y + r),
+                        Alpha(T().dim, 200), 6 * s, 1.5f * s);
+            std::string num = std::to_string(n);
+            ImVec2 ts = ImGui::CalcTextSize(num.c_str());
+            dl->AddText(ImVec2(c.x - ts.x / 2, c.y - ts.y / 2), T().dim, num.c_str());
+        } else if (done) {
             dl->AddCircleFilled(c, r, IM_COL32(98, 202, 19, 255), 24);
             ImVec2 ts = ImGui::CalcTextSize(ICON_FA_CHECK);
             dl->AddText(ImVec2(c.x - ts.x / 2, c.y - ts.y / 2), IM_COL32(7, 16, 10, 255),
@@ -4645,7 +5012,7 @@ void DrawInsigniaTab(int &tex_budget)
             dl->AddCircle(c, r, IM_COL32(110, 125, 108, 255), 24, 2 * s);
             std::string num = std::to_string(n);
             ImVec2 ts = ImGui::CalcTextSize(num.c_str());
-            dl->AddText(ImVec2(c.x - ts.x / 2, c.y - ts.y / 2), kDashDim, num.c_str());
+            dl->AddText(ImVec2(c.x - ts.x / 2, c.y - ts.y / 2), T().dim, num.c_str());
         }
         ImGui::SetCursorScreenPos(ImVec2(p.x + r * 2 + 14 * s, p.y));
         ImGui::BeginGroup();
@@ -4722,7 +5089,7 @@ void DrawInsigniaTab(int &tex_budget)
                                                 : std::string("Not played yet"));
         bool sel = g_selected_path == e->path;
         if (DashRow(*e, sub, ICON_FA_PLAY "  Play online", w, tex_budget, sel,
-                    IM_COL32(168, 236, 107, 255))) {
+                    T().neon ? T().accent : IM_COL32(168, 236, 107, 255))) {
             g_selected_path = e->path;
             if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                 game_library_window.Launch(e->path);
@@ -4845,12 +5212,12 @@ void DrawPatchesTab(int &tex_budget)
     if (DashButton(g_patchdl_running
                        ? ICON_FA_DOWNLOAD "  Downloading..."
                        : ICON_FA_DOWNLOAD "  Download patches for all games",
-                   kBtnGreen, kInk, ImVec2(0, 38 * s))) {
+                   T().primary, T().on_primary, ImVec2(0, 38 * s))) {
         StartPatchDownload(0, false);
     }
     ImGui::SameLine(0, 12 * s);
-    if (DashButton(ICON_FA_MAGNIFYING_GLASS "  Check for new patches", kBtnGlass,
-                   kWhite, ImVec2(0, 38 * s))) {
+    if (DashButton(ICON_FA_MAGNIFYING_GLASS "  Check for new patches", T().glass,
+                   T().white, ImVec2(0, 38 * s))) {
         StartPatchDownload(0, true);
     }
     ImGui::EndDisabled();
@@ -4903,7 +5270,7 @@ void DrawPatchesTab(int &tex_budget)
                               : installed ? std::string("all off") : std::string();
         ImVec2 p = ImGui::GetCursorScreenPos();
         if (DashRow(*e, sub, note, w - btn_w - 12 * s, tex_budget, false,
-                    on ? kAccent : 0) ||
+                    on ? T().accent : 0) ||
             ActivatedByNav()) {
             OpenPatchesFor(*e);
         }
@@ -4911,7 +5278,7 @@ void DrawPatchesTab(int &tex_budget)
         ImGui::SetCursorScreenPos(
             ImVec2(p.x + w - btn_w, p.y + (q.y - p.y - 32 * s) / 2));
         ImGui::PushID(e->path.c_str());
-        if (DashButton("Manage", kBtnGlass, kWhite, ImVec2(btn_w, 32 * s))) {
+        if (DashButton("Manage", T().glass, T().white, ImVec2(btn_w, 32 * s))) {
             OpenPatchesFor(*e);
         }
         ImGui::PopID();
@@ -5028,13 +5395,16 @@ void DrawDashSettingsTab()
         label("Library style");
         ImGui::Combo("##style", &g_config.general.library.style,
                      "Dashboard (tabs)\0Classic (library window)\0");
+        label("Dashboard theme");
+        ImGui::Combo("##theme", &g_config.general.library.theme,
+                     "Neon (dark, cyan and magenta)\0Green (xemu)\0");
         ImGui::Dummy(ImVec2(0, 10 * s));
-        if (DashButton(ICON_FA_FOLDER_OPEN "  Game folders...", kBtnGlass, kWhite,
+        if (DashButton(ICON_FA_FOLDER_OPEN "  Game folders...", T().glass, T().white,
                        ImVec2(0, 36 * s))) {
             g_open_folders_popup = true;
         }
         ImGui::SameLine();
-        if (DashButton(ICON_FA_IMAGE "  Get covers", kBtnGlass, kWhite,
+        if (DashButton(ICON_FA_IMAGE "  Get covers", T().glass, T().white,
                        ImVec2(0, 36 * s))) {
             StartCoverDownload();
         }
@@ -5044,7 +5414,7 @@ void DrawDashSettingsTab()
         ImGui::TextDisabled("Input, audio, network, system files, snapshots and "
                             "more.");
         ImGui::Dummy(ImVec2(0, 4 * s));
-        if (DashButton(ICON_FA_GEAR "  Open all settings", kBtnGreen, kInk,
+        if (DashButton(ICON_FA_GEAR "  Open all settings", T().primary, T().on_primary,
                        ImVec2(0, 38 * s))) {
             GameLibraryShowAllSettings();
         }
@@ -5055,7 +5425,7 @@ void DrawDashSettingsTab()
 void DrawClassicHeader()
 {
     const float s = g_viewport_mgr.m_scale;
-    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kAccent), ICON_FA_GAMEPAD);
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(T().accent), ICON_FA_GAMEPAD);
     ImGui::SameLine();
     ImGui::PushFont(FontOr(g_font_mgr.m_menu_font_medium));
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 5 * s);
@@ -5241,7 +5611,9 @@ void DrawLibraryTab(int &tex_budget)
 
     if (show_panel) {
         ImGui::SameLine(0, gap);
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.11f, 0.11f, 0.12f, 0.88f));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, T().neon
+                                                    ? ImVec4(0.05f, 0.05f, 0.10f, 0.90f)
+                                                    : ImVec4(0.11f, 0.11f, 0.12f, 0.88f));
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10 * s);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14 * s, 14 * s));
         // Always reserve the scrollbar, so content arriving (save states,
@@ -5507,11 +5879,13 @@ void GameLibraryWindow::Draw()
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20 * s, 14 * s));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6 * s);
-    // Dashboard colors: glassy controls with green accents (popped at End)
-    static const struct {
+    // Dashboard colors (popped at End): Green has glassy controls with green
+    // accents; Neon has dark controls with cyan outlines
+    struct ThemeColor {
         ImGuiCol idx;
         ImVec4 col;
-    } theme[] = {
+    };
+    static const ThemeColor green_theme[] = {
         { ImGuiCol_Button, ImVec4(1, 1, 1, 0.08f) },
         { ImGuiCol_ButtonHovered, ImVec4(1, 1, 1, 0.15f) },
         { ImGuiCol_ButtonActive, ImVec4(0.384f, 0.792f, 0.075f, 0.55f) },
@@ -5531,15 +5905,46 @@ void GameLibraryWindow::Draw()
         { ImGuiCol_NavCursor, ImVec4(0.384f, 0.792f, 0.075f, 1) },
         { ImGuiCol_TextSelectedBg, ImVec4(0.384f, 0.792f, 0.075f, 0.35f) },
     };
+    static const ThemeColor neon_theme[] = {
+        { ImGuiCol_Text, ImVec4(0.89f, 0.91f, 0.96f, 1) },
+        { ImGuiCol_TextDisabled, ImVec4(0.46f, 0.50f, 0.64f, 1) },
+        { ImGuiCol_Button, ImVec4(0, 0.898f, 1, 0.06f) },
+        { ImGuiCol_ButtonHovered, ImVec4(0, 0.898f, 1, 0.18f) },
+        { ImGuiCol_ButtonActive, ImVec4(0, 0.898f, 1, 0.34f) },
+        { ImGuiCol_FrameBg, ImVec4(0.05f, 0.05f, 0.10f, 0.85f) },
+        { ImGuiCol_FrameBgHovered, ImVec4(0, 0.898f, 1, 0.10f) },
+        { ImGuiCol_FrameBgActive, ImVec4(0, 0.898f, 1, 0.18f) },
+        { ImGuiCol_Border, ImVec4(0, 0.898f, 1, 0.22f) },
+        { ImGuiCol_CheckMark, ImVec4(0, 0.898f, 1, 1) },
+        { ImGuiCol_SliderGrab, ImVec4(0, 0.898f, 1, 1) },
+        { ImGuiCol_SliderGrabActive, ImVec4(1, 0.18f, 0.53f, 1) },
+        { ImGuiCol_Header, ImVec4(0, 0.898f, 1, 0.16f) },
+        { ImGuiCol_HeaderHovered, ImVec4(1, 1, 1, 0.06f) },
+        { ImGuiCol_HeaderActive, ImVec4(0, 0.898f, 1, 0.28f) },
+        { ImGuiCol_PopupBg, ImVec4(0.04f, 0.04f, 0.08f, 0.98f) },
+        { ImGuiCol_TitleBgActive, ImVec4(0.08f, 0.06f, 0.16f, 1) },
+        { ImGuiCol_ScrollbarBg, ImVec4(0, 0, 0, 0) },
+        { ImGuiCol_ScrollbarGrab, ImVec4(0, 0.898f, 1, 0.22f) },
+        { ImGuiCol_ScrollbarGrabHovered, ImVec4(0, 0.898f, 1, 0.40f) },
+        { ImGuiCol_Separator, ImVec4(0, 0.898f, 1, 0.16f) },
+        { ImGuiCol_NavCursor, ImVec4(0, 0.898f, 1, 1) },
+        { ImGuiCol_TextSelectedBg, ImVec4(0, 0.898f, 1, 0.30f) },
+        { ImGuiCol_ModalWindowDimBg, ImVec4(0.02f, 0.01f, 0.05f, 0.60f) },
+    };
     const bool classic = ClassicStyle();
-    const int theme_count = classic ? 0 : (int)(sizeof(theme) / sizeof(theme[0]));
+    const ThemeColor *theme = T().neon ? neon_theme : green_theme;
+    const int theme_count =
+        classic ? 0
+        : T().neon ? (int)(sizeof(neon_theme) / sizeof(neon_theme[0]))
+                   : (int)(sizeof(green_theme) / sizeof(green_theme[0]));
     for (int i = 0; i < theme_count; i++) {
         ImGui::PushStyleColor(theme[i].idx, theme[i].col);
     }
     // Slightly see-through so the boot animation or game shows behind it
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, classic
-                                                 ? ImVec4(0.06f, 0.06f, 0.07f, 0.80f)
-                                                 : ImVec4(0.04f, 0.06f, 0.05f, 0.82f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,
+                          classic    ? ImVec4(0.06f, 0.06f, 0.07f, 0.80f)
+                          : T().neon ? ImVec4(0.025f, 0.022f, 0.05f, 0.86f)
+                                     : ImVec4(0.04f, 0.06f, 0.05f, 0.82f));
     bool visible = ImGui::Begin(
         "###Game Library", NULL,
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
@@ -5548,9 +5953,17 @@ void GameLibraryWindow::Draw()
             ImGuiWindowFlags_NoBringToFrontOnFocus);
     ImGui::PopStyleColor();
     ImGui::PopStyleVar(3);
+    // Neon: square-ish controls with thin outlines (popped at End)
+    const int theme_vars = (!classic && T().neon) ? 3 : 0;
+    if (theme_vars) {
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 2 * s);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, 2 * s);
+    }
     if (!visible) {
         ImGui::End();
         ImGui::PopStyleColor(theme_count);
+        ImGui::PopStyleVar(theme_vars);
         ImGui::PopStyleVar();
         return;
     }
@@ -5603,6 +6016,7 @@ void GameLibraryWindow::Draw()
         DrawFoldersPopup();
         ImGui::End();
         ImGui::PopStyleColor(theme_count);
+        ImGui::PopStyleVar(theme_vars);
         ImGui::PopStyleVar();
         return;
     }
@@ -5658,6 +6072,7 @@ void GameLibraryWindow::Draw()
     }
     ImGui::End();
     ImGui::PopStyleColor(theme_count);
+    ImGui::PopStyleVar(theme_vars);
     ImGui::PopStyleVar();
 }
 

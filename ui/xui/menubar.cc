@@ -144,6 +144,21 @@ void ShowMainMenu()
                     style = CONFIG_GENERAL_LIBRARY_STYLE_CLASSIC;
                     game_library_window.Open();
                 }
+                ImGui::Separator();
+                ImGui::TextDisabled("Dashboard theme");
+                int &theme = g_config.general.library.theme;
+                if (ImGui::MenuItem("Neon", NULL,
+                                    theme == CONFIG_GENERAL_LIBRARY_THEME_NEON)) {
+                    theme = CONFIG_GENERAL_LIBRARY_THEME_NEON;
+                    style = CONFIG_GENERAL_LIBRARY_STYLE_DASHBOARD;
+                    game_library_window.Open();
+                }
+                if (ImGui::MenuItem("Green", NULL,
+                                    theme == CONFIG_GENERAL_LIBRARY_THEME_GREEN)) {
+                    theme = CONFIG_GENERAL_LIBRARY_THEME_GREEN;
+                    style = CONFIG_GENERAL_LIBRARY_STYLE_DASHBOARD;
+                    game_library_window.Open();
+                }
                 ImGui::EndMenu();
             }
             ImGui::Separator();

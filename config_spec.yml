@@ -30,6 +30,10 @@ general:
       type: enum
       values: [dashboard, classic]
       default: dashboard
+    theme:
+      type: enum
+      values: [neon, green]
+      default: neon
   skip_boot_anim: bool
   discord_presence:
     type: bool

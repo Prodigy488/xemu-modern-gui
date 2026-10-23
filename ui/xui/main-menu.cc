@@ -86,6 +86,9 @@ void MainMenuGeneralView::Draw()
     ChevronCombo("Library style", &g_config.general.library.style,
                  "Dashboard\0Classic\0",
                  "Tabbed dashboard, or the classic single library window");
+    ChevronCombo("Dashboard theme", &g_config.general.library.theme,
+                 "Neon\0Green\0",
+                 "Dark with cyan and magenta, or xemu green");
     FilePicker("Screenshot output directory", g_config.general.screenshot_dir,
                nullptr, 0, true, [](const char *path) {
                    xemu_settings_set_string(&g_config.general.screenshot_dir, path);

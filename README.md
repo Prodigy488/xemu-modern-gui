@@ -35,6 +35,11 @@ shared.
   the game you're playing, with its cover, title ID, play time and an Insignia
   badge for online-capable games. Turn it off in Settings > General > Discord
   status. Requires the Discord app running on the same PC.
+- **New in v1.5: 3D game cases.** Covers on the Home screen stand as 3D game
+  cases with a spine and a reflection, made from your existing covers. Use
+  your own 3D box art by saving it as `covers\<title ID>-3d.png`, or switch
+  back with Settings > Home screen covers. The Insignia status in the top bar
+  is now color-coded (green, amber or red).
 - **New in v1.4: motion.** The dashboard animates: flowing light ribbons, a
   slowly turning wireframe orb and drifting specks in the background (plus a
   grid floor in Neon), content that sweeps in when you switch tabs, a tab

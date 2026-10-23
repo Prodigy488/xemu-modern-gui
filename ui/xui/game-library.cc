@@ -254,6 +254,21 @@ enum class LeaveAction { None, Quit, Eject, Launch };
 LeaveAction g_leave_action = LeaveAction::None;
 std::string g_leave_launch_path;
 
+// Which BIOS/boot ROM each resume point was saved with (by title ID).
+// A snapshot restores RAM, including the running kernel, but not the
+// flash ROM, so resuming under a different BIOS can crash the guest.
+std::map<uint32_t, std::string> g_resume_machine;
+std::string g_resume_warn_name;      // snapshot awaiting confirmation
+std::string g_resume_warn_saved_with;
+bool g_open_resume_warning = false;
+
+std::string MachineSignature()
+{
+    const char *flash = g_config.sys.files.flashrom_path;
+    const char *boot = g_config.sys.files.bootrom_path;
+    return std::string(flash ? flash : "") + "|" + (boot ? boot : "");
+}
+
 // Loaded disc tracking
 std::string g_last_dvd_path;
 uint64_t g_last_tick = 0;
@@ -473,6 +488,13 @@ void LoadLibrary()
         json stats = j.value("stats", json::object());
         json overrides = j.value("overrides", json::object());
         g_primary_recursive = j.value("primary_recursive", true);
+        json resume_machine = j.value("resume_machine", json::object());
+        for (auto &[id, sig] : resume_machine.items()) {
+            if (sig.is_string()) {
+                g_resume_machine[(uint32_t)strtoul(id.c_str(), NULL, 16)] =
+                    sig.get<std::string>();
+            }
+        }
         for (auto &f : j.value("files", json::array())) {
             if (f.is_string()) {
                 g_extra_files.push_back(f.get<std::string>());
@@ -590,6 +612,11 @@ void SaveLibrary()
     }
     j["overrides"] = ovs;
     j["primary_recursive"] = g_primary_recursive;
+    json resume_machine = json::object();
+    for (auto &[id, sig] : g_resume_machine) {
+        resume_machine[TitleIdHex(id)] = sig;
+    }
+    j["resume_machine"] = resume_machine;
     j["files"] = g_extra_files;
     j["hidden"] = g_hidden;
     json missing = json::array();
@@ -1168,7 +1195,10 @@ void SaveResumePoint()
                           error_get_pretty(err);
         xemu_queue_error_message(msg.c_str());
         error_free(err);
+        return;
     }
+    g_resume_machine[e->title_id] = MachineSignature();
+    SaveLibrary();
 }
 
 void LaunchNow(const std::string &path);
@@ -2417,6 +2447,57 @@ const char *DrawInsigniaStatusDot()
     return label;
 }
 
+void DrawResumeWarningPopup()
+{
+    if (g_open_resume_warning) {
+        ImGui::OpenPopup("Different BIOS");
+        g_open_resume_warning = false;
+    }
+    const float s = g_viewport_mgr.m_scale;
+    ImGui::SetNextWindowSize(ImVec2(520 * s, 0), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal("Different BIOS", NULL,
+                                ImGuiWindowFlags_AlwaysAutoResize)) {
+        return;
+    }
+    auto file = [](const std::string &sig, bool flash) {
+        size_t bar = sig.find('|');
+        std::string p = flash ? sig.substr(0, bar) : sig.substr(bar + 1);
+        return p.empty() ? std::string("(none)")
+                         : fs::u8path(p).filename().u8string();
+    };
+    std::string now = MachineSignature();
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 500 * s);
+    ImGui::TextUnformatted("This resume point was saved with a different BIOS "
+                           "or boot ROM. Resuming restores the game exactly as "
+                           "it was, so with a different BIOS the game or xemu "
+                           "may crash.");
+    ImGui::PopTextWrapPos();
+    ImGui::Dummy(ImVec2(0, 4 * s));
+    ImGui::TextDisabled("Saved with:  %s  /  %s",
+                        file(g_resume_warn_saved_with, true).c_str(),
+                        file(g_resume_warn_saved_with, false).c_str());
+    ImGui::TextDisabled("Current:     %s  /  %s", file(now, true).c_str(),
+                        file(now, false).c_str());
+    ImGui::Dummy(ImVec2(0, 4 * s));
+    ImGui::TextUnformatted("Switch back to that BIOS in Settings > System, "
+                           "or start the game normally with Play.");
+    ImGui::Separator();
+    if (ImGui::Button("Cancel", ImVec2(120 * s, 0)) ||
+        ImGui::IsKeyPressed(ImGuiKey_Escape) ||
+        ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight)) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Load anyway", ImVec2(120 * s, 0))) {
+        std::string name = g_resume_warn_name;
+        ImGui::CloseCurrentPopup();
+        RequestPreviewStop();
+        ActionLoadSnapshotChecked(name.c_str());
+        game_library_window.is_open = false;
+    }
+    ImGui::EndPopup();
+}
+
 void DrawInsigniaPopup()
 {
     if (g_open_insignia_popup) {
@@ -2887,11 +2968,13 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
     }
 
     ImVec2 a = ImGui::GetCursorScreenPos();
-    float art = w;
+    // Fixed-size art box (box-art proportions): the panel must not change
+    // height when a cover or video finishes loading, or its scrollbar toggles
+    // and the whole panel visibly resizes.
+    float art = std::floor(w * 1.3f);
     int vw = 0, vh = 0;
     GLuint vtex = playing ? g_preview->Update(&vw, &vh) : 0;
     if (vtex && vw > 0) {
-        art = std::min(w * vh / (float)vw, w * 1.5f);
         ImDrawList *dl = ImGui::GetWindowDrawList();
         dl->AddRectFilled(a, ImVec2(a.x + w, a.y + art), IM_COL32(0, 0, 0, 255), 8 * s);
         float sc = std::min(w / vw, art / vh);
@@ -2900,9 +2983,6 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
                             ImVec2(ia.x + vw * sc, ia.y + vh * sc), ImVec2(0, 0),
                             ImVec2(1, 1), IM_COL32_WHITE, 8 * s);
     } else {
-        if (e.tex && e.tex_w > 0) {
-            art = std::min(w * e.tex_h / (float)e.tex_w, w * 1.5f);
-        }
         DrawArtwork(ImGui::GetWindowDrawList(), a, ImVec2(a.x + w, a.y + art), e,
                     8 * s);
     }
@@ -2954,9 +3034,17 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.36f, 0.68f, 1));
         if (ImGui::Button(label.c_str(), ImVec2(w, 40 * s))) {
             std::string name = info.name; // the list may refresh on load
-            RequestPreviewStop();
-            ActionLoadSnapshotChecked(name.c_str());
-            game_library_window.is_open = false;
+            auto saved = g_resume_machine.find(e.title_id);
+            if (saved != g_resume_machine.end() &&
+                saved->second != MachineSignature()) {
+                g_resume_warn_name = name;
+                g_resume_warn_saved_with = saved->second;
+                g_open_resume_warning = true;
+            } else {
+                RequestPreviewStop();
+                ActionLoadSnapshotChecked(name.c_str());
+                game_library_window.is_open = false;
+            }
         }
         ImGui::PopStyleColor(3);
         ImGui::SetItemTooltip("Continue from where you left off");
@@ -3461,9 +3549,12 @@ void GameLibraryWindow::Draw()
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.11f, 0.11f, 0.12f, 0.88f));
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10 * s);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14 * s, 14 * s));
+        // Always reserve the scrollbar, so content arriving (save states,
+        // screenshots) never changes the panel's width
         ImGui::BeginChild("##details", ImVec2(0, 0),
                           ImGuiChildFlags_AlwaysUseWindowPadding |
-                              ImGuiChildFlags_NavFlattened);
+                              ImGuiChildFlags_NavFlattened,
+                          ImGuiWindowFlags_AlwaysVerticalScrollbar);
         DrawDetailsPanel(*selected, tex_budget);
         ImGui::EndChild();
         ImGui::PopStyleVar(2);
@@ -3474,6 +3565,7 @@ void GameLibraryWindow::Draw()
     DrawFoldersPopup();
     DrawPatchesPopup();
     DrawInsigniaPopup();
+    DrawResumeWarningPopup();
 
     // Esc / B closes the library when nothing else wants the key
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&

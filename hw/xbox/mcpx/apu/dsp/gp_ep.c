@@ -57,7 +57,24 @@ static void scatter_gather_rw(MCPXAPUState *d, hwaddr sge_base,
     unsigned int bytes_to_copy = TARGET_PAGE_SIZE - offset_in_page;
 
     while (len > 0) {
-        assert(page_entry <= max_sge);
+        if (page_entry > max_sge) {
+            /*
+             * Out-of-range scatter-gather entry. Seen after restoring a
+             * snapshot into a mismatched machine (e.g. a different BIOS).
+             * Don't abort the emulator: reads see zeros, writes are dropped.
+             */
+            static int warned;
+            if (warned++ < 4) {
+                fprintf(stderr,
+                        "mcpx-apu: scatter-gather entry %u beyond max %u "
+                        "(addr 0x%x, %zu bytes), ignoring\n",
+                        page_entry, max_sge, addr, len);
+            }
+            if (!dir) {
+                memset(ptr, 0, len);
+            }
+            return;
+        }
 
         uint32_t prd_address = ldl_le_phys(&address_space_memory,
                                            sge_base + page_entry * 8 + 0);
@@ -70,7 +87,18 @@ static void scatter_gather_rw(MCPXAPUState *d, hwaddr sge_base,
             bytes_to_copy = len;
         }
 
-        assert(paddr + bytes_to_copy < memory_region_size(d->ram));
+        if (paddr + bytes_to_copy >= memory_region_size(d->ram)) {
+            static int warned_ram;
+            if (warned_ram++ < 4) {
+                fprintf(stderr,
+                        "mcpx-apu: scatter-gather address 0x%" HWADDR_PRIx
+                        " outside RAM, ignoring\n", paddr);
+            }
+            if (!dir) {
+                memset(ptr, 0, len);
+            }
+            return;
+        }
 
         if (dir) {
             memcpy(&d->ram_ptr[paddr], ptr, bytes_to_copy);

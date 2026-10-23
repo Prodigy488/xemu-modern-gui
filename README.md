@@ -39,8 +39,10 @@ shared.
   cases with a spine and a reflection, made from your existing covers. Use
   your own 3D box art by saving it as `covers\<title ID>-3d.png`, or switch
   back with Settings > Home screen covers. The Insignia status in the top bar
-  is now color-coded (green, amber or red). Also new: **NVIDIA Image Scaling
-  (NIS)** as an upscaling filter.
+  is now color-coded (green, amber or red). Also new: **NVIDIA RTX Video (AI)**
+  upscaling, using the RTX Video Super Resolution built into NVIDIA's driver
+  (RTX cards, with the feature turned on in the NVIDIA app), and **NVIDIA
+  Image Scaling (NIS)** for any GPU.
 - **New in v1.4: motion.** The dashboard animates: flowing light ribbons, a
   slowly turning wireframe orb and drifting specks in the background (plus a
   grid floor in Neon), content that sweeps in when you switch tabs, a tab
@@ -57,7 +59,8 @@ shared.
   - **Insignia:** online status, your online-capable games and setup steps.
   - **Media:** save states and screenshots.
   - **Patches** and **Settings.**
-- **Upscaling filters:** AMD FidelityFX FSR 1.0, NVIDIA Image Scaling (NIS),
+- **Upscaling filters:** AMD FidelityFX FSR 1.0, NVIDIA RTX Video (AI),
+  NVIDIA Image Scaling (NIS),
   Lanczos, Bicubic and Snapdragon GSR 1, with a sharpening control.
 - **Game library:**
   - Multiple game folders, cover art downloads and play time.

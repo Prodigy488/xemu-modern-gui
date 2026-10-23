@@ -272,7 +272,7 @@ display:
       default: 1
   filtering:
     type: enum
-    values: [linear, nearest, fsr, bicubic, lanczos, sgsr, nis]
+    values: [linear, nearest, fsr, bicubic, lanczos, sgsr, nis, rtx]
     default: linear
   fsr_sharpness:
     type: number

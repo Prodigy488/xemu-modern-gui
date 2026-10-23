@@ -12,6 +12,7 @@ xemu_ss.add(files(
   'game-shortcut.cc',
   'discord-presence.cc',
   'gl-helpers.cc',
+  'rtx-video.cc',
   'input-manager.cc',
   'main-menu.cc',
   'main.cc',

@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
+#include "rtx-video.hh"
 #include "common.hh"
 #include "scene-manager.hh"
 #include "widgets.hh"
@@ -799,11 +800,17 @@ void MainMenuDisplayView::Draw()
                  "Bicubic (Catmull-Rom)\0"
                  "Lanczos\0"
                  "Snapdragon GSR 1\0"
-                 "NVIDIA Image Scaling (NIS)\0",
+                 "NVIDIA Image Scaling (NIS)\0"
+                 "NVIDIA RTX Video (AI)\0",
                  "How the image is scaled up to fit the window. FSR, NIS and "
                  "Snapdragon GSR sharpen edges, Lanczos and Bicubic are "
                  "classic sharp filters");
-    if (g_config.display.filtering >= CONFIG_DISPLAY_FILTERING_FSR) {
+    if (g_config.display.filtering == CONFIG_DISPLAY_FILTERING_RTX) {
+        ImGui::TextWrapped("RTX Video: %s", RtxVideoStatus());
+        if (ImGui::Button("Check again")) {
+            RtxVideoRetry();
+        }
+    } else if (g_config.display.filtering >= CONFIG_DISPLAY_FILTERING_FSR) {
         char buf[48];
         snprintf(buf, sizeof(buf), "Sharpening strength (%d%%, %s)",
                  (int)(g_config.display.fsr_sharpness * 100),

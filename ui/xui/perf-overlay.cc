@@ -21,6 +21,7 @@ static const char *FilterName(int filtering)
     case CONFIG_DISPLAY_FILTERING_LANCZOS: return "Lanczos";
     case CONFIG_DISPLAY_FILTERING_SGSR: return "Snapdragon GSR";
     case CONFIG_DISPLAY_FILTERING_NIS: return "NVIDIA NIS";
+    case CONFIG_DISPLAY_FILTERING_RTX: return "NVIDIA RTX Video";
     default: return "Linear";
     }
 }

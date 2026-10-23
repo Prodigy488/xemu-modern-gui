@@ -34,6 +34,7 @@
 #include <vector>
 
 #include "ui/shader/xemu-logo-frag.h"
+#include "rtx-video.hh"
 
 Fbo *controller_fbo, *xmu_fbo, *logo_fbo;
 GLuint g_controller_duke_tex, g_controller_s_tex, g_logo_tex, g_icon_tex, g_xmu_tex;
@@ -1607,13 +1608,13 @@ static Fbo *EnsureFbo(Fbo *fbo, int w, int h)
 }
 
 static void DrawFullscreenPass(DecalShader *s, GLuint src_tex, float sx,
-                               float sy)
+                               float sy, int flip = 0)
 {
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, src_tex);
     glUseProgram(s->prog);
     glBindVertexArray(s->vao);
-    glUniform1i(s->flipy_loc, 0);
+    glUniform1i(s->flipy_loc, flip);
     glUniform4f(s->scale_offset_loc, sx, sy, 0, 0);
     glUniform4f(s->tex_scale_offset_loc, 1.0, 1.0, 0, 0);
     glUniform1i(s->tex_loc, 0);
@@ -1829,7 +1830,7 @@ static void SetNisUniforms(DecalShader *s, float sharpness)
 // needed), in which case the caller falls back to the regular blit.
 static bool RenderFramebufferUpscaled(GLint tex, int width, int height,
                                       bool flip, float scale[2],
-                                      DecalShader *scaler)
+                                      DecalShader *scaler, bool rtx)
 {
     int tw, th;
     glActiveTexture(GL_TEXTURE0);
@@ -1879,25 +1880,31 @@ static bool RenderFramebufferUpscaled(GLint tex, int width, int height,
     UploadPalette(s);
     glDrawElements(GL_TRIANGLE_FAN, 4, GL_UNSIGNED_INT, NULL);
 
-    // Pass 2: upscale to the exact on-screen size
-    glBindFramebuffer(GL_FRAMEBUFFER, g_fsr_easu_fbo->fbo);
-    glViewport(0, 0, dw, dh);
-    glUseProgram(scaler->prog);
-    glUniform2f(scaler->in_size_loc, tw, th);
-    glUniform2f(scaler->out_size_loc, dw, dh);
-    glUniform4f(scaler->viewport_info_loc, 1.0f / tw, 1.0f / th, tw, th);
+    // Pass 2: upscale to the exact on-screen size. RTX Video runs in the
+    // driver; if it can't, NIS (the scaler passed in) takes over.
+    GLuint rtx_tex = 0;
+    bool rtx_ok = rtx && RtxVideoUpscale(g_fsr_gamma_fbo->fbo, tw, th, dw, dh,
+                                         &rtx_tex);
     bool nis = scaler == g_nis_shader;
-    if (nis) {
-        glUniform1i(scaler->coef_loc, 1);
-        SetNisUniforms(scaler, g_config.display.fsr_sharpness);
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, g_nis_coef_tex);
-    }
-    DrawFullscreenPass(scaler, g_fsr_gamma_fbo->tex, 1.0, 1.0);
-    if (nis) {
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, 0);
-        glActiveTexture(GL_TEXTURE0);
+    if (!rtx_ok) {
+        glBindFramebuffer(GL_FRAMEBUFFER, g_fsr_easu_fbo->fbo);
+        glViewport(0, 0, dw, dh);
+        glUseProgram(scaler->prog);
+        glUniform2f(scaler->in_size_loc, tw, th);
+        glUniform2f(scaler->out_size_loc, dw, dh);
+        glUniform4f(scaler->viewport_info_loc, 1.0f / tw, 1.0f / th, tw, th);
+        if (nis) {
+            glUniform1i(scaler->coef_loc, 1);
+            SetNisUniforms(scaler, g_config.display.fsr_sharpness);
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, g_nis_coef_tex);
+        }
+        DrawFullscreenPass(scaler, g_fsr_gamma_fbo->tex, 1.0, 1.0);
+        if (nis) {
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            glActiveTexture(GL_TEXTURE0);
+        }
     }
 
     // Pass 3: RCAS sharpen into the original target with the usual
@@ -1914,30 +1921,38 @@ static bool RenderFramebufferUpscaled(GLint tex, int width, int height,
     // Sharpening strength 0..1 (0 = off, 1 = AMD's maximum)
     float sharp = g_config.display.fsr_sharpness;
     sharp = sharp < 0.0f ? 0.0f : (sharp > 1.0f ? 1.0f : sharp);
-    if (nis) {
-        sharp = 0.0f; // NIS has its own sharpening; RCAS just copies
+    if (nis || rtx_ok) {
+        sharp = 0.0f; // NIS and RTX Video sharpen themselves; RCAS just copies
     }
     glUseProgram(g_fsr_rcas_shader->prog);
     glUniform2f(g_fsr_rcas_shader->in_size_loc, dw, dh);
     glUniform1f(g_fsr_rcas_shader->sharpness_loc, sharp);
-    DrawFullscreenPass(g_fsr_rcas_shader, g_fsr_easu_fbo->tex, scale[0],
-                       scale[1]);
+    if (rtx_ok) {
+        // Direct3D's top-first rows: draw flipped
+        DrawFullscreenPass(g_fsr_rcas_shader, rtx_tex, scale[0], scale[1], 1);
+        RtxVideoEndFrame();
+    } else {
+        DrawFullscreenPass(g_fsr_rcas_shader, g_fsr_easu_fbo->tex, scale[0],
+                           scale[1]);
+    }
     return true;
 }
 
 void RenderFramebuffer(GLint tex, int width, int height, bool flip, float scale[2])
 {
     DecalShader *scaler = NULL;
+    bool rtx = false;
     switch (g_config.display.filtering) {
     case CONFIG_DISPLAY_FILTERING_FSR: scaler = g_fsr_easu_shader; break;
     case CONFIG_DISPLAY_FILTERING_SGSR: scaler = g_sgsr_shader; break;
     case CONFIG_DISPLAY_FILTERING_LANCZOS: scaler = g_lanczos_shader; break;
     case CONFIG_DISPLAY_FILTERING_BICUBIC: scaler = g_bicubic_shader; break;
     case CONFIG_DISPLAY_FILTERING_NIS: scaler = g_nis_shader; break;
+    case CONFIG_DISPLAY_FILTERING_RTX: scaler = g_nis_shader; rtx = true; break;
     default: break;
     }
     if (scaler && !nv2a_get_screen_off() &&
-        RenderFramebufferUpscaled(tex, width, height, flip, scale, scaler)) {
+        RenderFramebufferUpscaled(tex, width, height, flip, scale, scaler, rtx)) {
         return;
     }
 

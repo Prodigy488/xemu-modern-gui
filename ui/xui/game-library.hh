@@ -36,6 +36,8 @@ public:
     void Launch(const std::string &path);
     void Rescan();
     void OpenFolderManager();
+    void AddGame();
+    void DownloadCovers();
 };
 
 extern GameLibraryWindow game_library_window;

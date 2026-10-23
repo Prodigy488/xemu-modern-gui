@@ -7,6 +7,7 @@ xemu_ss.add(files(
   'game-library.cc',
   'game-library-scan.cc',
   'game-patches.cc',
+  'game-preview.cc',
   'gl-helpers.cc',
   'input-manager.cc',
   'main-menu.cc',

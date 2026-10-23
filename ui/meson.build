@@ -38,6 +38,11 @@ if host_os == 'windows'
   d3d11 = cc.find_library('d3d11', required: true)
   dxgi = cc.find_library('dxgi', required: true)
   xemu_ss.add(nvapi, d3d11, dxgi)
+  # Media Foundation GUIDs for game library preview videos. The DLLs
+  # (mfplat, mfreadwrite) are loaded at runtime so xemu still starts on
+  # Windows N editions.
+  xemu_ss.add(cc.find_library('mfuuid', required: true),
+              cc.find_library('ole32', required: true))
 endif
 
 subdir('xui')

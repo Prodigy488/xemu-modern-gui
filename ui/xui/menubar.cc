@@ -104,6 +104,12 @@ void ShowMainMenu()
             if (ImGui::MenuItem("Scan Folders")) {
                 game_library_window.Rescan();
             }
+            if (ImGui::MenuItem("Download Covers")) {
+                game_library_window.DownloadCovers();
+            }
+            if (ImGui::MenuItem("Add Game...")) {
+                game_library_window.AddGame();
+            }
             if (ImGui::MenuItem("Manage Folders...")) {
                 game_library_window.OpenFolderManager();
             }

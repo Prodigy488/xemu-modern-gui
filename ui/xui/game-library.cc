@@ -27,6 +27,7 @@
 #include "game-library.hh"
 #include "game-library-scan.hh"
 #include "game-patches.hh"
+#include "game-preview.hh"
 #include "actions.hh"
 #include "misc.hh"
 #include "viewport-manager.hh"
@@ -35,6 +36,7 @@
 #include "../xemu-notifications.h"
 #include "../xemu-settings.h"
 #include "../xemu-snapshots.h"
+#include "qemu/http.h"
 #include "snapshot-manager.hh"
 
 namespace fs = std::filesystem;
@@ -113,6 +115,11 @@ struct LibraryFolder {
 std::vector<LibraryFolder> g_extra_folders;
 bool g_primary_recursive = true;
 
+// Individually added disc images, and games removed (hidden) from the
+// library by normalized path. Neither touches the files themselves.
+std::vector<std::string> g_extra_files;
+std::set<std::string> g_hidden;
+
 std::vector<LibraryFolder> AllFolders()
 {
     std::vector<LibraryFolder> out;
@@ -138,6 +145,12 @@ std::string FolderSignature()
     for (auto &f : AllFolders()) {
         sig += f.path + (f.recursive ? "|r\n" : "|n\n");
     }
+    for (auto &f : g_extra_files) {
+        sig += "file:" + f + "\n";
+    }
+    for (auto &h : g_hidden) {
+        sig += "hide:" + h + "\n";
+    }
     return sig;
 }
 
@@ -151,6 +164,23 @@ std::atomic<bool> g_scan_running{ false };
 std::atomic<bool> g_scan_cancel{ false };
 std::atomic<int> g_scan_done{ 0 };
 std::atomic<int> g_scan_total{ 0 };
+
+// Cover downloads from xemu's game database (github.com/xemu-project/xdb)
+std::thread g_cover_thread;
+std::atomic<bool> g_covers_running{ false };
+std::atomic<int> g_covers_done{ 0 };
+std::atomic<int> g_covers_total{ 0 };
+std::atomic<int> g_covers_found{ 0 };
+std::mutex g_cover_mutex;
+std::vector<uint32_t> g_covers_fetched;  // finished downloads, for reload
+std::vector<uint32_t> g_covers_404;      // worker results, merged on main
+std::set<uint32_t> g_covers_missing;     // not in the database (persisted)
+bool g_covers_finished = false;
+
+// Preview video player. Heap-allocated and never destroyed: its GL texture
+// must not be released after the window is gone. GameLibraryShutdown()
+// stops its thread.
+PreviewPlayer *g_preview = new PreviewPlayer();
 
 // Loaded disc tracking
 std::string g_last_dvd_path;
@@ -327,6 +357,22 @@ void LoadLibrary()
         json stats = j.value("stats", json::object());
         json overrides = j.value("overrides", json::object());
         g_primary_recursive = j.value("primary_recursive", true);
+        for (auto &f : j.value("files", json::array())) {
+            if (f.is_string()) {
+                g_extra_files.push_back(f.get<std::string>());
+            }
+        }
+        for (auto &m : j.value("covers_missing", json::array())) {
+            if (m.is_string()) {
+                g_covers_missing.insert(
+                    (uint32_t)strtoul(m.get<std::string>().c_str(), NULL, 16));
+            }
+        }
+        for (auto &h : j.value("hidden", json::array())) {
+            if (h.is_string()) {
+                g_hidden.insert(h.get<std::string>());
+            }
+        }
         json patch_lists = j.value("patches", json::object());
         json overlay_map = j.value("overlays", json::object());
         for (auto &[id, list] : patch_lists.items()) {
@@ -428,6 +474,13 @@ void SaveLibrary()
     }
     j["overrides"] = ovs;
     j["primary_recursive"] = g_primary_recursive;
+    j["files"] = g_extra_files;
+    j["hidden"] = g_hidden;
+    json missing = json::array();
+    for (uint32_t id : g_covers_missing) {
+        missing.push_back(TitleIdHex(id));
+    }
+    j["covers_missing"] = missing;
     json patches = json::object();
     for (auto &[id, items] : g_patches) {
         json list = json::array();
@@ -476,6 +529,8 @@ int64_t FileMtime(const fs::path &p)
 }
 
 void ScanWorker(std::vector<LibraryFolder> folders,
+                std::vector<std::string> extra_files,
+                std::set<std::string> hidden,
                 std::map<std::string, LibraryEntry> cache)
 {
     std::vector<fs::path> files;
@@ -486,8 +541,11 @@ void ScanWorker(std::vector<LibraryFolder> folders,
             return;
         }
         std::string ext = Lower(de.path().extension().u8string());
-        if ((ext == ".iso" || ext == ".xiso") &&
-            seen.insert(PathKey(de.path())).second) {
+        if (ext != ".iso" && ext != ".xiso") {
+            return;
+        }
+        std::string key = PathKey(de.path());
+        if (!hidden.count(key) && seen.insert(key).second) {
             files.push_back(de.path());
         }
     };
@@ -515,6 +573,13 @@ void ScanWorker(std::vector<LibraryFolder> folders,
             }
         }
         ec.clear();
+    }
+    for (auto &f : extra_files) {
+        std::error_code fec;
+        fs::directory_entry de(fs::u8path(f), fec);
+        if (!fec) {
+            consider(de);
+        }
     }
     g_scan_total = (int)files.size();
 
@@ -594,7 +659,7 @@ void StartScan()
     }
     std::vector<LibraryFolder> folders = AllFolders();
     g_scanned_dir = FolderSignature();
-    if (folders.empty()) {
+    if (folders.empty() && g_extra_files.empty()) {
         for (auto &e : g_entries) {
             FreeTexture(e);
         }
@@ -612,7 +677,8 @@ void StartScan()
     g_scan_done = 0;
     g_scan_total = 0;
     g_scan_running = true;
-    g_scan_thread = std::thread(ScanWorker, std::move(folders), std::move(cache));
+    g_scan_thread = std::thread(ScanWorker, std::move(folders), g_extra_files,
+                                g_hidden, std::move(cache));
 }
 
 void MergeScanResults()
@@ -709,6 +775,9 @@ std::vector<fs::path> ArtworkCandidates(const LibraryEntry &e)
     }
     for (const char *ext : exts) {
         out.push_back(img.parent_path() / (img.stem().u8string() + ext));
+    }
+    if (e.valid) {
+        out.push_back(IconCacheDir() / "covers" / (TitleIdHex(e.title_id) + ".jpg"));
     }
     if (e.has_icon) {
         out.push_back(IconCacheDir() / (TitleIdHex(e.title_id) + ".png"));
@@ -1227,6 +1296,12 @@ void DrawPatchesPopup()
     ImGui::EndPopup();
 }
 
+fs::path PreviewDir();
+std::string FindPreview(const LibraryEntry &e);
+void ImportPreview(const LibraryEntry &e);
+void RemoveImportedPreview(uint32_t title_id);
+void RemoveFromLibrary(const std::string &path);
+
 void DrawContextMenu(LibraryEntry &e)
 {
     if (!ImGui::BeginPopupContextItem("##ctx")) {
@@ -1250,6 +1325,22 @@ void DrawContextMenu(LibraryEntry &e)
     if (ImGui::MenuItem("Patches...", NULL, false, e.valid)) {
         OpenPatchesFor(e);
     }
+    if (PreviewPlayer::Supported()) {
+        if (ImGui::MenuItem(ICON_FA_PLAY "  Add preview video...", NULL, false,
+                            e.valid)) {
+            ImportPreview(e);
+        }
+        std::error_code pec;
+        bool imported = false;
+        for (int i = 0; e.valid && kPreviewExtensions[i]; i++) {
+            imported |= fs::exists(
+                PreviewDir() / (TitleIdHex(e.title_id) + kPreviewExtensions[i]), pec);
+        }
+        if (imported && ImGui::MenuItem("Remove preview video")) {
+            g_preview->Close();
+            RemoveImportedPreview(e.title_id);
+        }
+    }
     ImGui::Separator();
     if (ImGui::MenuItem("Copy title ID", NULL, false, e.valid)) {
         ImGui::SetClipboardText(FormatTitleId(e.title_id).c_str());
@@ -1258,6 +1349,13 @@ void DrawContextMenu(LibraryEntry &e)
         std::string url =
             "file:///" + fs::u8path(e.path).parent_path().generic_u8string();
         SDL_OpenURL(url.c_str());
+    }
+    ImGui::Separator();
+    if (ImGui::MenuItem(ICON_FA_XMARK "  Remove from library")) {
+        std::string path = e.path; // e may go away once removed
+        ImGui::EndPopup();
+        RemoveFromLibrary(path);
+        return;
     }
     ImGui::EndPopup();
 }
@@ -1590,6 +1688,202 @@ void DrawSettingsPopup()
     ImGui::EndPopup();
 }
 
+fs::path DownloadedCoverPath(uint32_t title_id)
+{
+    return IconCacheDir() / "covers" / (TitleIdHex(title_id) + ".jpg");
+}
+
+// xdb keeps titles/<publisher>/<number>/cover_front.jpg, e.g. MS-004 ->
+// titles/MS/004. Only titles with a standard two-letter publisher code.
+std::string CoverUrl(uint32_t title_id)
+{
+    std::string id = FormatTitleId(title_id);
+    if (id.size() != 6 || id[2] != '-') {
+        return "";
+    }
+    return "https://raw.githubusercontent.com/xemu-project/xdb/main/titles/" +
+           id.substr(0, 2) + "/" + id.substr(3) + "/cover_front.jpg";
+}
+
+void CoverWorker(std::vector<uint32_t> ids)
+{
+    std::error_code ec;
+    fs::create_directories(IconCacheDir() / "covers", ec);
+    for (uint32_t id : ids) {
+        if (g_scan_cancel) {
+            break;
+        }
+        std::string url = CoverUrl(id);
+        GByteArray *data = g_byte_array_new();
+        int code = url.empty() ? 404 : http_get(url.c_str(), data, NULL, NULL);
+        bool is_jpeg = data->len > 4 && data->data[0] == 0xFF && data->data[1] == 0xD8;
+        if (code == 200 && is_jpeg) {
+            fs::path out = DownloadedCoverPath(id);
+            fs::path tmp = out;
+            tmp += ".tmp";
+            {
+                std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+                f.write((const char *)data->data, data->len);
+            }
+            fs::rename(tmp, out, ec);
+            g_covers_found++;
+            std::lock_guard<std::mutex> lock(g_cover_mutex);
+            g_covers_fetched.push_back(id);
+        } else if (code == 404) {
+            std::lock_guard<std::mutex> lock(g_cover_mutex);
+            g_covers_404.push_back(id); // don't ask again
+        }
+        g_byte_array_unref(data);
+        g_covers_done++;
+    }
+    std::lock_guard<std::mutex> lock(g_cover_mutex);
+    g_covers_finished = true;
+    g_covers_running = false;
+}
+
+void StartCoverDownload()
+{
+    if (g_covers_running) {
+        return;
+    }
+    if (g_cover_thread.joinable()) {
+        g_cover_thread.join();
+    }
+    // Games without a cover of their own or a previous download
+    std::vector<uint32_t> ids;
+    std::set<uint32_t> seen;
+    std::error_code ec;
+    for (auto &e : g_entries) {
+        if (!e.valid || seen.count(e.title_id) ||
+            g_covers_missing.count(e.title_id) || CoverUrl(e.title_id).empty() ||
+            fs::exists(DownloadedCoverPath(e.title_id), ec)) {
+            continue;
+        }
+        bool own_cover = false;
+        for (auto &p : ArtworkCandidates(e)) {
+            if (p.filename().u8string().find(".png") != std::string::npos &&
+                p.parent_path() == IconCacheDir()) {
+                continue; // the embedded disc icon doesn't count
+            }
+            if (p != DownloadedCoverPath(e.title_id) && fs::exists(p, ec)) {
+                own_cover = true;
+                break;
+            }
+        }
+        if (!own_cover) {
+            seen.insert(e.title_id);
+            ids.push_back(e.title_id);
+        }
+    }
+    if (ids.empty()) {
+        xemu_queue_notification("All your games already have covers");
+        return;
+    }
+    Error *err = NULL;
+    if (!ensure_libcurl_initialized(&err)) {
+        xemu_queue_error_message(err ? error_get_pretty(err)
+                                     : "Could not start downloads");
+        if (err) {
+            error_free(err);
+        }
+        return;
+    }
+    g_covers_done = 0;
+    g_covers_found = 0;
+    g_covers_total = (int)ids.size();
+    g_covers_running = true;
+    g_cover_thread = std::thread(CoverWorker, std::move(ids));
+}
+
+// Main thread: show newly downloaded covers and report when done
+void MergeCoverResults()
+{
+    std::vector<uint32_t> fetched, missing;
+    bool finished = false;
+    {
+        std::lock_guard<std::mutex> lock(g_cover_mutex);
+        fetched.swap(g_covers_fetched);
+        missing.swap(g_covers_404);
+        finished = g_covers_finished;
+        g_covers_finished = false;
+    }
+    g_covers_missing.insert(missing.begin(), missing.end());
+    for (uint32_t id : fetched) {
+        for (auto &e : g_entries) {
+            if (e.valid && e.title_id == id) {
+                FreeTexture(e); // reload with the new cover
+            }
+        }
+    }
+    if (finished) {
+        std::string msg = string_format(
+            "Downloaded %d cover%s (%d not in the database)", (int)g_covers_found,
+            g_covers_found == 1 ? "" : "s",
+            (int)g_covers_total - (int)g_covers_found);
+        xemu_queue_notification(msg.c_str());
+        g_dirty = true;
+    }
+}
+
+void AddGameFile()
+{
+    static const SDL_DialogFileFilter filters[] = {
+        { "Disc Image Files (*.iso, *.xiso)", "iso;xiso" },
+        { "All Files", "*" },
+    };
+    ShowOpenFileDialog(filters, 2, g_config.general.games_dir,
+                       [](const char *path) {
+        std::string key = PathKey(fs::u8path(path));
+        if (g_hidden.erase(key)) {
+            xemu_queue_notification("Game restored to your library");
+        } else {
+            for (auto &e : g_entries) {
+                if (PathKey(fs::u8path(e.path)) == key) {
+                    g_selected_path = e.path;
+                    xemu_queue_notification("That game is already in your library");
+                    return;
+                }
+            }
+            for (auto &f : g_extra_files) {
+                if (PathKey(fs::u8path(f)) == key) {
+                    return;
+                }
+            }
+            g_extra_files.push_back(path);
+            xemu_queue_notification("Game added to your library");
+        }
+        g_selected_path = path;
+        SaveLibrary();
+    });
+}
+
+// Take a game out of the library. Files added one by one are dropped from
+// the list; games found in a folder are hidden. Nothing is deleted.
+void RemoveFromLibrary(const std::string &path)
+{
+    std::string key = PathKey(fs::u8path(path));
+    size_t before = g_extra_files.size();
+    g_extra_files.erase(
+        std::remove_if(g_extra_files.begin(), g_extra_files.end(),
+                       [&](const std::string &f) {
+                           return PathKey(fs::u8path(f)) == key;
+                       }),
+        g_extra_files.end());
+    // Hide it as well in case a folder also contains it
+    bool in_folder = false;
+    for (auto &folder : AllFolders()) {
+        in_folder |= PathWithin(key, PathKey(fs::u8path(folder.path)));
+    }
+    if (in_folder || g_extra_files.size() == before) {
+        g_hidden.insert(key);
+    }
+    if (g_selected_path == path) {
+        g_selected_path.clear();
+    }
+    SaveLibrary();
+    xemu_queue_notification("Removed from your library (the file was not deleted)");
+}
+
 void AddGameFolder()
 {
     ShowOpenFolderDialog(g_config.general.games_dir, [](const char *path) {
@@ -1656,7 +1950,7 @@ void DrawFoldersPopup()
     auto folders = AllFolders();
     std::string remove;
     if (folders.empty()) {
-        ImGui::TextUnformatted("No folders yet.");
+        ImGui::TextUnformatted("No game folders yet.");
     } else if (ImGui::BeginTable("##folders", 3,
                                  ImGuiTableFlags_RowBg |
                                      ImGuiTableFlags_BordersInnerH |
@@ -1698,9 +1992,49 @@ void DrawFoldersPopup()
     if (!remove.empty()) {
         RemoveGameFolder(remove);
     }
+    std::string drop_file, unhide;
+    if (!g_extra_files.empty()) {
+        ImGui::Dummy(ImVec2(0, 6 * s));
+        ImGui::TextDisabled("Games added individually");
+        for (auto &f : g_extra_files) {
+            ImGui::PushID(f.c_str());
+            if (ImGui::SmallButton(ICON_FA_XMARK)) {
+                drop_file = f;
+            }
+            ImGui::SetItemTooltip("Remove from library (the file is not deleted)");
+            ImGui::SameLine();
+            ImGui::TextUnformatted(f.c_str());
+            ImGui::PopID();
+        }
+    }
+    if (!g_hidden.empty()) {
+        ImGui::Dummy(ImVec2(0, 6 * s));
+        ImGui::TextDisabled("Hidden games (removed from the library)");
+        for (auto &h : g_hidden) {
+            ImGui::PushID(h.c_str());
+            if (ImGui::SmallButton("Restore")) {
+                unhide = h;
+            }
+            ImGui::SameLine();
+            ImGui::TextUnformatted(h.c_str());
+            ImGui::PopID();
+        }
+    }
+    if (!drop_file.empty()) {
+        RemoveFromLibrary(drop_file);
+    }
+    if (!unhide.empty()) {
+        g_hidden.erase(unhide);
+        SaveLibrary();
+    }
+
     ImGui::Dummy(ImVec2(0, 4 * s));
     if (ImGui::Button(ICON_FA_FOLDER_OPEN "  Add folder...")) {
         AddGameFolder();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Add game...")) {
+        AddGameFile();
     }
     ImGui::SameLine();
     if (ImGui::Button("Done", ImVec2(100 * s, 0)) ||
@@ -1709,6 +2043,78 @@ void DrawFoldersPopup()
         ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
+}
+
+// ---------------------------------------------------------------------------
+// Preview videos
+// ---------------------------------------------------------------------------
+
+fs::path PreviewDir()
+{
+    return BasePath() / "previews";
+}
+
+// <base>/previews/<TITLEID>.<ext>, then <image name>.<ext> next to the image
+std::string FindPreview(const LibraryEntry &e)
+{
+    std::error_code ec;
+    fs::path img = fs::u8path(e.path);
+    for (int i = 0; kPreviewExtensions[i]; i++) {
+        if (e.valid) {
+            fs::path p = PreviewDir() / (TitleIdHex(e.title_id) + kPreviewExtensions[i]);
+            if (fs::is_regular_file(p, ec)) {
+                return p.u8string();
+            }
+        }
+        fs::path p = img.parent_path() / (img.stem().u8string() + kPreviewExtensions[i]);
+        if (fs::is_regular_file(p, ec)) {
+            return p.u8string();
+        }
+    }
+    return "";
+}
+
+void RemoveImportedPreview(uint32_t title_id)
+{
+    std::error_code ec;
+    for (int i = 0; kPreviewExtensions[i]; i++) {
+        fs::remove(PreviewDir() / (TitleIdHex(title_id) + kPreviewExtensions[i]), ec);
+    }
+}
+
+void ImportPreview(const LibraryEntry &e)
+{
+    static const SDL_DialogFileFilter filters[] = {
+        { "Videos (*.mp4, *.m4v, *.wmv, *.avi, *.mov, *.mkv)",
+          "mp4;m4v;wmv;avi;mov;mkv" },
+        { "All Files", "*" },
+    };
+    uint32_t id = e.title_id;
+    std::string game_path = e.path;
+    ShowOpenFileDialog(filters, 2, NULL, [id, game_path](const char *path) {
+        fs::path src = fs::u8path(path);
+        std::string ext = Lower(src.extension().u8string());
+        bool ok_ext = false;
+        for (int i = 0; kPreviewExtensions[i]; i++) {
+            ok_ext |= (ext == kPreviewExtensions[i]);
+        }
+        if (!ok_ext) {
+            xemu_queue_error_message("Unsupported video type. Use MP4, WMV, AVI, MOV or MKV.");
+            return;
+        }
+        g_preview->Close();
+        std::error_code ec;
+        fs::create_directories(PreviewDir(), ec);
+        RemoveImportedPreview(id);
+        fs::path dst = PreviewDir() / (TitleIdHex(id) + ext);
+        if (!fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec)) {
+            xemu_queue_error_message("Could not copy the video.");
+            return;
+        }
+        g_selected_path = game_path;
+        g_preview->Open(dst.u8string());
+        xemu_queue_notification("Preview video added");
+    });
 }
 
 // xemu snapshots taken while playing this game, newest first
@@ -1799,14 +2205,50 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
     float w = ImGui::GetContentRegionAvail().x;
     EnsureTexture(e, tex_budget);
 
+    std::string preview = FindPreview(e);
+    bool playing = g_preview->IsOpen() && !preview.empty() &&
+                   g_preview->Path() == preview;
+    if (g_preview->IsOpen() && !playing) {
+        g_preview->Close(); // selection changed
+    }
+
     ImVec2 a = ImGui::GetCursorScreenPos();
     float art = w;
-    if (e.tex && e.tex_w > 0) {
-        art = std::min(w * e.tex_h / (float)e.tex_w, w * 1.5f);
+    int vw = 0, vh = 0;
+    GLuint vtex = playing ? g_preview->Update(&vw, &vh) : 0;
+    if (vtex && vw > 0) {
+        art = std::min(w * vh / (float)vw, w * 1.5f);
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(a, ImVec2(a.x + w, a.y + art), IM_COL32(0, 0, 0, 255), 8 * s);
+        float sc = std::min(w / vw, art / vh);
+        ImVec2 ia(a.x + (w - vw * sc) / 2, a.y + (art - vh * sc) / 2);
+        dl->AddImageRounded((ImTextureID)(intptr_t)vtex, ia,
+                            ImVec2(ia.x + vw * sc, ia.y + vh * sc), ImVec2(0, 0),
+                            ImVec2(1, 1), IM_COL32_WHITE, 8 * s);
+    } else {
+        if (e.tex && e.tex_w > 0) {
+            art = std::min(w * e.tex_h / (float)e.tex_w, w * 1.5f);
+        }
+        DrawArtwork(ImGui::GetWindowDrawList(), a, ImVec2(a.x + w, a.y + art), e,
+                    8 * s);
     }
-    DrawArtwork(ImGui::GetWindowDrawList(), a, ImVec2(a.x + w, a.y + art), e,
-                8 * s);
     ImGui::Dummy(ImVec2(w, art));
+    if (!preview.empty() && PreviewPlayer::Supported()) {
+        if (ImGui::SmallButton(playing ? ICON_FA_XMARK "  Stop preview"
+                                       : ICON_FA_PLAY "  Watch preview")) {
+            if (playing) {
+                g_preview->Close();
+            } else {
+                g_preview->Open(preview);
+            }
+        }
+        std::string perr = playing ? g_preview->Error() : std::string();
+        if (!perr.empty()) {
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
+            ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1), "%s", perr.c_str());
+            ImGui::PopTextWrapPos();
+        }
+    }
     ImGui::Dummy(ImVec2(0, 6 * s));
 
     ImGui::PushFont(g_font_mgr.m_menu_font_small);
@@ -1890,6 +2332,18 @@ void GameLibraryWindow::Open()
     g_focus_requested = true;
 }
 
+void GameLibraryWindow::DownloadCovers()
+{
+    Open();
+    StartCoverDownload();
+}
+
+void GameLibraryWindow::AddGame()
+{
+    Open();
+    AddGameFile();
+}
+
 void GameLibraryWindow::OpenFolderManager()
 {
     Open();
@@ -1917,6 +2371,7 @@ void GameLibraryWindow::Launch(const std::string &path)
 {
     LibraryEntry *e = FindEntry(path);
     std::string name = e ? e->DisplayName() : fs::u8path(path).stem().u8string();
+    g_preview->Close();
     std::string load_path = path;
     if (e) {
         std::string error;
@@ -1986,6 +2441,7 @@ void GameLibraryWindow::Update()
         StartScan();
     }
     MergeScanResults();
+    MergeCoverResults();
 
     // Track disc changes: last played + per-game settings
     const char *dvd = g_config.sys.files.dvd_path;
@@ -2021,6 +2477,9 @@ void GameLibraryWindow::Update()
 void GameLibraryWindow::Draw()
 {
     if (!is_open) {
+        if (g_preview->IsOpen()) {
+            g_preview->Close();
+        }
         return;
     }
     const float s = g_viewport_mgr.m_scale;
@@ -2081,7 +2540,7 @@ void GameLibraryWindow::Draw()
     ImGui::Dummy(ImVec2(0, 2 * s));
 
     auto folders = AllFolders();
-    if (folders.empty()) {
+    if (folders.empty() && g_extra_files.empty()) {
         ImVec2 avail = ImGui::GetContentRegionAvail();
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + avail.y * 0.3f);
         const char *msg = "Add the folders where you keep your Xbox disc "
@@ -2097,6 +2556,10 @@ void GameLibraryWindow::Draw()
         if (ImGui::Button(ICON_FA_FOLDER_OPEN "  Add a games folder",
                           ImVec2(240 * s, 36 * s))) {
             AddGameFolder();
+        }
+        ImGui::SetCursorPosX(x0 + (w - 240 * s) / 2);
+        if (ImGui::Button("Add a single game...", ImVec2(240 * s, 0))) {
+            AddGameFile();
         }
         DrawFoldersPopup();
         ImGui::End();
@@ -2149,6 +2612,23 @@ void GameLibraryWindow::Draw()
         ImGui::SetItemTooltip("Tile size");
     }
     ImGui::SameLine();
+    ImGui::BeginDisabled(g_covers_running);
+    if (ImGui::Button(g_covers_running
+                          ? string_format("Covers %d/%d", (int)g_covers_done,
+                                          (int)g_covers_total).c_str()
+                          : "Get covers")) {
+        StartCoverDownload();
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("Download box art for games without a cover, from "
+                          "xemu's game database (xemu-project/xdb on GitHub). "
+                          "Your own covers always take priority.");
+    ImGui::SameLine(0, 2 * s);
+    if (ImGui::Button("+ Add game")) {
+        AddGameFile();
+    }
+    ImGui::SetItemTooltip("Add a single disc image to the library");
+    ImGui::SameLine(0, 2 * s);
     if (ImGui::Button(ICON_FA_FOLDER_OPEN "  Folders")) {
         g_open_folders_popup = true;
     }
@@ -2257,6 +2737,10 @@ static void GameLibraryShutdown(void)
     if (g_scan_thread.joinable()) {
         g_scan_thread.join();
     }
+    if (g_cover_thread.joinable()) {
+        g_cover_thread.join();
+    }
+    g_preview->Close(false);
     if (g_loaded) {
         SaveLibrary();
     }

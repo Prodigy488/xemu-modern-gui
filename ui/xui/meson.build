@@ -4,6 +4,8 @@ xemu_ss.add(files(
   'compat.cc',
   'debug.cc',
   'font-manager.cc',
+  'game-library.cc',
+  'game-library-scan.cc',
   'gl-helpers.cc',
   'input-manager.cc',
   'main-menu.cc',

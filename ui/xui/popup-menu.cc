@@ -32,6 +32,7 @@
 #include "IconsFontAwesome6.h"
 #include "../xemu-snapshots.h"
 #include "main-menu.hh"
+#include "game-library.hh"
 
 PopupMenuItemDelegate::~PopupMenuItemDelegate() {}
 void PopupMenuItemDelegate::PushMenu(PopupMenu &menu) {}
@@ -440,7 +441,11 @@ public:
             xemu_queue_notification("Created new snapshot");
             pop = true;
         }
-        if (PopupMenuSubmenuButton("Games", ICON_FA_GAMEPAD)) {
+        if (PopupMenuButton("Game Library", ICON_FA_GAMEPAD)) {
+            game_library_window.Open();
+            pop = true;
+        }
+        if (PopupMenuSubmenuButton("Games", ICON_FA_COMPACT_DISC)) {
             nav.PushFocus();
             nav.PushMenu(games);
         }

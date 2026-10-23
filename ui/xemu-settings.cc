@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <toml++/toml.h>
 #include <cnode.h>
+#include "xui/game-library.hh"
 #include <sstream>
 #include <iostream>
 #include <locale.h>
@@ -227,9 +228,11 @@ void xemu_settings_save(void)
     // controller, so we can set it to true (default) now to remove it from the user config.
     g_config.input.allow_vibration = true;
 
+    GameLibraryBeforeSettingsSave();
     config_tree.update_from_struct(&g_config);
     fprintf(fd, "%s", config_tree.generate_delta_toml().c_str());
     fclose(fd);
+    GameLibraryAfterSettingsSave();
 
     if (previous_numeric_locale) {
         setlocale(LC_NUMERIC, previous_numeric_locale);

@@ -26,6 +26,7 @@
 #include "debug.hh"
 #include "actions.hh"
 #include "compat.hh"
+#include "game-library.hh"
 #include "github-issue.hh"
 #include "update.hh"
 #include "../xemu-os-utils.h"
@@ -50,6 +51,10 @@ void ProcessKeyboardShortcuts(void)
 
     if (IsShortcutKeyPressed(ImGuiKey_O)) {
         ActionLoadDisc();
+    }
+
+    if (IsShortcutKeyPressed(ImGuiKey_L)) {
+        game_library_window.ToggleOpen();
     }
 
     if (IsShortcutKeyPressed(ImGuiKey_P)) {
@@ -91,6 +96,31 @@ void ShowMainMenu()
 
     if (ImGui::BeginMainMenuBar())
     {
+        if (ImGui::BeginMenu("Library"))
+        {
+            if (ImGui::MenuItem("Game Library", SHORTCUT_MENU_TEXT(L))) {
+                game_library_window.Open();
+            }
+            if (ImGui::MenuItem("Rescan Games Folder")) {
+                game_library_window.Rescan();
+            }
+            ImGui::Separator();
+            auto recent = game_library_window.GetRecentGames(8);
+            if (recent.empty()) {
+                ImGui::MenuItem("No recently played games", NULL, false, false);
+            } else {
+                ImGui::TextDisabled("Recently played");
+                for (auto &r : recent) {
+                    ImGui::PushID(r.path.c_str());
+                    if (ImGui::MenuItem(r.title.c_str())) {
+                        game_library_window.Launch(r.path);
+                    }
+                    ImGui::PopID();
+                }
+            }
+            ImGui::EndMenu();
+        }
+
         if (ImGui::BeginMenu("Machine"))
         {
             if (ImGui::MenuItem(running ? "Pause" : "Resume", SHORTCUT_MENU_TEXT(P))) ActionTogglePause();

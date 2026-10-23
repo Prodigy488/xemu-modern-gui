@@ -79,6 +79,9 @@ void MainMenuGeneralView::Draw()
                [](const char *path) {
                    xemu_settings_set_string(&g_config.general.games_dir, path);
                });
+    Toggle("Show game library on startup",
+           &g_config.general.library.show_on_startup,
+           "Open the game library when xemu starts (Ctrl+L)");
     // toggle("Throttle DVD/HDD speeds", &g_config.general.throttle_io,
     //        "Limit DVD/HDD throughput to approximate Xbox load times");
 }

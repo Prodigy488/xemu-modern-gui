@@ -8,6 +8,21 @@ general:
       default: true
   screenshot_dir: string
   games_dir: string
+  library:
+    show_on_startup:
+      type: bool
+      default: true
+    view:
+      type: enum
+      values: [grid, list]
+      default: grid
+    sort:
+      type: enum
+      values: [title, last_played, play_time]
+      default: title
+    tile_size:
+      type: number
+      default: 0.4
   skip_boot_anim: bool
   # throttle_io: bool
   last_viewed_menu_index: integer

@@ -50,6 +50,7 @@
 #include "welcome.hh"
 #include "menubar.hh"
 #include "compat.hh"
+#include "game-library.hh"
 #if defined(_WIN32)
 #include "update.hh"
 #endif
@@ -203,6 +204,16 @@ void xemu_hud_update(void)
         g_last_scale = g_viewport_mgr.m_scale;
     }
 
+    game_library_window.Update();
+    static bool library_startup_checked = false;
+    if (!library_startup_checked) {
+        library_startup_checked = true;
+        if (g_config.general.library.show_on_startup &&
+            !first_boot_window.is_open) {
+            game_library_window.Open();
+        }
+    }
+
     if (!first_boot_window.is_open) {
         int ww, wh;
         SDL_GetWindowSizeInPixels(xemu_get_window(), &ww, &wh);
@@ -311,6 +322,7 @@ void xemu_hud_update(void)
     apu_window.Draw();
     video_window.Draw();
     compatibility_reporter_window.Draw();
+    game_library_window.Draw();
 #if defined(_WIN32)
     update_window.Draw();
 #endif

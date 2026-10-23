@@ -1236,9 +1236,28 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
         .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
     };
 
-    VK_CHECK(vmaCreateImage(r->allocator, &image_create_info,
-                            &alloc_create_info, &snode->image,
-                            &snode->allocation, NULL));
+    VkResult image_result =
+        vmaCreateImage(r->allocator, &image_create_info, &alloc_create_info,
+                       &snode->image, &snode->allocation, NULL);
+    if (image_result != VK_SUCCESS) {
+        // Don't take the whole emulator down because the driver refused one
+        // texture: log it and draw with the placeholder texture instead.
+        static int warn_count;
+        if (warn_count++ < 8) {
+            fprintf(stderr,
+                    "nv2a: vk: failed to create texture %ux%ux%u (format %d, "
+                    "levels %u): VkResult %d, using placeholder\n",
+                    image_create_info.extent.width,
+                    image_create_info.extent.height,
+                    image_create_info.extent.depth, (int)vkf.vk_format,
+                    image_create_info.mipLevels, (int)image_result);
+        }
+        snode->image = VK_NULL_HANDLE;
+        snode->allocation = VK_NULL_HANDLE;
+        r->texture_bindings[texture_idx] = &r->dummy_texture;
+        NV2A_VK_DGROUP_END();
+        return;
+    }
 
     VkImageViewCreateInfo image_view_create_info = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,

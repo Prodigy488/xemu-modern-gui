@@ -102,6 +102,32 @@ void ShowSaveFileDialog(const SDL_DialogFileFilter *filters, int nfilters,
                            filters, nfilters, default_location);
 }
 
+static void FilesDialogCallbackWrapper(void *userdata,
+                                       const char *const *filelist, int filter)
+{
+    std::unique_ptr<FilesDialogCallback> callback(
+        static_cast<FilesDialogCallback *>(userdata));
+    if (filelist && filelist[0]) {
+        std::vector<std::string> paths;
+        for (int i = 0; filelist[i]; i++) {
+            paths.push_back(filelist[i]);
+        }
+        RunOnMainThread([callback = std::move(*callback),
+                         paths = std::move(paths)]() { callback(paths); });
+    }
+}
+
+void ShowOpenFilesDialog(const char *default_location,
+                         FilesDialogCallback callback)
+{
+    auto *cb = new FilesDialogCallback(std::move(callback));
+    std::string normalized = NormalizeDefaultLocation(default_location);
+    SDL_ShowOpenFileDialog(FilesDialogCallbackWrapper, cb, xemu_get_window(),
+                           nullptr, 0,
+                           normalized.empty() ? nullptr : normalized.c_str(),
+                           true);
+}
+
 void ShowOpenFolderDialog(const char *default_location,
                           FileDialogCallback callback)
 {

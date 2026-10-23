@@ -35,6 +35,11 @@ shared.
   the game you're playing, with its cover, title ID, play time and an Insignia
   badge for online-capable games. Turn it off in Settings > General > Discord
   status. Requires the Discord app running on the same PC.
+- **New in v1.5: Xbox hard drive explorer.** A Drive tab to browse the
+  emulated hard drive's C, E, F and X/Y/Z partitions and copy files and
+  folders in and out, rename and delete (uses
+  [libfatx](https://github.com/mborgerson/fatx)). Copying to the Xbox pauses
+  it and restarts it afterwards.
 - **New in v1.5: 3D game cases.** Covers on the Home screen stand as 3D game
   cases with a spine and a reflection, made from your existing covers. Use
   your own 3D box art by saving it as `covers\<title ID>-3d.png`, or switch

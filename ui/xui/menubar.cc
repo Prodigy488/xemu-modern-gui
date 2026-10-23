@@ -26,6 +26,7 @@
 #include "debug.hh"
 #include "actions.hh"
 #include "compat.hh"
+#include "xbox-drive-explorer.hh"
 #include "game-library.hh"
 #include "github-issue.hh"
 #include "update.hh"
@@ -119,6 +120,9 @@ void ShowMainMenu()
             }
             if (ImGui::MenuItem("Download Covers")) {
                 game_library_window.DownloadCovers();
+            }
+            if (ImGui::MenuItem("Xbox Hard Drive...")) {
+                XboxExplorerOpenWindow();
             }
             if (ImGui::MenuItem("Download Patches")) {
                 game_library_window.DownloadPatches();

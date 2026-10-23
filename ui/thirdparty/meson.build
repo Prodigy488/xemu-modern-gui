@@ -17,3 +17,15 @@ fpng = declare_dependency(include_directories: 'fpng', link_with: libfpng)
 json = dependency('nlohmann_json', required: true)
 libfatx = static_library('fatx', sources: files('fatx/fatx.c') + genh)
 fatx = declare_dependency(include_directories: 'fatx', link_with: libfatx)
+
+# FATX filesystem library (github.com/mborgerson/fatx) for the Xbox hard
+# drive explorer. No include directory is exported, to keep its fatx.h apart
+# from the one above; users include it by path.
+libfatx_full = static_library('fatx_full',
+  sources: files('libfatx/ext.c', 'libfatx/fatx.c', 'libfatx/fatx_attr.c',
+                 'libfatx/fatx_dev.c', 'libfatx/fatx_dir.c',
+                 'libfatx/fatx_disk.c', 'libfatx/fatx_fat.c',
+                 'libfatx/fatx_file.c', 'libfatx/fatx_log.c',
+                 'libfatx/fatx_misc.c', 'libfatx/fatx_partition.c'),
+  c_args: ['-w'])
+fatx_full = declare_dependency(link_with: libfatx_full)

@@ -29,6 +29,7 @@
 #include "game-library.hh"
 #include "game-library-scan.hh"
 #include "rtx-video.hh"
+#include "xbox-drive-explorer.hh"
 #include "game-patches.hh"
 #include "game-preview.hh"
 #include "insignia-titles.hh"
@@ -4295,11 +4296,11 @@ void UpdateDiscordPresence()
 // Media, Patches, Settings), switched with LB/RB
 // ---------------------------------------------------------------------------
 
-enum DashTab { kTabHome, kTabLibrary, kTabInsignia, kTabMedia, kTabPatches,
-               kTabSettings, kTabCount };
-const char *const kTabNames[kTabCount] = { "Home",    "Library",
-                                           "Insignia", "Media",
-                                           "Patches", "Settings" };
+enum DashTab { kTabHome, kTabLibrary, kTabInsignia, kTabMedia, kTabDrive,
+               kTabPatches, kTabSettings, kTabCount };
+const char *const kTabNames[kTabCount] = { "Home",    "Library", "Insignia",
+                                           "Media",   "Drive",   "Patches",
+                                           "Settings" };
 int g_dash_tab = kTabHome;
 
 std::string g_home_path;        // game shown in the Home hero
@@ -5662,6 +5663,14 @@ void DrawMediaTab(int &tex_budget)
 
 // --- Patches -------------------------------------------------------------------
 
+void DrawDriveTab()
+{
+    DashLabel("Xbox hard drive");
+    DashTitle("Files on the Xbox's C, E, F, X, Y and Z drives");
+    ImGui::Dummy(ImVec2(0, 4 * g_viewport_mgr.m_scale));
+    XboxExplorerDraw();
+}
+
 void DrawPatchesTab(int &tex_budget)
 {
     const float s = g_viewport_mgr.m_scale;
@@ -6518,6 +6527,9 @@ void GameLibraryWindow::Draw()
             break;
         case kTabMedia:
             DrawMediaTab(tex_budget);
+            break;
+        case kTabDrive:
+            DrawDriveTab();
             break;
         case kTabPatches:
             DrawPatchesTab(tex_budget);

@@ -38,6 +38,9 @@ public:
     void OpenFolderManager();
     void AddGame();
     void DownloadCovers();
+    // Online patches (Jay's Magic Patches) for every game in the library
+    void DownloadPatches();
+    void CheckNewPatches();
     void OpenInsignia();
 };
 

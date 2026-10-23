@@ -291,12 +291,440 @@ bool ApplyBpsPatch(const std::vector<uint8_t> &source,
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// Jay's Magic Patch (.jmp)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::string Trim(const std::string &s)
+{
+    size_t a = s.find_first_not_of(" \t\r\n");
+    if (a == std::string::npos) {
+        return "";
+    }
+    size_t b = s.find_last_not_of(" \t\r\n");
+    return s.substr(a, b - a + 1);
+}
+
+int HexVal(char c)
+{
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    c = (char)tolower((unsigned char)c);
+    return (c >= 'a' && c <= 'f') ? c - 'a' + 10 : -1;
+}
+
+// "AABB CC" -> bytes. False on odd length or non-hex characters.
+bool ParseHexBytes(const std::string &s, std::vector<uint8_t> &out)
+{
+    out.clear();
+    int hi = -1;
+    for (char c : s) {
+        if (c == ' ' || c == '\t') {
+            continue;
+        }
+        int v = HexVal(c);
+        if (v < 0) {
+            return false;
+        }
+        if (hi < 0) {
+            hi = v;
+        } else {
+            out.push_back((uint8_t)(hi << 4 | v));
+            hi = -1;
+        }
+    }
+    return hi < 0 && !out.empty();
+}
+
+bool ParseHexNumber(std::string s, uint64_t &v)
+{
+    s = Trim(s);
+    if (s.size() > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        s = s.substr(2);
+    }
+    if (s.empty() || s.size() > 16) {
+        return false;
+    }
+    v = 0;
+    for (char c : s) {
+        int d = HexVal(c);
+        if (d < 0) {
+            return false;
+        }
+        v = v << 4 | (uint64_t)d;
+    }
+    return true;
+}
+
+bool IsHex8(const std::string &s)
+{
+    if (s.size() != 8) {
+        return false;
+    }
+    for (char c : s) {
+        if (HexVal(c) < 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// "FinalF.xbe - 16:9" -> "finalf.xbe"; "" if the comment names no XBE
+std::string CommentXbe(const std::string &comment)
+{
+    std::string l = Lower(Trim(comment));
+    size_t start = l.find_first_not_of("\"'");
+    if (start == std::string::npos) {
+        return "";
+    }
+    size_t end = l.find_first_of(" \t\"'", start);
+    std::string token = l.substr(start, end == std::string::npos
+                                             ? std::string::npos
+                                             : end - start);
+    if (token.size() <= 4 ||
+        token.compare(token.size() - 4, 4, ".xbe") != 0) {
+        return "";
+    }
+    std::string rest =
+        end == std::string::npos ? "" : Trim(l.substr(end));
+    while (!rest.empty() && (rest[0] == '"' || rest[0] == '\'')) {
+        rest = Trim(rest.substr(1));
+    }
+    return (!rest.empty() && rest[0] == '-') ? token : "";
+}
+
+} // namespace
+
+bool ParseJmp(const std::string &text, JmpPatch &out, std::string &error)
+{
+    out = JmpPatch();
+    std::vector<std::string> lines;
+    {
+        std::string cur;
+        for (char c : text) {
+            if (c == '\n') {
+                lines.push_back(cur);
+                cur.clear();
+            } else if (c != '\r') {
+                cur += c;
+            }
+        }
+        lines.push_back(cur);
+    }
+    if (!lines.empty() && lines[0].size() >= 3 &&
+        (uint8_t)lines[0][0] == 0xEF && (uint8_t)lines[0][1] == 0xBB &&
+        (uint8_t)lines[0][2] == 0xBF) {
+        lines[0] = lines[0].substr(3); // UTF-8 BOM
+    }
+
+    size_t i = 0;
+    // File header: "#Jay's Magic Patcher ..." and key=value lines
+    bool saw_header = false;
+    for (; i < lines.size(); i++) {
+        std::string t = Trim(lines[i]);
+        if (t.empty()) {
+            continue;
+        }
+        if (!saw_header && t[0] == '#' &&
+            Lower(t).find("magic patcher") != std::string::npos) {
+            saw_header = true;
+            // '#"Loader.xbe" - Jay's Magic Patcher': the file is for that XBE
+            size_t q1 = t.find('"');
+            size_t q2 = q1 == std::string::npos ? q1 : t.find('"', q1 + 1);
+            if (q2 != std::string::npos) {
+                std::string target = Lower(t.substr(q1 + 1, q2 - q1 - 1));
+                if (target.size() > 4 &&
+                    target.compare(target.size() - 4, 4, ".xbe") == 0 &&
+                    target != "default.xbe") {
+                    out.other_target = true;
+                }
+            }
+            continue;
+        }
+        size_t eq = t.find('=');
+        if (t[0] == '#' || eq == std::string::npos) {
+            break;
+        }
+        std::string key = Lower(Trim(t.substr(0, eq)));
+        std::string val = Trim(t.substr(eq + 1));
+        if (key == "game-title") {
+            out.game_title = val;
+        } else if (key == "region") {
+            out.region = val;
+        } else if (key == "author") {
+            out.author = val;
+        } else if (key == "notes") {
+            for (size_t p; (p = val.find("<br>")) != std::string::npos;) {
+                val.replace(p, 4, "\n");
+            }
+            out.notes = Trim(val);
+        } else if (key == "version") {
+            out.version = val;
+            // "5553001D (US-029) {C39268AA} {094E0DE2}"
+            std::string word;
+            bool in_brace = false;
+            for (size_t k = 0; k <= val.size(); k++) {
+                char c = k < val.size() ? val[k] : ' ';
+                if (c == '{' || c == '}' || c == ' ' || c == '(' || c == ')' ||
+                    c == ',' || c == '\t') {
+                    if (IsHex8(word)) {
+                        uint64_t v = 0;
+                        ParseHexNumber(word, v);
+                        if (in_brace) {
+                            out.crcs.push_back((uint32_t)v);
+                        } else if (!out.title_id) {
+                            out.title_id = (uint32_t)v;
+                        }
+                    }
+                    word.clear();
+                    if (c == '{') {
+                        in_brace = true;
+                    } else if (c == '}') {
+                        in_brace = false;
+                    }
+                } else {
+                    word += c;
+                }
+            }
+        }
+    }
+    if (!saw_header) {
+        error = "not a Magic Patch (.jmp) file";
+        return false;
+    }
+
+    // Patch records
+    JmpOption *opt = NULL;
+    std::string group_key;
+    std::vector<uint8_t> pending_find;
+    bool have_find = false;
+    for (; i < lines.size(); i++) {
+        std::string t = Trim(lines[i]);
+        if (t.empty()) {
+            continue;
+        }
+        char where[64];
+        snprintf(where, sizeof(where), "line %zu: ", i + 1);
+        if (t[0] == '#') {
+            if (have_find) {
+                error = std::string(where) + "find value without a replacement";
+                return false;
+            }
+            bool off = t.find("[-]") != std::string::npos;
+            std::string name = t.substr(1);
+            for (size_t p; (p = name.find("[-]")) != std::string::npos;) {
+                name.erase(p, 3);
+            }
+            name = Trim(name);
+            std::string key = Lower(name);
+            if (!opt || key != group_key) {
+                out.options.push_back(JmpOption());
+                opt = &out.options.back();
+                opt->name = name.empty() ? "Patch" : name;
+                opt->default_on = !off;
+                std::string xbe = CommentXbe(name);
+                opt->other_xbe = !xbe.empty() && xbe != "default.xbe";
+                group_key = key;
+            }
+            continue;
+        }
+        if (!opt) {
+            error = std::string(where) + "patch data before the first # comment";
+            return false;
+        }
+        JmpRecord r;
+        size_t colon = t.find(':');
+        if (Lower(t.substr(0, 7)) == "append:") {
+            r.kind = JmpRecord::Append;
+            if (!ParseHexBytes(t.substr(7), r.data)) {
+                error = std::string(where) + "invalid APPEND data";
+                return false;
+            }
+        } else if (colon != std::string::npos) {
+            r.kind = JmpRecord::Offset;
+            if (!ParseHexNumber(t.substr(0, colon), r.offset) ||
+                !ParseHexBytes(t.substr(colon + 1), r.data)) {
+                error = std::string(where) + "invalid offset record";
+                return false;
+            }
+        } else {
+            std::vector<uint8_t> bytes;
+            if (!ParseHexBytes(t, bytes)) {
+                error = std::string(where) + "invalid hex value";
+                return false;
+            }
+            if (!have_find) {
+                pending_find = std::move(bytes);
+                have_find = true;
+                continue;
+            }
+            r.kind = JmpRecord::Replace;
+            r.find = std::move(pending_find);
+            r.data = std::move(bytes);
+            have_find = false;
+            if (r.find.size() != r.data.size()) {
+                error = std::string(where) +
+                        "find and replace values have different lengths";
+                return false;
+            }
+        }
+        opt->records.push_back(std::move(r));
+    }
+    if (have_find) {
+        error = "the last find value has no replacement";
+        return false;
+    }
+    // Drop comment-only options (notes inside the record list)
+    out.options.erase(std::remove_if(out.options.begin(), out.options.end(),
+                                     [](const JmpOption &o) {
+                                         return o.records.empty();
+                                     }),
+                      out.options.end());
+    if (out.options.empty()) {
+        error = "the patch contains no changes";
+        return false;
+    }
+    return true;
+}
+
+std::vector<bool> JmpOptionStates(const JmpPatch &patch,
+                                  const std::vector<int> &toggled)
+{
+    std::vector<bool> on;
+    for (auto &o : patch.options) {
+        on.push_back(o.default_on);
+    }
+    for (int t : toggled) {
+        if (t >= 0 && (size_t)t < on.size()) {
+            on[t] = !on[t];
+        }
+    }
+    return on;
+}
+
+bool ApplyJmp(std::vector<uint8_t> &xbe, const JmpPatch &patch,
+              const std::vector<bool> &option_on, std::string &error)
+{
+    if (patch.other_target) {
+        error = "this patch is for another XBE on the disc, not default.xbe";
+        return false;
+    }
+    for (size_t k = 0; k < patch.options.size(); k++) {
+        const JmpOption &o = patch.options[k];
+        if (o.other_xbe || k >= option_on.size() || !option_on[k]) {
+            continue;
+        }
+        for (auto &r : o.records) {
+            switch (r.kind) {
+            case JmpRecord::Replace: {
+                auto it = std::search(xbe.begin(), xbe.end(), r.find.begin(),
+                                      r.find.end());
+                if (it == xbe.end()) {
+                    error = "\"" + o.name +
+                            "\": the code it changes wasn't found (the patch "
+                            "may be for a different version of the game)";
+                    return false;
+                }
+                std::copy(r.data.begin(), r.data.end(), it);
+                break;
+            }
+            case JmpRecord::Offset:
+                if (r.offset > xbe.size() ||
+                    r.data.size() > xbe.size() - r.offset) {
+                    error = "\"" + o.name +
+                            "\": writes past the end of default.xbe (the "
+                            "patch may be for a different version of the game)";
+                    return false;
+                }
+                std::copy(r.data.begin(), r.data.end(),
+                          xbe.begin() + (ptrdiff_t)r.offset);
+                break;
+            case JmpRecord::Append:
+                xbe.insert(xbe.end(), r.data.begin(), r.data.end());
+                break;
+            }
+        }
+    }
+    return true;
+}
+
+JmpFit CheckJmp(const JmpPatch &patch, const std::vector<uint8_t> &stock_xbe,
+                uint32_t title_id)
+{
+    if (patch.title_id && title_id && patch.title_id != title_id) {
+        return JmpFit::OtherGame;
+    }
+    bool any_default_xbe = false;
+    for (auto &o : patch.options) {
+        any_default_xbe |= !o.other_xbe;
+    }
+    if (patch.other_target || !any_default_xbe) {
+        return JmpFit::Unsupported;
+    }
+    if (!patch.crcs.empty()) {
+        uint32_t crc = Crc32(stock_xbe.data(), stock_xbe.size());
+        for (uint32_t c : patch.crcs) {
+            if (c == crc) {
+                return JmpFit::Works;
+            }
+        }
+        return JmpFit::OtherVersion;
+    }
+    // No checksum: try every option on a copy
+    std::vector<uint8_t> copy = stock_xbe;
+    std::vector<bool> all(patch.options.size(), true);
+    std::string err;
+    if (!ApplyJmp(copy, patch, all, err)) {
+        return JmpFit::OtherVersion;
+    }
+    for (auto &o : patch.options) {
+        for (auto &r : o.records) {
+            if (!o.other_xbe && r.kind == JmpRecord::Replace) {
+                return JmpFit::Works;
+            }
+        }
+    }
+    return JmpFit::Unverified;
+}
+
+const char *JmpFitLabel(JmpFit fit)
+{
+    switch (fit) {
+    case JmpFit::Works:
+        return "Works with your copy";
+    case JmpFit::Unverified:
+        return "Can't be verified";
+    case JmpFit::OtherVersion:
+        return "Made for another version";
+    case JmpFit::OtherGame:
+        return "Made for another game";
+    case JmpFit::Unsupported:
+        return "Not supported";
+    }
+    return "";
+}
+
 bool ApplyPatchFiles(const std::vector<uint8_t> &original,
                      const std::vector<std::string> &patch_paths,
                      std::vector<uint8_t> &patched, std::string &error)
 {
+    std::vector<PatchSpec> specs;
+    for (auto &p : patch_paths) {
+        specs.push_back({ p, {} });
+    }
+    return ApplyPatchFiles(original, specs, patched, error);
+}
+
+bool ApplyPatchFiles(const std::vector<uint8_t> &original,
+                     const std::vector<PatchSpec> &patches,
+                     std::vector<uint8_t> &patched, std::string &error)
+{
     patched = original;
-    for (auto &path : patch_paths) {
+    for (auto &spec : patches) {
+        const std::string &path = spec.path;
         std::string name = fs::u8path(path).filename().u8string();
         std::string ext = Lower(fs::u8path(path).extension().u8string());
         std::vector<uint8_t> file;
@@ -323,8 +751,30 @@ bool ApplyPatchFiles(const std::vector<uint8_t> &original,
                 return false;
             }
             patched = std::move(out);
+        } else if (ext == ".jmp") {
+            JmpPatch jmp;
+            if (!ParseJmp(std::string(file.begin(), file.end()), jmp, err)) {
+                error = name + ": " + err;
+                return false;
+            }
+            // Checksums are of the unmodified XBE the patch was made for
+            if (!jmp.crcs.empty()) {
+                uint32_t crc = Crc32(original.data(), original.size());
+                if (std::find(jmp.crcs.begin(), jmp.crcs.end(), crc) ==
+                    jmp.crcs.end()) {
+                    error = name + ": made for a different version or region "
+                                   "of this game";
+                    return false;
+                }
+            }
+            if (!ApplyJmp(patched, jmp, JmpOptionStates(jmp, spec.toggled),
+                          err)) {
+                error = name + ": " + err;
+                return false;
+            }
         } else {
-            error = name + ": unsupported patch type (use .xbe, .ips or .bps)";
+            error = name +
+                    ": unsupported patch type (use .xbe, .ips, .bps or .jmp)";
             return false;
         }
     }
@@ -471,25 +921,54 @@ bool WriteQcow2Overlay(
     return true;
 }
 
+namespace {
+bool ReadXbeAt(const std::string &image_path, const XbeLocation &loc,
+               std::vector<uint8_t> &xbe, std::string &error)
+{
+    xbe.assign(loc.xbe_size, 0);
+    std::ifstream f(fs::u8path(image_path), std::ios::binary);
+    if (!f || !ReadAt(f, loc.image_size, loc.xbe_offset, xbe.data(),
+                      xbe.size())) {
+        error = "cannot read default.xbe from the disc image";
+        return false;
+    }
+    return true;
+}
+} // namespace
+
+bool ReadDefaultXbe(const std::string &image_path, std::vector<uint8_t> &xbe,
+                    std::string &error)
+{
+    XbeLocation loc;
+    return LocateDefaultXbe(image_path, loc, error) &&
+           ReadXbeAt(image_path, loc, xbe, error);
+}
+
 bool BuildPatchedOverlay(const std::string &image_path,
                          const std::vector<std::string> &patch_paths,
+                         const std::string &overlay_path, std::string &error)
+{
+    std::vector<PatchSpec> specs;
+    for (auto &p : patch_paths) {
+        specs.push_back({ p, {} });
+    }
+    return BuildPatchedOverlay(image_path, specs, overlay_path, error);
+}
+
+bool BuildPatchedOverlay(const std::string &image_path,
+                         const std::vector<PatchSpec> &patches,
                          const std::string &overlay_path, std::string &error)
 {
     XbeLocation loc;
     if (!LocateDefaultXbe(image_path, loc, error)) {
         return false;
     }
-    std::vector<uint8_t> original(loc.xbe_size);
-    {
-        std::ifstream f(fs::u8path(image_path), std::ios::binary);
-        if (!f || !ReadAt(f, loc.image_size, loc.xbe_offset, original.data(),
-                          original.size())) {
-            error = "cannot read default.xbe from the disc image";
-            return false;
-        }
+    std::vector<uint8_t> original;
+    if (!ReadXbeAt(image_path, loc, original, error)) {
+        return false;
     }
     std::vector<uint8_t> patched;
-    if (!ApplyPatchFiles(original, patch_paths, patched, error)) {
+    if (!ApplyPatchFiles(original, patches, patched, error)) {
         return false;
     }
 

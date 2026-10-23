@@ -31,6 +31,7 @@
 #include "game-patches.hh"
 #include "game-preview.hh"
 #include "insignia-titles.hh"
+#include "jmp-index.hh"
 #include "game-shortcut.hh"
 #include "actions.hh"
 #include "misc.hh"
@@ -114,7 +115,11 @@ std::map<uint32_t, GameOverrides> g_overrides;   // by title ID
 struct PatchItem {
     std::string file; // file name inside the patch folder
     bool enabled = true;
+    std::vector<int> toggled; // .jmp options flipped from their default
 };
+// Repository paths of online patches already downloaded (or skipped
+// because they don't fit the user's copy), so bulk downloads skip them
+std::set<std::string> g_jmp_fetched;
 std::map<uint32_t, std::vector<PatchItem>> g_patches;
 std::map<std::string, std::string> g_overlay_to_original; // overlay -> image
 bool g_loaded = false;
@@ -519,11 +524,23 @@ void LoadLibrary()
                 PatchItem pi;
                 pi.file = it.value("file", "");
                 pi.enabled = it.value("enabled", true);
+                json toggled = it.value("toggled", json::array());
+                for (auto &t : toggled) {
+                    if (t.is_number_integer()) {
+                        pi.toggled.push_back(t.get<int>());
+                    }
+                }
                 if (!pi.file.empty()) {
                     items.push_back(pi);
                 }
             }
             g_patches[(uint32_t)strtoul(id.c_str(), NULL, 16)] = items;
+        }
+        json fetched = j.value("patches_fetched", json::array());
+        for (auto &f : fetched) {
+            if (f.is_string()) {
+                g_jmp_fetched.insert(f.get<std::string>());
+            }
         }
         for (auto &[overlay, original] : overlay_map.items()) {
             g_overlay_to_original[overlay] = original.get<std::string>();
@@ -628,11 +645,16 @@ void SaveLibrary()
     for (auto &[id, items] : g_patches) {
         json list = json::array();
         for (auto &pi : items) {
-            list.push_back({ { "file", pi.file }, { "enabled", pi.enabled } });
+            json item = { { "file", pi.file }, { "enabled", pi.enabled } };
+            if (!pi.toggled.empty()) {
+                item["toggled"] = pi.toggled;
+            }
+            list.push_back(item);
         }
         patches[TitleIdHex(id)] = list;
     }
     j["patches"] = patches;
+    j["patches_fetched"] = g_jmp_fetched;
     j["overlays"] = g_overlay_to_original;
     json folders = json::array();
     for (auto &f : g_extra_folders) {
@@ -1255,7 +1277,7 @@ std::string OriginalDiscPath(const std::string &path)
 bool IsPatchFile(const fs::path &p)
 {
     std::string ext = Lower(p.extension().u8string());
-    return ext == ".xbe" || ext == ".ips" || ext == ".bps";
+    return ext == ".xbe" || ext == ".ips" || ext == ".bps" || ext == ".jmp";
 }
 
 // Match the saved list with the files actually in the patch folder: keep the
@@ -1301,16 +1323,17 @@ void SyncPatches(uint32_t title_id)
     }
 }
 
-std::vector<std::string> EnabledPatchPaths(uint32_t title_id)
+std::vector<PatchSpec> EnabledPatches(uint32_t title_id)
 {
-    std::vector<std::string> out;
+    std::vector<PatchSpec> out;
     auto it = g_patches.find(title_id);
     if (it == g_patches.end()) {
         return out;
     }
     for (auto &pi : it->second) {
         if (pi.enabled) {
-            out.push_back((PatchDir(title_id) / fs::u8path(pi.file)).u8string());
+            out.push_back({ (PatchDir(title_id) / fs::u8path(pi.file)).u8string(),
+                            pi.toggled });
         }
     }
     return out;
@@ -1318,21 +1341,32 @@ std::vector<std::string> EnabledPatchPaths(uint32_t title_id)
 
 int EnabledPatchCount(uint32_t title_id)
 {
-    return (int)EnabledPatchPaths(title_id).size();
+    auto it = g_patches.find(title_id);
+    int n = 0;
+    if (it != g_patches.end()) {
+        for (auto &pi : it->second) {
+            n += pi.enabled ? 1 : 0;
+        }
+    }
+    return n;
 }
 
 // Overlay file name depends on the image and the exact patch files, so any
 // change produces a fresh overlay.
 std::string OverlayPathFor(const LibraryEntry &e,
-                           const std::vector<std::string> &paths)
+                           const std::vector<PatchSpec> &patches)
 {
     std::error_code ec;
     std::string sig = e.path + "|" + std::to_string(e.file_size) + "|" +
                       std::to_string(e.mtime);
-    for (auto &p : paths) {
-        fs::path fp = fs::u8path(p);
-        sig += "|" + p + "|" + std::to_string(fs::file_size(fp, ec)) + "|" +
+    for (auto &spec : patches) {
+        fs::path fp = fs::u8path(spec.path);
+        sig += "|" + spec.path + "|" + std::to_string(fs::file_size(fp, ec)) +
+               "|" +
                std::to_string(fs::last_write_time(fp, ec).time_since_epoch().count());
+        for (int t : spec.toggled) {
+            sig += "," + std::to_string(t);
+        }
     }
     char hash[32];
     snprintf(hash, sizeof(hash), "%016llx",
@@ -1350,14 +1384,14 @@ bool PrepareLaunchImage(LibraryEntry &e, std::string &load_path,
         return true;
     }
     SyncPatches(e.title_id);
-    std::vector<std::string> paths = EnabledPatchPaths(e.title_id);
-    if (paths.empty()) {
+    std::vector<PatchSpec> patches = EnabledPatches(e.title_id);
+    if (patches.empty()) {
         return true;
     }
-    std::string overlay = OverlayPathFor(e, paths);
+    std::string overlay = OverlayPathFor(e, patches);
     std::error_code ec;
     if (!fs::exists(fs::u8path(overlay), ec) &&
-        !BuildPatchedOverlay(e.path, paths, overlay, error)) {
+        !BuildPatchedOverlay(e.path, patches, overlay, error)) {
         return false;
     }
     // Remove this game's older overlays (ignore files still in use)
@@ -1504,11 +1538,477 @@ void OpenSettingsFor(LibraryEntry &e)
     g_open_settings_popup = true;
 }
 
-std::string g_patches_path;           // game whose Patches window is open
+// ---------------------------------------------------------------------------
+// Online patches (Jay's Magic Patches collection on GitHub)
+// ---------------------------------------------------------------------------
+
+const char kJmpRawBase[] =
+    "https://raw.githubusercontent.com/JayYardley/Xbox-Magic-Patches-by-Jay/";
+const char kJmpTreeUrl[] = "https://api.github.com/repos/JayYardley/"
+                           "Xbox-Magic-Patches-by-Jay/git/trees/main?recursive=1";
+
+// Patches found by "Check for new patches", added to the built-in index:
+// repository path -> title ID (0 = not a usable patch). Main thread only.
+std::map<std::string, uint32_t> g_jmp_extra;
+bool g_jmp_extra_loaded = false;
+
+fs::path JmpExtraIndexFile()
+{
+    return IconCacheDir() / "patch-index.json";
+}
+
+void LoadJmpExtraIndex()
+{
+    if (g_jmp_extra_loaded) {
+        return;
+    }
+    g_jmp_extra_loaded = true;
+    std::ifstream f(JmpExtraIndexFile());
+    if (!f) {
+        return;
+    }
+    try {
+        json j = json::parse(f);
+        json paths = j.value("paths", json::object());
+        for (auto &[path, id] : paths.items()) {
+            if (id.is_string()) {
+                g_jmp_extra[path] =
+                    (uint32_t)strtoul(id.get<std::string>().c_str(), NULL, 16);
+            }
+        }
+    } catch (const std::exception &) {
+    }
+}
+
+void SaveJmpExtraIndex()
+{
+    json paths = json::object();
+    for (auto &[path, id] : g_jmp_extra) {
+        paths[path] = TitleIdHex(id);
+    }
+    json j = { { "version", 1 }, { "paths", paths } };
+    std::error_code ec;
+    fs::create_directories(IconCacheDir(), ec);
+    std::ofstream f(JmpExtraIndexFile(), std::ios::trunc);
+    f << j.dump(1);
+}
+
+bool InBuiltinIndex(const std::string &path)
+{
+    for (auto &ent : kJmpIndex) {
+        if (path == ent.path) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Repository paths of the online patches for a game
+std::vector<std::string> OnlinePatchPaths(uint32_t title_id)
+{
+    std::vector<std::string> out;
+    const JmpIndexEntry *begin = kJmpIndex;
+    const JmpIndexEntry *end = kJmpIndex + sizeof(kJmpIndex) / sizeof(kJmpIndex[0]);
+    const JmpIndexEntry *it = std::lower_bound(
+        begin, end, title_id,
+        [](const JmpIndexEntry &a, uint32_t id) { return a.title_id < id; });
+    for (; it != end && it->title_id == title_id; ++it) {
+        out.push_back(it->path);
+    }
+    LoadJmpExtraIndex();
+    for (auto &[path, id] : g_jmp_extra) {
+        if (id == title_id) {
+            out.push_back(path);
+        }
+    }
+    return out;
+}
+
+int OnlinePatchCount(uint32_t title_id)
+{
+    return title_id ? (int)OnlinePatchPaths(title_id).size() : 0;
+}
+
+std::string UrlEncodePath(const std::string &path)
+{
+    std::string out;
+    for (unsigned char c : path) {
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~' ||
+            c == '/') {
+            out += (char)c;
+        } else {
+            char buf[4];
+            snprintf(buf, sizeof(buf), "%%%02X", c);
+            out += buf;
+        }
+    }
+    return out;
+}
+
+bool HttpGetString(const std::string &url, std::string &body)
+{
+    GByteArray *data = g_byte_array_new();
+    int code = http_get(url.c_str(), data, NULL, NULL);
+    body.assign((const char *)data->data, data->len);
+    g_byte_array_unref(data);
+    return code == 200;
+}
+
+// Download one patch: the latest version first, then the version the
+// built-in index was made from (in case the file has since moved)
+bool DownloadJmp(const std::string &path, std::string &text)
+{
+    if (HttpGetString(kJmpRawBase + std::string("main/") + UrlEncodePath(path),
+                      text)) {
+        return true;
+    }
+    return InBuiltinIndex(path) &&
+           HttpGetString(kJmpRawBase + std::string(kJmpRepoCommit) + "/" +
+                             UrlEncodePath(path),
+                         text);
+}
+
+struct PatchDownloadJob {
+    uint32_t title_id;
+    std::string disc_path;
+    std::vector<std::string> repo_paths;
+};
+
+struct PatchDownloadResult {
+    uint32_t title_id;
+    std::string repo_path;
+    std::string text; // empty: skipped (doesn't fit, or download failed)
+    bool fits = false;
+    bool failed = false;
+};
+
+std::thread g_patchdl_thread;
+std::mutex g_patchdl_mutex;
+std::atomic<bool> g_patchdl_running{ false };
+std::atomic<int> g_patchdl_done{ 0 };
+int g_patchdl_total = 0;
+bool g_patchdl_finished = false;  // under the mutex
+bool g_patchdl_quiet = false;     // no summary when nothing was found
+std::vector<PatchDownloadResult> g_patchdl_results;   // under the mutex
+std::map<std::string, uint32_t> g_patchdl_new_index;  // under the mutex
+bool g_patchdl_index_failed = false;                  // under the mutex
+
+void PatchDownloadWorker(std::vector<PatchDownloadJob> jobs, bool check_new,
+                         std::set<std::string> known_paths)
+{
+    if (check_new) {
+        // List the repository and read the title IDs of new .jmp files
+        std::string body;
+        std::map<std::string, uint32_t> found;
+        bool ok = HttpGetString(kJmpTreeUrl, body);
+        if (ok) {
+            try {
+                json j = json::parse(body);
+                for (auto &ent : j.value("tree", json::array())) {
+                    std::string p = ent.value("path", "");
+                    std::string ext = Lower(fs::u8path(p).extension().u8string());
+                    if (ent.value("type", "") != "blob" || ext != ".jmp" ||
+                        known_paths.count(p)) {
+                        continue;
+                    }
+                    if (g_scan_cancel) {
+                        break;
+                    }
+                    std::string text, err;
+                    JmpPatch jmp;
+                    found[p] = DownloadJmp(p, text) && ParseJmp(text, jmp, err) &&
+                                       !jmp.other_target
+                                   ? jmp.title_id
+                                   : 0;
+                }
+            } catch (const std::exception &) {
+                ok = false;
+            }
+        }
+        std::lock_guard<std::mutex> lock(g_patchdl_mutex);
+        g_patchdl_new_index = std::move(found);
+        g_patchdl_index_failed = !ok;
+    }
+
+    for (auto &job : jobs) {
+        if (g_scan_cancel) {
+            break;
+        }
+        std::vector<uint8_t> xbe;
+        std::string err;
+        bool have_xbe = ReadDefaultXbe(job.disc_path, xbe, err);
+        for (auto &path : job.repo_paths) {
+            PatchDownloadResult r;
+            r.title_id = job.title_id;
+            r.repo_path = path;
+            std::string text;
+            JmpPatch jmp;
+            if (!DownloadJmp(path, text) || !ParseJmp(text, jmp, err)) {
+                r.failed = true;
+            } else {
+                JmpFit fit = have_xbe ? CheckJmp(jmp, xbe, job.title_id)
+                                      : JmpFit::Unverified;
+                r.fits = fit == JmpFit::Works || fit == JmpFit::Unverified;
+                if (r.fits) {
+                    r.text = std::move(text);
+                }
+            }
+            std::lock_guard<std::mutex> lock(g_patchdl_mutex);
+            g_patchdl_results.push_back(std::move(r));
+        }
+        g_patchdl_done++;
+    }
+    std::lock_guard<std::mutex> lock(g_patchdl_mutex);
+    g_patchdl_finished = true;
+    g_patchdl_running = false;
+}
+
+bool EnsureDownloadsReady()
+{
+    Error *err = NULL;
+    if (!ensure_libcurl_initialized(&err)) {
+        xemu_queue_error_message(err ? error_get_pretty(err)
+                                     : "Could not start downloads");
+        if (err) {
+            error_free(err);
+        }
+        return false;
+    }
+    return true;
+}
+
+// Download patches for one game (title_id != 0, also re-fetches) or for the
+// whole library. check_new also looks for patches added since this build.
+void StartPatchDownload(uint32_t only_title, bool check_new)
+{
+    if (g_patchdl_running) {
+        xemu_queue_notification("Patch download already in progress");
+        return;
+    }
+    if (g_patchdl_thread.joinable()) {
+        g_patchdl_thread.join();
+    }
+    std::vector<PatchDownloadJob> jobs;
+    std::set<uint32_t> seen;
+    for (auto &e : g_entries) {
+        if (!e.valid || seen.count(e.title_id) ||
+            (only_title && e.title_id != only_title)) {
+            continue;
+        }
+        PatchDownloadJob job{ e.title_id, e.path, {} };
+        for (auto &p : OnlinePatchPaths(e.title_id)) {
+            if (only_title || !g_jmp_fetched.count(p)) {
+                job.repo_paths.push_back(p);
+            }
+        }
+        seen.insert(e.title_id);
+        if (!job.repo_paths.empty()) {
+            jobs.push_back(std::move(job));
+        }
+    }
+    if (jobs.empty() && !check_new) {
+        xemu_queue_notification(only_title
+                                    ? "No online patches for this game"
+                                    : "No new online patches for your games");
+        return;
+    }
+    if (!EnsureDownloadsReady()) {
+        return;
+    }
+    std::set<std::string> known;
+    if (check_new) {
+        LoadJmpExtraIndex();
+        for (auto &ent : kJmpIndex) {
+            known.insert(ent.path);
+        }
+        for (auto &[path, id] : g_jmp_extra) {
+            known.insert(path);
+        }
+    }
+    g_patchdl_done = 0;
+    g_patchdl_total = (int)jobs.size();
+    g_patchdl_quiet = false;
+    g_patchdl_running = true;
+    g_patchdl_thread =
+        std::thread(PatchDownloadWorker, std::move(jobs), check_new, std::move(known));
+}
+
+// Write a downloaded patch into the game's patch folder. Returns the file
+// name, or "" if an identical file is already there.
+std::string StoreDownloadedPatch(uint32_t title_id, const std::string &repo_path,
+                                 const std::string &text)
+{
+    fs::path dir = PatchDir(title_id);
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    fs::path base = fs::u8path(repo_path).filename();
+    for (int n = 1; n < 100; n++) {
+        fs::path name = n == 1 ? base
+                               : fs::u8path(base.stem().u8string() + " (" +
+                                            std::to_string(n) + ")" +
+                                            base.extension().u8string());
+        fs::path dst = dir / name;
+        if (fs::exists(dst, ec)) {
+            std::ifstream f(dst, std::ios::binary);
+            std::string have((std::istreambuf_iterator<char>(f)),
+                             std::istreambuf_iterator<char>());
+            if (have == text) {
+                return "";
+            }
+            continue;
+        }
+        std::ofstream f(dst, std::ios::binary | std::ios::trunc);
+        f.write(text.data(), (std::streamsize)text.size());
+        return f ? name.u8string() : "";
+    }
+    return "";
+}
+
+std::string g_patches_path; // game whose Patches window is open (see below)
+void RefreshPatchInfo();
+
+// Main thread: store downloaded patches (switched off) and report
+void MergePatchResults()
+{
+    std::vector<PatchDownloadResult> results;
+    std::map<std::string, uint32_t> new_index;
+    bool finished = false, index_failed = false;
+    {
+        std::lock_guard<std::mutex> lock(g_patchdl_mutex);
+        results.swap(g_patchdl_results);
+        finished = g_patchdl_finished;
+        g_patchdl_finished = false;
+        if (finished) {
+            new_index.swap(g_patchdl_new_index);
+            index_failed = g_patchdl_index_failed;
+            g_patchdl_index_failed = false;
+        }
+    }
+    static int added = 0, skipped = 0, failed = 0;
+    static std::set<uint32_t> games;
+    std::set<uint32_t> touched;
+    for (auto &r : results) {
+        if (r.failed) {
+            failed++;
+            continue;
+        }
+        g_jmp_fetched.insert(r.repo_path);
+        g_dirty = true;
+        if (!r.fits) {
+            skipped++;
+            continue;
+        }
+        std::string name = StoreDownloadedPatch(r.title_id, r.repo_path, r.text);
+        if (name.empty()) {
+            continue;
+        }
+        SyncPatches(r.title_id);
+        for (auto &pi : g_patches[r.title_id]) {
+            if (pi.file == name) {
+                pi.enabled = false; // the user picks which ones to use
+            }
+        }
+        added++;
+        games.insert(r.title_id);
+        touched.insert(r.title_id);
+    }
+    if (!touched.empty()) {
+        LibraryEntry *e = FindEntry(g_patches_path);
+        if (e && touched.count(e->title_id)) {
+            RefreshPatchInfo();
+        }
+    }
+    if (!finished) {
+        return;
+    }
+    int new_count = 0;
+    if (!new_index.empty()) {
+        for (auto &[path, id] : new_index) {
+            g_jmp_extra[path] = id;
+            new_count += id ? 1 : 0;
+        }
+        SaveJmpExtraIndex();
+    }
+    std::string msg;
+    if (index_failed) {
+        msg = "Could not check GitHub for new patches (try again later). ";
+    } else if (!new_index.empty() || g_patchdl_total == 0) {
+        msg = new_count ? string_format("Found %d new patch%s online. ", new_count,
+                                        new_count == 1 ? "" : "es")
+                        : std::string("No new patches online. ");
+    }
+    if (added) {
+        msg += string_format("Downloaded %d patch%s for %d game%s, switched off "
+                             "until you enable them in Patches.",
+                             added, added == 1 ? "" : "es", (int)games.size(),
+                             games.size() == 1 ? "" : "s");
+    } else if (g_patchdl_total) {
+        msg += "No new patches that fit your copies.";
+    }
+    if (skipped) {
+        msg += string_format(" %d made for other versions skipped.", skipped);
+    }
+    if (failed) {
+        msg += string_format(" %d could not be downloaded.", failed);
+    }
+    xemu_queue_notification(msg.c_str());
+    SaveLibrary();
+    added = skipped = failed = 0;
+    games.clear();
+    // Patches for the user's games among the new finds
+    if (new_count && !index_failed) {
+        bool any = false;
+        for (auto &e : g_entries) {
+            for (auto &[path, id] : new_index) {
+                any |= e.valid && id && id == e.title_id;
+            }
+        }
+        if (any) {
+            StartPatchDownload(0, false);
+        }
+    }
+}
+
 bool g_open_patches_popup = false;
 std::string g_patch_check_msg;
 bool g_patch_check_ok = false;
 std::string g_patch_confirm_remove;
+
+// Parsed .jmp files of the game in the Patches window, and how they fit
+struct JmpInfo {
+    bool ok = false;
+    std::string error;
+    JmpPatch jmp;
+    JmpFit fit = JmpFit::Unverified;
+};
+std::map<std::string, JmpInfo> g_jmp_info; // by file name
+bool g_jmp_have_xbe = false;
+
+void RefreshPatchInfo()
+{
+    g_jmp_info.clear();
+    LibraryEntry *e = FindEntry(g_patches_path);
+    if (!e || !e->valid) {
+        return;
+    }
+    std::vector<uint8_t> xbe;
+    std::string err;
+    g_jmp_have_xbe = ReadDefaultXbe(e->path, xbe, err);
+    for (auto &pi : g_patches[e->title_id]) {
+        if (Lower(fs::u8path(pi.file).extension().u8string()) != ".jmp") {
+            continue;
+        }
+        JmpInfo &info = g_jmp_info[pi.file];
+        std::ifstream f(PatchDir(e->title_id) / fs::u8path(pi.file),
+                        std::ios::binary);
+        std::string text((std::istreambuf_iterator<char>(f)),
+                         std::istreambuf_iterator<char>());
+        info.ok = ParseJmp(text, info.jmp, info.error);
+        if (info.ok && g_jmp_have_xbe) {
+            info.fit = CheckJmp(info.jmp, xbe, e->title_id);
+        }
+    }
+}
 
 void OpenPatchesFor(LibraryEntry &e)
 {
@@ -1516,20 +2016,21 @@ void OpenPatchesFor(LibraryEntry &e)
     g_patch_check_msg.clear();
     g_patch_confirm_remove.clear();
     SyncPatches(e.title_id);
+    RefreshPatchInfo();
     g_open_patches_popup = true;
 }
 
 void AddPatchFile(uint32_t title_id)
 {
     static const SDL_DialogFileFilter filters[] = {
-        { "Game patches (*.xbe, *.ips, *.bps)", "xbe;ips;bps" },
+        { "Game patches (*.xbe, *.ips, *.bps, *.jmp)", "xbe;ips;bps;jmp" },
         { "All Files", "*" },
     };
     ShowOpenFileDialog(filters, 2, NULL, [title_id](const char *path) {
         fs::path src = fs::u8path(path);
         if (!IsPatchFile(src)) {
             xemu_queue_error_message(
-                "Unsupported patch file. Use .xbe, .ips or .bps files.");
+                "Unsupported patch file. Use .xbe, .ips, .bps or .jmp files.");
             return;
         }
         std::error_code ec;
@@ -1547,6 +2048,7 @@ void AddPatchFile(uint32_t title_id)
         }
         SyncPatches(title_id);
         g_patch_check_msg.clear();
+        RefreshPatchInfo();
         SaveLibrary();
     });
 }
@@ -1560,7 +2062,98 @@ const char *PatchTypeLabel(const std::string &file)
     if (ext == ".ips") {
         return "IPS patch";
     }
+    if (ext == ".jmp") {
+        return "Magic Patch";
+    }
     return "BPS patch";
+}
+
+ImVec4 JmpFitColor(JmpFit fit)
+{
+    switch (fit) {
+    case JmpFit::Works:
+        return ImVec4(0.45f, 0.86f, 0.16f, 1);
+    case JmpFit::Unverified:
+        return ImVec4(0.75f, 0.75f, 0.75f, 1);
+    default:
+        return ImVec4(1.0f, 0.45f, 0.4f, 1);
+    }
+}
+
+// Under a .jmp patch: how it fits, its notes and its options
+void DrawJmpDetails(PatchItem &pi, const JmpInfo &info)
+{
+    const float s = g_viewport_mgr.m_scale;
+    if (!info.ok) {
+        ImGui::TextColored(JmpFitColor(JmpFit::OtherGame), "Can't read: %s",
+                           info.error.c_str());
+        return;
+    }
+    const JmpPatch &jmp = info.jmp;
+    if (g_jmp_have_xbe) {
+        ImGui::TextColored(JmpFitColor(info.fit), "%s", JmpFitLabel(info.fit));
+        if (info.fit == JmpFit::Unverified) {
+            ImGui::SetItemTooltip("The patch has no checksum, so xemu can't "
+                                  "confirm it was made for your version of "
+                                  "the game. Try it; if the game misbehaves, "
+                                  "switch it off.");
+        }
+        if (!jmp.author.empty()) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("by %s", jmp.author.c_str());
+        }
+    } else if (!jmp.author.empty()) {
+        ImGui::TextDisabled("by %s", jmp.author.c_str());
+    }
+    if (!jmp.notes.empty()) {
+        ImGui::SameLine();
+        ImGui::TextDisabled(ICON_FA_CIRCLE_INFO);
+        if (ImGui::BeginItemTooltip()) {
+            ImGui::PushTextWrapPos(400 * s);
+            ImGui::TextUnformatted(jmp.notes.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
+    }
+    std::vector<bool> on = JmpOptionStates(jmp, pi.toggled);
+    int n_on = 0, n_usable = 0;
+    for (size_t k = 0; k < jmp.options.size(); k++) {
+        if (!jmp.options[k].other_xbe) {
+            n_usable++;
+            n_on += on[k] ? 1 : 0;
+        }
+    }
+    if (jmp.options.size() <= 1) {
+        return;
+    }
+    std::string label = string_format("Options (%d of %d on)###opts", n_on, n_usable);
+    if (!ImGui::TreeNode(label.c_str())) {
+        return;
+    }
+    for (size_t k = 0; k < jmp.options.size(); k++) {
+        const JmpOption &o = jmp.options[k];
+        ImGui::PushID((int)k);
+        bool v = on[k] && !o.other_xbe;
+        ImGui::BeginDisabled(o.other_xbe);
+        if (ImGui::Checkbox(o.name.c_str(), &v)) {
+            auto t = std::find(pi.toggled.begin(), pi.toggled.end(), (int)k);
+            if (t == pi.toggled.end()) {
+                pi.toggled.push_back((int)k);
+            } else {
+                pi.toggled.erase(t);
+            }
+            std::sort(pi.toggled.begin(), pi.toggled.end());
+            g_dirty = true;
+            g_patch_check_msg.clear();
+        }
+        ImGui::EndDisabled();
+        if (o.other_xbe) {
+            ImGui::SetItemTooltip("Changes another program on the disc; only "
+                                  "default.xbe can be patched");
+        }
+        ImGui::PopID();
+    }
+    ImGui::TreePop();
 }
 
 void DrawPatchesPopup()
@@ -1589,14 +2182,18 @@ void DrawPatchesPopup()
     ImGui::TextDisabled("Enabled patches are applied, top to bottom, when you "
                         "play this game from the library. Your disc image is "
                         "never modified. A custom .xbe replaces the game's "
-                        "default.xbe; .ips and .bps patches modify it.");
+                        "default.xbe; .ips, .bps and .jmp patches modify it.");
     ImGui::PopTextWrapPos();
     ImGui::Separator();
 
     std::vector<PatchItem> &items = g_patches[id];
     if (items.empty()) {
         ImGui::Dummy(ImVec2(0, 4 * s));
-        ImGui::TextUnformatted("No patches yet. Add a .xbe, .ips or .bps file.");
+        ImGui::TextUnformatted(OnlinePatchCount(id)
+                                   ? "No patches yet. Download some below, or "
+                                     "add a .xbe, .ips, .bps or .jmp file."
+                                   : "No patches yet. Add a .xbe, .ips, .bps "
+                                     "or .jmp file.");
         ImGui::Dummy(ImVec2(0, 4 * s));
     } else if (ImGui::BeginTable("##patches", 4,
                                  ImGuiTableFlags_RowBg |
@@ -1622,6 +2219,10 @@ void DrawPatchesPopup()
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted(pi.file.c_str());
+            auto info_it = g_jmp_info.find(pi.file);
+            if (info_it != g_jmp_info.end()) {
+                DrawJmpDetails(pi, info_it->second);
+            }
             ImGui::TableNextColumn();
             ImGui::TextDisabled("%s", PatchTypeLabel(pi.file));
             ImGui::TableNextColumn();
@@ -1678,6 +2279,7 @@ void DrawPatchesPopup()
     ImGui::SameLine();
     if (ImGui::Button("Refresh")) {
         SyncPatches(id);
+        RefreshPatchInfo();
         g_patch_check_msg.clear();
     }
     ImGui::SameLine();
@@ -1693,6 +2295,32 @@ void DrawPatchesPopup()
                 : error;
     }
     ImGui::EndDisabled();
+    int online = OnlinePatchCount(id);
+    ImGui::BeginDisabled(g_patchdl_running || online == 0);
+    std::string dl_label =
+        g_patchdl_running
+            ? std::string(ICON_FA_DOWNLOAD "  Downloading...")
+            : online ? string_format(ICON_FA_DOWNLOAD "  Download patches (%d online)",
+                                     online)
+                     : std::string(ICON_FA_DOWNLOAD "  No online patches for this game");
+    if (ImGui::Button(dl_label.c_str())) {
+        StartPatchDownload(id, false);
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip(
+        "Downloads this game's patches from Jay's Magic Patches collection on "
+        "GitHub (widescreen, 60 FPS, 480p/720p and more). Only patches that "
+        "fit your copy of the game are kept, switched off until you enable "
+        "them.");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(g_patchdl_running);
+    if (ImGui::Button("Check for new patches")) {
+        StartPatchDownload(0, true);
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("Look for patches added to the collection since "
+                          "this version of xemu (list from %s)",
+                          kJmpIndexDate);
     if (!g_patch_check_msg.empty()) {
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 600 * s);
         ImGui::TextColored(g_patch_check_ok ? ImVec4(0.45f, 0.86f, 0.16f, 1)
@@ -1903,6 +2531,15 @@ void DrawTile(LibraryEntry &e, float tile_w, int &tex_budget)
                               ImVec2(p.x + ts.x + 3 * s, p.y + ts.y + 2 * s),
                               IM_COL32(16, 124, 16, 230), 3 * s);
             dl->AddText(ImGui::GetFont(), fs, p, IM_COL32(255, 255, 255, 255), badge);
+        }
+        if (e.valid && (EnabledPatchCount(e.title_id) || OnlinePatchCount(e.title_id))) {
+            // Wrench: green when patches are on, grey when some are online
+            bool on = EnabledPatchCount(e.title_id) > 0;
+            ImVec2 c(art_b.x - font_h * 0.5f - 8 * s, art_b.y - font_h * 0.5f - 8 * s);
+            dl->AddCircleFilled(c, font_h * 0.75f, IM_COL32(0, 0, 0, 150));
+            ImVec2 ts = ImGui::CalcTextSize(ICON_FA_WRENCH);
+            dl->AddText(ImVec2(c.x - ts.x / 2, c.y - ts.y / 2),
+                        on ? kAccent : IM_COL32(220, 220, 220, 230), ICON_FA_WRENCH);
         }
         if (st.favorite) {
             ImVec2 p(art_b.x - font_h - 6 * s, a.y + 6 * s);
@@ -3097,6 +3734,17 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
     if (e.valid && g_overrides.count(e.title_id) && g_overrides[e.title_id].enabled) {
         row("Settings", "Custom for this game");
     }
+    if (e.valid) {
+        int online = OnlinePatchCount(e.title_id);
+        if (online) {
+            row("Patches", string_format("%d available online", online));
+            if (ImGui::SmallButton(ICON_FA_DOWNLOAD "  Get patches...")) {
+                OpenPatchesFor(e);
+            }
+            ImGui::SetItemTooltip("Widescreen, 60 FPS, HD and other patches "
+                                  "from Jay's Magic Patches collection");
+        }
+    }
     row("File", fs::u8path(e.path).filename().u8string());
     row("Size", string_format("%.2f GB", e.file_size / 1e9));
     ImGui::Dummy(ImVec2(0, 4 * s));
@@ -3135,6 +3783,18 @@ void GameLibraryWindow::DownloadCovers()
 {
     Open();
     StartCoverDownload();
+}
+
+void GameLibraryWindow::DownloadPatches()
+{
+    Open();
+    StartPatchDownload(0, false);
+}
+
+void GameLibraryWindow::CheckNewPatches()
+{
+    Open();
+    StartPatchDownload(0, true);
 }
 
 void GameLibraryWindow::AddGame()
@@ -3284,6 +3944,7 @@ void GameLibraryWindow::Update()
     RunLeaveAction();
     MergeScanResults();
     MergeCoverResults();
+    MergePatchResults();
     UploadDecodedImages(2);
 
     // Track disc changes: last played + per-game settings
@@ -3633,6 +4294,9 @@ static void GameLibraryShutdown(void)
     }
     if (g_cover_thread.joinable()) {
         g_cover_thread.join();
+    }
+    if (g_patchdl_thread.joinable()) {
+        g_patchdl_thread.join();
     }
     g_preview->Close(false);
     StopImageWorker();

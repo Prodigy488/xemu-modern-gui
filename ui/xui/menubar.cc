@@ -115,6 +115,12 @@ void ShowMainMenu()
             if (ImGui::MenuItem("Download Covers")) {
                 game_library_window.DownloadCovers();
             }
+            if (ImGui::MenuItem("Download Patches")) {
+                game_library_window.DownloadPatches();
+            }
+            if (ImGui::MenuItem("Check for New Patches")) {
+                game_library_window.CheckNewPatches();
+            }
             if (ImGui::MenuItem("Add Game...")) {
                 game_library_window.AddGame();
             }

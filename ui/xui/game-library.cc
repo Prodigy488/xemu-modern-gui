@@ -1562,9 +1562,14 @@ void DrawTile(LibraryEntry &e, float tile_w, int &tex_budget)
     ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(0, 0, 0, 0));
     ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(255, 255, 255, 14));
     ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(255, 255, 255, 24));
-    bool clicked = ImGui::Selectable("##tile", selected,
-                                     ImGuiSelectableFlags_AllowDoubleClick,
-                                     ImVec2(tile_w, tile_h));
+    // NoPadWithHalfSpacing: by default a selectable extends half the item
+    // spacing past each side, which pushed the first column out of view and
+    // clipped the start of titles.
+    bool clicked = ImGui::Selectable(
+        "##tile", selected,
+        ImGuiSelectableFlags_AllowDoubleClick |
+            ImGuiSelectableFlags_NoPadWithHalfSpacing,
+        ImVec2(tile_w, tile_h));
     ImGui::PopStyleColor(3);
     bool hovered = ImGui::IsItemHovered();
     if (clicked) {
@@ -1646,9 +1651,16 @@ void DrawGrid(std::vector<LibraryEntry *> &items, int &tex_budget)
     float tile_w = (110 + 130 * g_config.general.library.tile_size) * s;
     float spacing = 14 * s;
     float avail = ImGui::GetContentRegionAvail().x;
+    // Leave room for the vertical scrollbar even before it appears, so the
+    // layout doesn't jump or spill under it
+    ImGuiWindow *win = ImGui::GetCurrentWindow();
+    if (!win->ScrollbarY) {
+        avail -= ImGui::GetStyle().ScrollbarSize;
+    }
+    avail = std::max(avail, tile_w);
     int cols = std::max(1, (int)((avail + spacing) / (tile_w + spacing)));
-    // Stretch tiles to use the full width
-    tile_w = (avail - spacing * (cols - 1)) / cols;
+    // Stretch tiles to use the full width (whole pixels, so text stays crisp)
+    tile_w = std::floor((avail - spacing * (cols - 1)) / cols);
 
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(spacing, spacing));
     for (size_t i = 0; i < items.size(); i++) {

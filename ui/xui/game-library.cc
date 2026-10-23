@@ -3853,6 +3853,12 @@ const char *const kTabNames[kTabCount] = { "Home",    "Library",
                                            "Insignia", "Media",
                                            "Patches", "Settings" };
 int g_dash_tab = kTabHome;
+
+// Library style: the tabbed dashboard, or the classic single library window
+bool ClassicStyle()
+{
+    return g_config.general.library.style == CONFIG_GENERAL_LIBRARY_STYLE_CLASSIC;
+}
 std::string g_home_path;        // game shown in the Home hero
 std::string g_home_seen_select; // g_selected_path as last seen on Home
 std::string g_media_path;       // game shown on the Media tab
@@ -5019,6 +5025,9 @@ void DrawDashSettingsTab()
                         &g_config.general.library.show_on_startup);
         ImGui::Checkbox("Show what I'm playing on Discord",
                         &g_config.general.discord_presence);
+        label("Library style");
+        ImGui::Combo("##style", &g_config.general.library.style,
+                     "Dashboard (tabs)\0Classic (library window)\0");
         ImGui::Dummy(ImVec2(0, 10 * s));
         if (DashButton(ICON_FA_FOLDER_OPEN "  Game folders...", kBtnGlass, kWhite,
                        ImVec2(0, 36 * s))) {
@@ -5040,6 +5049,47 @@ void DrawDashSettingsTab()
             GameLibraryShowAllSettings();
         }
     });
+}
+
+// Classic style: the library window's own title row
+void DrawClassicHeader()
+{
+    const float s = g_viewport_mgr.m_scale;
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kAccent), ICON_FA_GAMEPAD);
+    ImGui::SameLine();
+    ImGui::PushFont(FontOr(g_font_mgr.m_menu_font_medium));
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 5 * s);
+    ImGui::TextUnformatted("Game Library");
+    ImGui::PopFont();
+    ImGui::SameLine();
+    if (g_scan_running) {
+        ImGui::TextDisabled("Scanning... %d / %d", (int)g_scan_done,
+                            (int)g_scan_total);
+    } else {
+        ImGui::TextDisabled("%d games", (int)g_entries.size());
+    }
+    const char *dvd = g_config.sys.files.dvd_path;
+    const char *close_label = (dvd && dvd[0]) ? ICON_FA_XMARK "  Back to game"
+                                              : ICON_FA_XMARK "  Close";
+    const char *style_label = "Dashboard style";
+    float close_w = ImGui::CalcTextSize(close_label).x +
+                    ImGui::GetStyle().FramePadding.x * 2;
+    float style_w = ImGui::CalcTextSize(style_label).x +
+                    ImGui::GetStyle().FramePadding.x * 2;
+    ImGui::SameLine(ImGui::GetContentRegionMax().x - close_w - style_w -
+                    ImGui::GetStyle().ItemSpacing.x);
+    if (ImGui::Button(style_label)) {
+        g_config.general.library.style = CONFIG_GENERAL_LIBRARY_STYLE_DASHBOARD;
+        SwitchTab(kTabHome);
+    }
+    ImGui::SetItemTooltip("Switch to the tabbed dashboard (also in Games > "
+                          "Library Style)");
+    ImGui::SameLine();
+    if (ImGui::Button(close_label)) {
+        game_library_window.is_open = false;
+    }
+    ImGui::SetItemTooltip("Esc or B");
+    ImGui::Dummy(ImVec2(0, 2 * s));
 }
 
 // The full library: toolbar, grid or list, and the details panel
@@ -5087,7 +5137,11 @@ void DrawLibraryTab(int &tex_budget)
     }
     ImGui::SameLine(0, 2 * s);
     if (ImGui::Button("Insignia")) {
-        SwitchTab(kTabInsignia);
+        if (ClassicStyle()) {
+            g_open_insignia_popup = true;
+        } else {
+            SwitchTab(kTabInsignia);
+        }
     }
     {
         int st = g_insignia_status;
@@ -5144,9 +5198,11 @@ void DrawLibraryTab(int &tex_budget)
     }
     ImGui::EndDisabled();
     ImGui::SetItemTooltip("Look for new or removed games and covers");
-    ImGui::SameLine();
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled("%d games", (int)g_entries.size());
+    if (!ClassicStyle()) { // Classic shows the count in its title row
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%d games", (int)g_entries.size());
+    }
     ImGui::Dummy(ImVec2(0, 4 * s));
 
     std::vector<LibraryEntry *> items;
@@ -5215,13 +5271,17 @@ void GameLibraryWindow::Open()
 {
     is_open = true;
     g_focus_requested = true;
-    g_home_focus_play = g_dash_tab == kTabHome;
+    g_home_focus_play = !ClassicStyle() && g_dash_tab == kTabHome;
 }
 
 void GameLibraryWindow::OpenInsignia()
 {
     Open();
-    SwitchTab(kTabInsignia);
+    if (ClassicStyle()) {
+        g_open_insignia_popup = true;
+    } else {
+        SwitchTab(kTabInsignia);
+    }
 }
 
 void GameLibraryWindow::DownloadCovers()
@@ -5471,12 +5531,15 @@ void GameLibraryWindow::Draw()
         { ImGuiCol_NavCursor, ImVec4(0.384f, 0.792f, 0.075f, 1) },
         { ImGuiCol_TextSelectedBg, ImVec4(0.384f, 0.792f, 0.075f, 0.35f) },
     };
-    const int theme_count = (int)(sizeof(theme) / sizeof(theme[0]));
-    for (auto &c : theme) {
-        ImGui::PushStyleColor(c.idx, c.col);
+    const bool classic = ClassicStyle();
+    const int theme_count = classic ? 0 : (int)(sizeof(theme) / sizeof(theme[0]));
+    for (int i = 0; i < theme_count; i++) {
+        ImGui::PushStyleColor(theme[i].idx, theme[i].col);
     }
     // Slightly see-through so the boot animation or game shows behind it
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.06f, 0.05f, 0.82f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, classic
+                                                 ? ImVec4(0.06f, 0.06f, 0.07f, 0.80f)
+                                                 : ImVec4(0.04f, 0.06f, 0.05f, 0.82f));
     bool visible = ImGui::Begin(
         "###Game Library", NULL,
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
@@ -5492,14 +5555,16 @@ void GameLibraryWindow::Draw()
         return;
     }
 
-    // Dashboard: background, top bar with tabs (LB/RB to switch)
-    {
+    if (classic) {
+        DrawClassicHeader();
+    } else {
+        // Dashboard: background, top bar with tabs (LB/RB to switch)
         ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
         DrawDashBackground(ImGui::GetWindowDrawList(), wp,
                            ImVec2(wp.x + ws.x, wp.y + ws.y));
+        DrawDashTopBar();
     }
-    DrawDashTopBar();
-    if (!ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) &&
+    if (!classic && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) &&
         !ImGui::IsAnyItemActive() &&
         ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
         ImGuiIO &io = ImGui::GetIO();
@@ -5542,36 +5607,40 @@ void GameLibraryWindow::Draw()
         return;
     }
 
-    const float hints_h = ImGui::GetFontSize() * 2.2f;
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
-    ImGui::BeginChild("##tabcontent", ImVec2(0, -hints_h), ImGuiChildFlags_NavFlattened,
-                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-    ImGui::PopStyleColor();
     int tex_budget = 6; // decode at most a few images per frame
-    switch (g_dash_tab) {
-    case kTabHome:
-        DrawHomeTab(tex_budget);
-        break;
-    case kTabInsignia:
-        DrawInsigniaTab(tex_budget);
-        break;
-    case kTabMedia:
-        DrawMediaTab(tex_budget);
-        break;
-    case kTabPatches:
-        DrawPatchesTab(tex_budget);
-        break;
-    case kTabSettings:
-        DrawDashSettingsTab();
-        break;
-    default:
+    if (classic) {
         DrawLibraryTab(tex_budget);
-        break;
+    } else {
+        const float hints_h = ImGui::GetFontSize() * 2.2f;
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+        ImGui::BeginChild("##tabcontent", ImVec2(0, -hints_h), ImGuiChildFlags_NavFlattened,
+                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        ImGui::PopStyleColor();
+        switch (g_dash_tab) {
+        case kTabHome:
+            DrawHomeTab(tex_budget);
+            break;
+        case kTabInsignia:
+            DrawInsigniaTab(tex_budget);
+            break;
+        case kTabMedia:
+            DrawMediaTab(tex_budget);
+            break;
+        case kTabPatches:
+            DrawPatchesTab(tex_budget);
+            break;
+        case kTabSettings:
+            DrawDashSettingsTab();
+            break;
+        default:
+            DrawLibraryTab(tex_budget);
+            break;
+        }
+        ImGui::EndChild();
+        DrawDashHints(ImVec2(ImGui::GetCursorScreenPos().x,
+                             ImGui::GetCursorScreenPos().y + 6 * s),
+                      ImGui::GetContentRegionAvail().x);
     }
-    ImGui::EndChild();
-    DrawDashHints(ImVec2(ImGui::GetCursorScreenPos().x,
-                         ImGui::GetCursorScreenPos().y + 6 * s),
-                  ImGui::GetContentRegionAvail().x);
 
     DrawSettingsPopup();
     DrawFoldersPopup();

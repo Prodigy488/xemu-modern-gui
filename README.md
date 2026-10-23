@@ -23,9 +23,13 @@ shared.
 
 ## What's added
 
-  -New in v1.1: Discord status. While you play, your Discord profile shows the game you're playing, with its cover, title ID, play time and an Insignia badge for online-capable games. Turn it off in Settings > General > Discord status. Requires the Discord app running on the same PC.
-  
-  - **Dashboard** with tabs, switched with LB / RB:
+- **New in v1.1: Discord status.** While you play, your Discord profile shows
+  the game you're playing, with its cover, title ID, play time and an Insignia
+  badge for online-capable games. Turn it off in Settings > General > Discord
+  status. Requires the Discord app running on the same PC.
+- **Two library styles**, switchable any time from Games > Library Style or
+  Settings: the tabbed **Dashboard** or the **Classic** single library window.
+- **Dashboard** with tabs, switched with LB / RB:
   - **Home:** continue your last game.
   - **Library:** your full game collection.
   - **Insignia:** online status, your online-capable games and setup steps.

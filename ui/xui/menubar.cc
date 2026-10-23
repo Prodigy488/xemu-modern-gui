@@ -132,6 +132,20 @@ void ShowMainMenu()
             if (ImGui::MenuItem("Manage Folders...")) {
                 game_library_window.OpenFolderManager();
             }
+            if (ImGui::BeginMenu("Library Style")) {
+                int &style = g_config.general.library.style;
+                if (ImGui::MenuItem("Dashboard", NULL,
+                                    style == CONFIG_GENERAL_LIBRARY_STYLE_DASHBOARD)) {
+                    style = CONFIG_GENERAL_LIBRARY_STYLE_DASHBOARD;
+                    game_library_window.Open();
+                }
+                if (ImGui::MenuItem("Classic", NULL,
+                                    style == CONFIG_GENERAL_LIBRARY_STYLE_CLASSIC)) {
+                    style = CONFIG_GENERAL_LIBRARY_STYLE_CLASSIC;
+                    game_library_window.Open();
+                }
+                ImGui::EndMenu();
+            }
             ImGui::Separator();
             auto recent = game_library_window.GetRecentGames(8);
             if (recent.empty()) {

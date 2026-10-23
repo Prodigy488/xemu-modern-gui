@@ -83,6 +83,9 @@ void MainMenuGeneralView::Draw()
            "Skip the full Xbox boot animation sequence");
     Toggle("Discord status", &g_config.general.discord_presence,
            "Show the game you're playing on your Discord profile");
+    ChevronCombo("Library style", &g_config.general.library.style,
+                 "Dashboard\0Classic\0",
+                 "Tabbed dashboard, or the classic single library window");
     FilePicker("Screenshot output directory", g_config.general.screenshot_dir,
                nullptr, 0, true, [](const char *path) {
                    xemu_settings_set_string(&g_config.general.screenshot_dir, path);

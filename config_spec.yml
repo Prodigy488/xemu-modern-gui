@@ -26,6 +26,10 @@ general:
     auto_resume:
       type: bool
       default: false
+    style:
+      type: enum
+      values: [dashboard, classic]
+      default: dashboard
   skip_boot_anim: bool
   discord_presence:
     type: bool

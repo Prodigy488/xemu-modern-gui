@@ -17,6 +17,10 @@ quality-of-life features on top of the official release.
 |---|---|---|
 | ![Library](docs/screenshots/library.jpg) | ![Insignia](docs/screenshots/insignia.jpg) | ![Classic](docs/screenshots/classic.jpg) |
 
+| Blades style | Metro style |
+|---|---|
+| ![Blades](docs/screenshots/blades.jpg) | ![Metro](docs/screenshots/metro.jpg) |
+
 <sub>Screenshots use placeholder cover art.</sub>
 
 ## Download
@@ -35,6 +39,9 @@ shared.
   the game you're playing, with its cover, title ID, play time and an Insignia
   badge for online-capable games. Turn it off in Settings > General > Discord
   status. Requires the Discord app running on the same PC.
+- **New in v1.5: Blades and Metro styles.** Two more dashboard layouts:
+  sliding side-by-side panels, or a start page of live tiles. Save states
+  also get a right-click menu (load, delete, show file).
 - **New in v1.5: Xbox hard drive explorer.** A Drive tab to browse the
   emulated hard drive's C, E, F and X/Y/Z partitions and copy files and
   folders in and out, rename and delete (uses
@@ -56,8 +63,9 @@ shared.
 - **New in v1.3: Neon theme.** A dark, cyberpunk look for the dashboard:
   near-black backgrounds, cyan and magenta accents, cut-corner panels and HUD
   labels. The previous green look stays available (Games > Library Style).
-- **Two library styles**, switchable any time from Games > Library Style or
-  Settings: the tabbed **Dashboard** or the **Classic** single library window.
+- **Four library styles**, switchable any time from Games > Library Style or
+  Settings: the tabbed **Dashboard**, **Blades**, **Metro**, or the
+  **Classic** single library window.
 - **Dashboard** with tabs, switched with LB / RB:
   - **Home:** continue your last game.
   - **Library:** your full game collection.

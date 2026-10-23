@@ -148,6 +148,16 @@ void ShowMainMenu()
                     style = CONFIG_GENERAL_LIBRARY_STYLE_CLASSIC;
                     game_library_window.Open();
                 }
+                if (ImGui::MenuItem("Blades", NULL,
+                                    style == CONFIG_GENERAL_LIBRARY_STYLE_BLADES)) {
+                    style = CONFIG_GENERAL_LIBRARY_STYLE_BLADES;
+                    game_library_window.Open();
+                }
+                if (ImGui::MenuItem("Metro", NULL,
+                                    style == CONFIG_GENERAL_LIBRARY_STYLE_METRO)) {
+                    style = CONFIG_GENERAL_LIBRARY_STYLE_METRO;
+                    game_library_window.Open();
+                }
                 ImGui::Separator();
                 ImGui::TextDisabled("Dashboard theme");
                 int &theme = g_config.general.library.theme;

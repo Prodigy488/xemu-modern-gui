@@ -85,8 +85,8 @@ void MainMenuGeneralView::Draw()
     Toggle("Discord status", &g_config.general.discord_presence,
            "Show the game you're playing on your Discord profile");
     ChevronCombo("Library style", &g_config.general.library.style,
-                 "Dashboard\0Classic\0",
-                 "Tabbed dashboard, or the classic single library window");
+                 "Dashboard\0Classic\0Blades\0Metro\0",
+                 "Tabbed dashboard, classic window, sliding blades or live tiles");
     ChevronCombo("Dashboard theme", &g_config.general.library.theme,
                  "Neon\0Green\0",
                  "Dark with cyan and magenta, or xemu green");

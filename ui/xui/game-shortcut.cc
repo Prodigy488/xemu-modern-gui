@@ -17,6 +17,7 @@
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <objidl.h>
+#include <shellapi.h>
 
 static std::wstring Widen(const std::string &s)
 {
@@ -105,7 +106,26 @@ bool CreateGameDesktopShortcut(const std::string &title,
     return ok;
 }
 
+bool RevealFileInFolder(const std::string &path)
+{
+    std::wstring p = Widen(path);
+    for (auto &c : p) {
+        if (c == L'/') {
+            c = L'\\';
+        }
+    }
+    std::wstring args = L"/select,\"" + p + L"\"";
+    HINSTANCE r = ShellExecuteW(NULL, L"open", L"explorer.exe", args.c_str(),
+                                NULL, SW_SHOWNORMAL);
+    return (INT_PTR)r > 32;
+}
+
 #else
+
+bool RevealFileInFolder(const std::string &)
+{
+    return false;
+}
 
 bool GameShortcutsSupported(void)
 {

@@ -57,3 +57,5 @@ void GameLibraryShowAllSettings(void);
 // resume point and then eject itself.
 bool GameLibraryInterceptEject(void);
 void GameLibraryAfterSettingsSave(void);
+// A dialog used Esc / B this frame, so the library shouldn't also close
+void GameLibraryConsumeBack(void);

@@ -15,3 +15,7 @@ bool CreateGameDesktopShortcut(const std::string &title,
                                const std::string &image_path,
                                std::string &error);
 bool GameShortcutsSupported(void);
+
+// Open the folder containing `path` (UTF-8) with the file selected.
+// Windows only; returns false elsewhere.
+bool RevealFileInFolder(const std::string &path);

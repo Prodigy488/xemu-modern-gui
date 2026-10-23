@@ -17,6 +17,7 @@
 #include <memory>
 
 #include "common.hh"
+#include "game-library.hh"
 #include "IconsFontAwesome6.h"
 #include "misc.hh"
 #include "viewport-manager.hh"
@@ -526,6 +527,17 @@ void SimpleWrite(const std::string &title, std::function<bool(std::string *)> op
     g_list_dirty = true;
 }
 
+// Esc or B in a dialog: cancel it without also closing the dashboard
+bool CancelPressed()
+{
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+        ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
+        GameLibraryConsumeBack();
+        return true;
+    }
+    return false;
+}
+
 char g_name_buf[64];
 bool g_focus_name = false;
 
@@ -762,7 +774,7 @@ bool NamePopup(const char *id, const char *title, const char *button,
         }
         ImGui::EndDisabled();
         ImGui::SameLine();
-        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        if (ImGui::Button("Cancel") || CancelPressed()) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -803,7 +815,7 @@ void DrawPopups()
             DeleteSelected();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        if (ImGui::Button("Cancel") || CancelPressed()) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -828,7 +840,7 @@ void DrawPopups()
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        if (ImGui::Button("Cancel") || CancelPressed()) {
             g_pending_write.reset();
             ImGui::CloseCurrentPopup();
         }

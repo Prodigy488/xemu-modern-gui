@@ -3896,6 +3896,53 @@ std::vector<int> SnapshotsFor(const LibraryEntry &e)
     return mine;
 }
 
+// Open the folder containing path, with the file selected where possible
+void RevealInFolder(const std::string &path)
+{
+    if (!RevealFileInFolder(path)) {
+        SDL_OpenURL(
+            ("file:///" + fs::u8path(path).parent_path().generic_u8string()).c_str());
+    }
+}
+
+std::string g_delete_state; // save state waiting for delete confirmation
+int g_back_consumed_frame = -1;
+
+// Delete confirmation for a save state (opened from its right-click menu)
+void DrawDeleteStatePopup()
+{
+    if (!g_delete_state.empty() &&
+        !ImGui::IsPopupOpen("##delete-state", ImGuiPopupFlags_AnyPopupId)) {
+        ImGui::OpenPopup("##delete-state");
+    }
+    if (ImGui::BeginPopupModal("##delete-state", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Delete the save state \"%s\"?", g_delete_state.c_str());
+        ImGui::TextDisabled("This can't be undone.");
+        if (ImGui::Button(ICON_FA_TRASH "  Delete")) {
+            Error *err = NULL;
+            xemu_snapshots_delete(g_delete_state.c_str(), &err);
+            if (err) {
+                xemu_queue_error_message(error_get_pretty(err));
+                error_free(err);
+            } else {
+                xemu_queue_notification("Save state deleted");
+            }
+            g_snapshot_mgr.Refresh();
+            g_delete_state.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape) ||
+            ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight)) {
+            g_delete_state.clear();
+            GameLibraryConsumeBack();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+}
+
 void DrawSaveStates(LibraryEntry &e, float w, int max_shown = 6)
 {
     const float s = g_viewport_mgr.m_scale;
@@ -3920,7 +3967,32 @@ void DrawSaveStates(LibraryEntry &e, float w, int max_shown = 6)
         ImGui::PushID(info.name);
         ImVec2 p = ImGui::GetCursorScreenPos();
         bool clicked = ImGui::Selectable("##snap", false, 0, ImVec2(w, thumb_h));
-        ImGui::SetItemTooltip("Load this save state");
+        ImGui::SetItemTooltip("Load this save state (right-click or Y for more)");
+        // Right-click (or Y on a controller): load, delete, show the file
+        if (ImGui::IsItemFocused() && ImGui::GetIO().NavVisible &&
+            ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false)) {
+            ImGui::OpenPopup("##snapmenu");
+        }
+        if (ImGui::BeginPopupContextItem("##snapmenu")) {
+            ImGui::TextDisabled("%s", info.name);
+            ImGui::Separator();
+            if (ImGui::MenuItem(ICON_FA_PLAY "  Load")) {
+                load_name = info.name;
+            }
+            if (ImGui::MenuItem(ICON_FA_TRASH "  Delete...")) {
+                g_delete_state = info.name;
+            }
+            const char *hdd = g_config.sys.files.hdd_path;
+            if (ImGui::MenuItem(ICON_FA_FOLDER_OPEN "  Show file location", NULL,
+                                false, hdd && hdd[0])) {
+                RevealInFolder(hdd);
+            }
+            ImGui::SetItemTooltip("Save states are stored inside your Xbox hard "
+                                  "disk image (%s)",
+                                  hdd && hdd[0] ? fs::u8path(hdd).filename().u8string().c_str()
+                                                : "none");
+            ImGui::EndPopup();
+        }
         ImDrawList *dl = ImGui::GetWindowDrawList();
         if (d.gl_thumbnail) {
             dl->AddImageRounded((ImTextureID)(intptr_t)d.gl_thumbnail, p,
@@ -3954,6 +4026,7 @@ void DrawSaveStates(LibraryEntry &e, float w, int max_shown = 6)
         ActionLoadSnapshotChecked(load_name.c_str());
         game_library_window.is_open = false;
     }
+    DrawDeleteStatePopup();
 }
 
 // This game's screenshots (xemu-<TITLEID>-*.png in the screenshot folder),
@@ -5874,7 +5947,8 @@ void DrawDashSettingsTab()
                         &g_config.display.ui.use_animations);
         label("Library style");
         ImGui::Combo("##style", &g_config.general.library.style,
-                     "Dashboard (tabs)\0Classic (library window)\0");
+                     "Dashboard (tabs)\0Classic (library window)\0"
+                     "Blades (sliding panels)\0Metro (live tiles)\0");
         label("Dashboard theme");
         ImGui::Combo("##theme", &g_config.general.library.theme,
                      "Neon (dark, cyan and magenta)\0Green (xemu)\0");
@@ -6344,6 +6418,541 @@ void GameLibraryWindow::Update()
     }
 }
 
+// ---- Blades and Metro dashboard styles -------------------------------------
+//
+// Two more ways to lay out the same dashboard sections. Blades: full-height
+// panels side by side; the current one opens wide and the rest stay as slim
+// labelled strips you flip through. Metro: flat, coloured live tiles on a
+// sideways-scrolling start page, with big lowercase section headers.
+
+bool BladesStyle()
+{
+    return g_config.general.library.style == CONFIG_GENERAL_LIBRARY_STYLE_BLADES;
+}
+
+bool MetroStyle()
+{
+    return g_config.general.library.style == CONFIG_GENERAL_LIBRARY_STYLE_METRO;
+}
+
+void DrawTabContent(int tab, int &tex_budget)
+{
+    switch (tab) {
+    case kTabHome:
+        DrawHomeTab(tex_budget);
+        break;
+    case kTabInsignia:
+        DrawInsigniaTab(tex_budget);
+        break;
+    case kTabMedia:
+        DrawMediaTab(tex_budget);
+        break;
+    case kTabDrive:
+        DrawDriveTab();
+        break;
+    case kTabPatches:
+        DrawPatchesTab(tex_budget);
+        break;
+    case kTabSettings:
+        DrawDashSettingsTab();
+        break;
+    default:
+        DrawLibraryTab(tex_budget);
+        break;
+    }
+}
+
+// Text turned a quarter turn, reading from bottom to top, starting at pos
+void AddTextVertical(ImDrawList *dl, ImFont *font, float size, ImVec2 pos,
+                     ImU32 col, const char *text)
+{
+    dl->PushClipRectFullScreen();
+    int start = dl->VtxBuffer.Size;
+    dl->AddText(font, size, pos, col, text);
+    for (int i = start; i < dl->VtxBuffer.Size; i++) {
+        ImVec2 &p = dl->VtxBuffer[i].pos;
+        float dx = p.x - pos.x, dy = p.y - pos.y;
+        p = ImVec2(pos.x + dy, pos.y - dx);
+    }
+    dl->PopClipRect();
+}
+
+// Insignia status as a short word and its colour
+void InsigniaWord(const char **word, ImU32 *col)
+{
+    CheckInsigniaStatus(false);
+    *word = "insignia";
+    *col = IM_COL32(150, 150, 150, 255);
+    switch ((InsigniaStatus)(int)g_insignia_status) {
+    case InsigniaStatus::Up:
+        *word = "insignia online";
+        *col = T().ok;
+        break;
+    case InsigniaStatus::Maintenance:
+        *word = "insignia maintenance";
+        *col = T().warn;
+        break;
+    case InsigniaStatus::Down:
+        *word = "insignia offline";
+        *col = T().bad;
+        break;
+    default:
+        break;
+    }
+}
+
+// Status, clock and close, right-aligned at (right, y)
+void DrawStyleStatus(float right, float y)
+{
+    const float s = g_viewport_mgr.m_scale;
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    const char *dvd = g_config.sys.files.dvd_path;
+    const char *close_label = (dvd && dvd[0]) ? ICON_FA_XMARK "  Back to game"
+                                              : ICON_FA_XMARK "  Close";
+    float close_w = ImGui::CalcTextSize(close_label).x + 28 * s;
+    float bh = 32 * s;
+    ImGui::SetCursorScreenPos(ImVec2(right - close_w, y));
+    if (DashButton(close_label, T().glass, T().white, ImVec2(close_w, bh))) {
+        game_library_window.is_open = false;
+    }
+    char clock[32] = "";
+    time_t now = time(NULL);
+    struct tm *tm = localtime(&now);
+    if (tm) {
+        strftime(clock, sizeof(clock), "%H:%M", tm);
+    }
+    float fh = ImGui::GetFontSize();
+    float ty = y + (bh - fh) / 2;
+    float x = right - close_w - 18 * s - ImGui::CalcTextSize(clock).x;
+    dl->AddText(ImVec2(x, ty), IM_COL32(230, 230, 230, 255), clock);
+    const char *word;
+    ImU32 col;
+    InsigniaWord(&word, &col);
+    float ww = ImGui::CalcTextSize(word).x;
+    x -= 22 * s + ww;
+    dl->AddCircleFilled(ImVec2(x - 10 * s, ty + fh / 2), 4.5f * s, col, 16);
+    dl->AddText(ImVec2(x, ty), col, word);
+}
+
+// Section colours shared by Blades and Metro
+ImU32 SectionColor(int tab)
+{
+    static const ImU32 green[kTabCount] = {
+        IM_COL32(86, 178, 22, 255),  IM_COL32(32, 132, 72, 255),
+        IM_COL32(0, 150, 136, 255),  IM_COL32(52, 120, 200, 255),
+        IM_COL32(110, 90, 190, 255), IM_COL32(214, 120, 30, 255),
+        IM_COL32(96, 110, 104, 255),
+    };
+    static const ImU32 neon[kTabCount] = {
+        IM_COL32(0, 200, 230, 255),  IM_COL32(40, 110, 255, 255),
+        IM_COL32(57, 210, 130, 255), IM_COL32(150, 70, 255, 255),
+        IM_COL32(255, 46, 136, 255), IM_COL32(255, 160, 0, 255),
+        IM_COL32(110, 116, 150, 255),
+    };
+    int i = tab < 0 ? 0 : (tab >= kTabCount ? kTabCount - 1 : tab);
+    return (T().neon ? neon : green)[i];
+}
+
+// Ease a value toward a target, frame-rate independent
+float Approach(float cur, float target, float speed)
+{
+    if (!Animations()) {
+        return target;
+    }
+    float k = 1.0f - expf(-speed * ImGui::GetIO().DeltaTime);
+    float v = cur + (target - cur) * k;
+    return fabsf(target - v) < 0.5f ? target : v;
+}
+
+// ---- Blades ----
+
+void DrawBladesFrame(int &tex_budget)
+{
+    const float s = g_viewport_mgr.m_scale;
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+    ImVec2 wb(wp.x + ws.x, wp.y + ws.y);
+
+    // Backdrop: soft vertical light behind the panels
+    ImU32 glow = SectionColor(g_dash_tab);
+    dl->AddRectFilledMultiColor(wp, wb, IM_COL32(10, 12, 16, 200),
+                                IM_COL32(10, 12, 16, 200), IM_COL32(4, 5, 8, 220),
+                                IM_COL32(4, 5, 8, 220));
+    for (int i = 0; i < 5; i++) {
+        dl->AddCircleFilled(ImVec2(wp.x + ws.x * 0.5f, wp.y + ws.y * 1.1f),
+                            ws.x * (0.25f + i * 0.08f), Alpha(glow, 6), 64);
+    }
+    if (Animations()) {
+        DrawDashMotion(dl, wp, wb);
+    }
+
+    // Header: brand on the left, status on the right
+    const float pad = 20 * s, head_h = 54 * s;
+    ImFont *big = FontOr(g_font_mgr.m_menu_font_medium);
+    dl->AddText(big, big->FontSize, ImVec2(wp.x + pad, wp.y + 14 * s),
+                IM_COL32(235, 235, 235, 255), "xemu");
+    DrawStyleStatus(wb.x - pad, wp.y + 12 * s);
+
+    // Blade positions: strips on either side of the open blade
+    const float hints_h = ImGui::GetFontSize() * 2.2f;
+    ImVec2 a(wp.x + pad, wp.y + head_h), b(wb.x - pad, wb.y - hints_h - 4 * s);
+    const float sw = 46 * s, gap = 6 * s;
+    static float pos_x[kTabCount];
+    static bool init = false;
+    float target[kTabCount];
+    for (int i = 0; i < kTabCount; i++) {
+        if (i <= g_dash_tab) {
+            target[i] = a.x + i * (sw + gap);
+        } else {
+            target[i] = b.x - (kTabCount - i) * (sw + gap) + gap;
+        }
+        pos_x[i] = init ? Approach(pos_x[i], target[i], 14.0f) : target[i];
+    }
+    init = true;
+
+    // Strips (all but the open blade)
+    ImFont *label_font = FontOr(g_font_mgr.m_menu_font_small);
+    for (int i = 0; i < kTabCount; i++) {
+        if (i == g_dash_tab) {
+            continue;
+        }
+        float x0 = pos_x[i];
+        ImVec2 p(x0, a.y), q(x0 + sw, b.y);
+        ImU32 col = SectionColor(i);
+        ImGui::SetCursorScreenPos(p);
+        ImGui::PushID(i);
+        bool clicked = ImGui::InvisibleButton("##blade", ImVec2(sw, b.y - a.y));
+        bool hov = ImGui::IsItemHovered();
+        ImGui::PopID();
+        ShapeFill(dl, p, q, IM_COL32(18, 20, 26, hov ? 235 : 210), 10 * s);
+        dl->AddRectFilledMultiColor(p, ImVec2(q.x, p.y + (q.y - p.y) * 0.5f),
+                                    Alpha(col, hov ? 90 : 60), Alpha(col, hov ? 90 : 60),
+                                    Alpha(col, 0), Alpha(col, 0));
+        ShapeStroke(dl, p, q, Alpha(col, hov ? 200 : 120), 10 * s, 1.0f * s);
+        dl->AddRectFilled(ImVec2(p.x + 6 * s, p.y + 10 * s),
+                          ImVec2(p.x + 9 * s, p.y + 40 * s), col);
+        std::string name = kTabNames[i];
+        std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+        float fs = label_font->FontSize;
+        AddTextVertical(dl, label_font, fs,
+                        ImVec2(p.x + (sw - fs) / 2, q.y - 16 * s),
+                        IM_COL32(235, 235, 235, hov ? 255 : 200), name.c_str());
+        if (clicked) {
+            SwitchTab(i);
+        }
+    }
+
+    // The open blade
+    float ox0 = pos_x[g_dash_tab] + (g_dash_tab > 0 ? 0 : 0);
+    float ox1 = g_dash_tab + 1 < kTabCount ? pos_x[g_dash_tab + 1] - gap : b.x;
+    ImVec2 p(ox0, a.y), q(ox1, b.y);
+    ImU32 col = SectionColor(g_dash_tab);
+    ShapeFill(dl, p, q, IM_COL32(14, 16, 22, 238), 12 * s);
+    dl->AddRectFilledMultiColor(p, ImVec2(q.x, p.y + 90 * s), Alpha(col, 70),
+                                Alpha(col, 20), Alpha(col, 0), Alpha(col, 0));
+    ShapeStroke(dl, p, q, Alpha(col, 170), 12 * s, 1.2f * s);
+    dl->AddRectFilled(ImVec2(p.x, p.y + 12 * s), ImVec2(p.x + 4 * s, q.y - 12 * s),
+                      col);
+    std::string title = kTabNames[g_dash_tab];
+    std::transform(title.begin(), title.end(), title.begin(), ::tolower);
+    ImFont *tf = FontOr(g_font_mgr.m_menu_font);
+    dl->AddText(tf, tf->FontSize, ImVec2(p.x + 22 * s, p.y + 10 * s),
+                IM_COL32(245, 245, 245, 255), title.c_str());
+
+    // Content slides in with the blade
+    float slide = (1.0f - EaseSince(g_anim.tab_t, 0.30f)) * 30 * s;
+    float ty = p.y + tf->FontSize + 22 * s;
+    ImGui::SetCursorScreenPos(ImVec2(p.x + 22 * s + slide, ty));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::BeginChild("##bladecontent",
+                      ImVec2(std::max(10.0f, q.x - p.x - 40 * s),
+                             std::max(10.0f, q.y - ty - 14 * s)),
+                      ImGuiChildFlags_NavFlattened,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleColor();
+    DrawTabContent(g_dash_tab, tex_budget);
+    ImGui::EndChild();
+
+    ImGui::SetCursorScreenPos(ImVec2(wp.x + pad, wb.y - hints_h + 4 * s));
+    DrawDashHints(ImGui::GetCursorScreenPos(), ws.x - 2 * pad);
+}
+
+// ---- Metro ----
+
+// A flat tile; true when chosen. Covers fill the tile when given.
+bool MetroTile(const char *id, ImVec2 pos, ImVec2 size, ImU32 col,
+               const char *icon, const char *label, const char *badge,
+               LibraryEntry *cover, int &tex_budget)
+{
+    const float s = g_viewport_mgr.m_scale;
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImGui::SetCursorScreenPos(pos);
+    bool pressed =
+        ImGui::InvisibleButton(id, size, ImGuiButtonFlags_EnableNav);
+    bool hov = ImGui::IsItemHovered();
+    bool focus = ImGui::IsItemFocused() && ImGui::GetIO().NavVisible;
+    bool held = ImGui::IsItemActive();
+    // Pressed tiles sink in slightly
+    float inset = held ? 3 * s : 0;
+    ImVec2 a(pos.x + inset, pos.y + inset);
+    ImVec2 b(pos.x + size.x - inset, pos.y + size.y - inset);
+    dl->AddRectFilled(a, b, col);
+    if (cover) {
+        EnsureTexture(*cover, tex_budget);
+    }
+    if (cover && cover->tex && cover->tex_w > 0) {
+        // Fill the tile, cropping the cover to its shape
+        float ta = (float)cover->tex_w / cover->tex_h, ra = size.x / size.y;
+        ImVec2 uv0(0, 0), uv1(1, 1);
+        if (ta > ra) {
+            float u = ra / ta;
+            uv0.x = (1 - u) / 2;
+            uv1.x = 1 - uv0.x;
+        } else {
+            float v = ta / ra;
+            uv0.y = (1 - v) / 2 * 0.6f; // keep more of the top (titles)
+            uv1.y = uv0.y + v;
+        }
+        dl->AddImage((ImTextureID)(intptr_t)cover->tex, a, b, uv0, uv1);
+        dl->AddRectFilledMultiColor(ImVec2(a.x, b.y - size.y * 0.42f), b,
+                                    IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0),
+                                    IM_COL32(0, 0, 0, 200), IM_COL32(0, 0, 0, 200));
+    }
+    float fh = ImGui::GetFontSize();
+    if (icon && !(cover && cover->tex)) {
+        // The menu font has the icons merged in at their native size
+        ImFont *f = FontOr(g_font_mgr.m_menu_font);
+        float isz = std::min(f->FontSize, size.y * 0.42f);
+        ImVec2 is = f->CalcTextSizeA(isz, FLT_MAX, 0, icon);
+        dl->AddText(f, isz,
+                    ImVec2(a.x + (b.x - a.x - is.x) / 2, a.y + (b.y - a.y - is.y) / 2 - fh * 0.4f),
+                    IM_COL32_WHITE, icon);
+    }
+    if (label) {
+        dl->PushClipRect(a, b, true);
+        dl->AddText(ImVec2(a.x + 10 * s, b.y - fh - 8 * s), IM_COL32_WHITE, label);
+        dl->PopClipRect();
+    }
+    if (badge && badge[0]) {
+        ImVec2 bs = ImGui::CalcTextSize(badge);
+        dl->AddText(ImVec2(b.x - bs.x - 10 * s, a.y + 8 * s), IM_COL32_WHITE, badge);
+    }
+    if (hov || focus) {
+        dl->AddRect(ImVec2(a.x - 2 * s, a.y - 2 * s), ImVec2(b.x + 2 * s, b.y + 2 * s),
+                    IM_COL32_WHITE, 0, 0, (focus ? 3.0f : 2.0f) * s);
+    }
+    return pressed;
+}
+
+void DrawMetroStart(int &tex_budget)
+{
+    const float s = g_viewport_mgr.m_scale;
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    const float gap = 8 * s;
+    // Three rows of square cells
+    float cell = std::floor((avail.y - 2 * gap - 16 * s) / 3);
+    cell = std::max(cell, 60 * s);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::BeginChild("##metrostart", ImVec2(0, 0), ImGuiChildFlags_NavFlattened,
+                      ImGuiWindowFlags_HorizontalScrollbar);
+    ImGui::PopStyleColor();
+    ImVec2 o = ImGui::GetCursorScreenPos();
+    auto at = [&](float col, float row) {
+        return ImVec2(o.x + col * (cell + gap), o.y + row * (cell + gap));
+    };
+    auto sz = [&](float w, float h) {
+        return ImVec2(w * cell + (w - 1) * gap, h * cell + (h - 1) * gap);
+    };
+
+    // Featured game: the one on the Home screen, or the last played
+    LibraryEntry *hero = FindEntry(g_home_path);
+    auto recent = game_library_window.GetRecentGames(12);
+    if (!hero && !recent.empty()) {
+        hero = FindEntry(recent[0].path);
+    }
+    if (g_home_focus_play) {
+        ImGui::SetKeyboardFocusHere();
+        ImGui::SetNavCursorVisible(true);
+        g_home_focus_play = false;
+    }
+    if (hero) {
+        std::string label = hero->DisplayName();
+        if (MetroTile("##hero", at(0, 0), sz(2, 2), SectionColor(kTabHome),
+                      ICON_FA_PLAY, label.c_str(),
+                      SupportsOnline(*hero) ? "ONLINE" : "", hero, tex_budget)) {
+            game_library_window.Launch(hero->path);
+        }
+    } else if (MetroTile("##hero", at(0, 0), sz(2, 2), SectionColor(kTabHome),
+                         ICON_FA_FOLDER_OPEN, "add games", "", nullptr,
+                         tex_budget)) {
+        AddGameFolder();
+    }
+    std::string games = string_format("%d games", (int)g_entries.size());
+    if (MetroTile("##library", at(0, 2), sz(1, 1), SectionColor(kTabLibrary),
+                  ICON_FA_TABLE_CELLS, "library", games.c_str(), nullptr,
+                  tex_budget)) {
+        SwitchTab(kTabLibrary);
+    }
+    const char *word;
+    ImU32 ins_col;
+    InsigniaWord(&word, &ins_col);
+    ImU32 ins_tile = (InsigniaStatus)(int)g_insignia_status == InsigniaStatus::Up
+                         ? SectionColor(kTabInsignia)
+                         : IM_COL32(90, 90, 96, 255);
+    if (MetroTile("##insignia", at(1, 2), sz(1, 1), ins_tile, ICON_FA_NETWORK_WIRED,
+                  word, "", nullptr, tex_budget)) {
+        SwitchTab(kTabInsignia);
+    }
+
+    // Games: recently played first, then the rest of the library, filling
+    // two columns of three next to the featured tile
+    std::vector<LibraryEntry *> games_list;
+    std::set<std::string> shown;
+    if (hero) {
+        shown.insert(hero->path);
+    }
+    for (auto &r : recent) {
+        LibraryEntry *e = FindEntry(r.path);
+        if (e && shown.insert(e->path).second) {
+            games_list.push_back(e);
+        }
+    }
+    std::vector<LibraryEntry *> all;
+    SortedFiltered(all);
+    for (LibraryEntry *e : all) {
+        if (shown.insert(e->path).second) {
+            games_list.push_back(e);
+        }
+    }
+    auto game_tile = [&](int idx, ImVec2 p) {
+        LibraryEntry *e = games_list[idx];
+        ImGui::PushID(idx);
+        std::string label = e->DisplayName();
+        if (MetroTile("##game", p, sz(1, 1), IM_COL32(40, 44, 52, 255),
+                      ICON_FA_COMPACT_DISC, label.c_str(), "", e, tex_budget)) {
+            game_library_window.Launch(e->path);
+        }
+        ImGui::PopID();
+    };
+    const int col0 = 2;
+    int first = std::min<int>(6, (int)games_list.size());
+    for (int i = 0; i < first; i++) {
+        game_tile(i, at(col0 + i / 3, i % 3));
+    }
+    int col1 = col0 + (first + 2) / 3;
+
+    // Sections
+    if (MetroTile("##media", at(col1, 0), sz(1, 1), SectionColor(kTabMedia),
+                  ICON_FA_CAMERA, "media", "", nullptr, tex_budget)) {
+        SwitchTab(kTabMedia);
+    }
+    if (MetroTile("##drive", at(col1 + 1, 0), sz(1, 1), SectionColor(kTabDrive),
+                  ICON_FA_HARD_DRIVE, "drive", "", nullptr, tex_budget)) {
+        SwitchTab(kTabDrive);
+    }
+    int newp = GamesWithNewPatches();
+    std::string pbadge = newp > 0 ? string_format("%d new", newp) : "";
+    if (MetroTile("##patches", at(col1, 1), sz(2, 1), SectionColor(kTabPatches),
+                  ICON_FA_WRENCH, "patches", pbadge.c_str(), nullptr,
+                  tex_budget)) {
+        SwitchTab(kTabPatches);
+    }
+    if (MetroTile("##settings", at(col1, 2), sz(1, 1), SectionColor(kTabSettings),
+                  ICON_FA_GEAR, "settings", "", nullptr, tex_budget)) {
+        SwitchTab(kTabSettings);
+    }
+    if (MetroTile("##folders", at(col1 + 1, 2), sz(1, 1), IM_COL32(60, 64, 72, 255),
+                  ICON_FA_FOLDER_OPEN, "game folders", "", nullptr, tex_budget)) {
+        g_open_folders_popup = true;
+    }
+
+    // The rest of the library
+    int col2 = col1 + 2;
+    int k = 0;
+    for (int i = first; i < (int)games_list.size() && k < 36; i++, k++) {
+        game_tile(i, at(col2 + k / 3, k % 3));
+    }
+    // Right padding so the last column can scroll fully into view
+    ImGui::SetCursorScreenPos(at(col2 + (k + 2) / 3, 0));
+    ImGui::Dummy(ImVec2(gap, sz(1, 3).y));
+    // Mouse wheel scrolls sideways
+    if (ImGui::IsWindowHovered() && ImGui::GetIO().MouseWheel != 0) {
+        ImGui::SetScrollX(ImGui::GetScrollX() - ImGui::GetIO().MouseWheel * 140 * s);
+    }
+    ImGui::EndChild();
+}
+
+void DrawMetroFrame(int &tex_budget)
+{
+    const float s = g_viewport_mgr.m_scale;
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+    ImVec2 wb(wp.x + ws.x, wp.y + ws.y);
+    // Flat backdrop
+    dl->AddRectFilled(wp, wb, T().neon ? IM_COL32(8, 8, 14, 236)
+                                       : IM_COL32(10, 14, 12, 236));
+    const float pad = 28 * s;
+    DrawStyleStatus(wb.x - pad, wp.y + 12 * s);
+
+    // Section headers: big lowercase words that slide so the current one
+    // sits at the left
+    ImFont *hf = FontOr(g_font_mgr.m_menu_font);
+    float hsz = hf->FontSize * 1.35f;
+    float hgap = 30 * s;
+    float xs[kTabCount], x = 0;
+    std::string names[kTabCount];
+    for (int i = 0; i < kTabCount; i++) {
+        names[i] = kTabNames[i];
+        std::transform(names[i].begin(), names[i].end(), names[i].begin(),
+                       ::tolower);
+        xs[i] = x;
+        x += hf->CalcTextSizeA(hsz, FLT_MAX, 0, names[i].c_str()).x + hgap;
+    }
+    static float off = 0;
+    off = Approach(off, -xs[g_dash_tab], 12.0f);
+    float hy = wp.y + 44 * s;
+    float hx0 = wp.x + pad;
+    dl->PushClipRect(ImVec2(wp.x, hy - 4 * s), ImVec2(wb.x, hy + hsz + 6 * s), true);
+    for (int i = 0; i < kTabCount; i++) {
+        ImVec2 p(hx0 + off + xs[i], hy);
+        float w = hf->CalcTextSizeA(hsz, FLT_MAX, 0, names[i].c_str()).x;
+        if (p.x + w < wp.x || p.x > wb.x) {
+            continue;
+        }
+        ImGui::SetCursorScreenPos(p);
+        ImGui::PushID(i);
+        bool clicked = ImGui::InvisibleButton("##pivot", ImVec2(w, hsz));
+        bool hov = ImGui::IsItemHovered();
+        ImGui::PopID();
+        int alpha = i == g_dash_tab ? 255 : (hov ? 150 : 80);
+        dl->AddText(hf, hsz, p, IM_COL32(255, 255, 255, alpha), names[i].c_str());
+        if (clicked) {
+            SwitchTab(i);
+        }
+    }
+    dl->PopClipRect();
+
+    // Page content, sliding in from the right
+    const float hints_h = ImGui::GetFontSize() * 2.2f;
+    float slide = (1.0f - EaseSince(g_anim.tab_t, 0.30f)) * 60 * s;
+    float cy = hy + hsz + 18 * s;
+    ImGui::SetCursorScreenPos(ImVec2(wp.x + pad + slide, cy));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::BeginChild("##metrocontent",
+                      ImVec2(ws.x - 2 * pad, std::max(10.0f, wb.y - cy - hints_h - 6 * s)),
+                      ImGuiChildFlags_NavFlattened,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleColor();
+    if (g_dash_tab == kTabHome) {
+        DrawMetroStart(tex_budget);
+    } else {
+        DrawTabContent(g_dash_tab, tex_budget);
+    }
+    ImGui::EndChild();
+    ImGui::SetCursorScreenPos(ImVec2(wp.x + pad, wb.y - hints_h + 4 * s));
+    DrawDashHints(ImGui::GetCursorScreenPos(), ws.x - 2 * pad);
+}
+
 void GameLibraryWindow::Draw()
 {
     if (!is_open) {
@@ -6456,9 +7065,10 @@ void GameLibraryWindow::Draw()
         return;
     }
 
+    const bool own_frame = BladesStyle() || MetroStyle();
     if (classic) {
         DrawClassicHeader();
-    } else {
+    } else if (!own_frame) {
         // Dashboard: background, top bar with tabs (LB/RB to switch)
         ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
         DrawDashBackground(ImGui::GetWindowDrawList(), wp,
@@ -6512,6 +7122,10 @@ void GameLibraryWindow::Draw()
     int tex_budget = 6; // decode at most a few images per frame
     if (classic) {
         DrawLibraryTab(tex_budget);
+    } else if (BladesStyle()) {
+        DrawBladesFrame(tex_budget);
+    } else if (MetroStyle()) {
+        DrawMetroFrame(tex_budget);
     } else {
         const float hints_h = ImGui::GetFontSize() * 2.2f;
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
@@ -6576,6 +7190,7 @@ void GameLibraryWindow::Draw()
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
         !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) &&
         !ImGui::IsAnyItemActive() &&
+        g_back_consumed_frame != ImGui::GetFrameCount() &&
         (ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
          ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))) {
         is_open = false;
@@ -6584,6 +7199,11 @@ void GameLibraryWindow::Draw()
     ImGui::PopStyleColor(theme_count);
     ImGui::PopStyleVar(theme_vars);
     ImGui::PopStyleVar();
+}
+
+void GameLibraryConsumeBack(void)
+{
+    g_back_consumed_frame = ImGui::GetFrameCount();
 }
 
 bool xemu_hud_intercept_quit(void)

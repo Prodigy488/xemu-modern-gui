@@ -27,6 +27,7 @@
 #include <windows.h>
 #include <mmsystem.h>
 #include "system/runstate.h"
+#include "ui/xemu-settings.h"
 
 static BOOL WINAPI qemu_ctrl_handler(DWORD type)
 {
@@ -86,6 +87,18 @@ static void os_disable_power_throttling(void)
         set_info(GetCurrentProcess(), process_power_throttling, &state,
                  sizeof(state));
     }
+}
+
+void xemu_boost_current_thread(int level)
+{
+    if (!g_config.perf.boost_threads) {
+        return;
+    }
+    /* Never TIME_CRITICAL: a spinning emulation thread at that level can
+     * starve the input and audio threads of the host. */
+    int prio = level >= 2 ? THREAD_PRIORITY_HIGHEST
+                          : THREAD_PRIORITY_ABOVE_NORMAL;
+    SetThreadPriority(GetCurrentThread(), prio);
 }
 
 void os_setup_early_signal_handling(void)

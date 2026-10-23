@@ -67,6 +67,12 @@ void MainMenuGeneralView::Draw()
 
     Toggle("Cache shaders to disk", &g_config.perf.cache_shaders,
            "Reduce stutter in games by caching previously generated shaders");
+#if defined(_WIN32)
+    Toggle("High priority emulation", &g_config.perf.boost_threads,
+           "Give the emulated CPU, GPU and audio a higher priority than "
+           "other programs, for fewer stutters and audio crackles "
+           "(requires restart)");
+#endif
 
     SectionTitle("Miscellaneous");
     Toggle("Skip startup animation", &g_config.general.skip_boot_anim,

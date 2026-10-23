@@ -397,3 +397,6 @@ perf:
   cache_shaders:
     type: bool
     default: true
+  boost_threads:
+    type: bool
+    default: true

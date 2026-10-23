@@ -74,6 +74,7 @@ static void *mttcg_cpu_thread_fn(void *arg)
     force_rcu.cpu = cpu;
     rcu_add_force_rcu_notifier(&force_rcu.notifier);
     tcg_register_thread();
+    xemu_boost_current_thread(1);
 
     bql_lock();
     qemu_thread_get_self(cpu->thread);

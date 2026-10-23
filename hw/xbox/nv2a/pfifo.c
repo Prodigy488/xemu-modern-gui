@@ -457,6 +457,7 @@ void *pfifo_thread(void *arg)
 {
     NV2AState *d = (NV2AState *)arg;
 
+    xemu_boost_current_thread(1);
     pgraph_init_thread(d);
 
     rcu_register_thread();

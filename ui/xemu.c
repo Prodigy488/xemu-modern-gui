@@ -772,6 +772,10 @@ static void *vblank_timer_thread(void *opaque)
     struct xemu_console *scon = (struct xemu_console *)opaque;
     int64_t next_vblank = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
 
+    /* Mostly asleep; a high priority makes it wake on time for steady
+     * frame pacing. */
+    xemu_boost_current_thread(2);
+
     while (!qatomic_read(&qemu_exiting)) {
         // Schedule next vblank at fixed interval (absolute deadline)
         next_vblank += vblank_interval_ns;

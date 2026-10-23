@@ -884,6 +884,17 @@ static inline int platform_does_not_support_system(const char *command)
 }
 #endif /* !HAVE_SYSTEM_FUNCTION */
 
+/*
+ * xemu: raise the scheduling priority of the calling emulation thread so
+ * other programs on the host can't steal its time slices. level 1 = above
+ * normal, 2 = highest. No-op unless enabled in settings (Windows only).
+ */
+#ifdef _WIN32
+void xemu_boost_current_thread(int level);
+#else
+static inline void xemu_boost_current_thread(int level) { (void)level; }
+#endif
+
 #ifdef __cplusplus
 }
 #endif

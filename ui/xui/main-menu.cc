@@ -763,6 +763,18 @@ void MainMenuDisplayView::Draw()
                      "Increase surface scaling factor for higher quality")) {
         nv2a_set_surface_scale_factor(rendering_scale+1);
     }
+    ChevronCombo("Upscaling filter", &g_config.display.filtering,
+                 "Linear\0"
+                 "Nearest\0"
+                 "AMD FidelityFX FSR 1.0\0",
+                 "How the image is scaled up to fit the window. FSR gives "
+                 "sharper edges than Linear at a small GPU cost");
+    if (g_config.display.filtering == CONFIG_DISPLAY_FILTERING_FSR) {
+        char buf[48];
+        snprintf(buf, sizeof(buf), "FSR sharpening strength (%d%%)",
+                 (int)(g_config.display.fsr_sharpness * 100));
+        Slider("FSR sharpness", &g_config.display.fsr_sharpness, buf);
+    }
 
     SectionTitle("Window");
     bool fs = xemu_is_fullscreen();

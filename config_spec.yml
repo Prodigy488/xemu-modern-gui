@@ -239,8 +239,11 @@ display:
       default: 1
   filtering:
     type: enum
-    values: [linear, nearest]
+    values: [linear, nearest, fsr]
     default: linear
+  fsr_sharpness:
+    type: number
+    default: 0.8
   window:
     fullscreen_on_startup: bool
     fullscreen_exclusive: bool

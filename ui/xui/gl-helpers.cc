@@ -41,6 +41,8 @@ enum class ShaderType {
     BlitGamma, // FIMXE: Move to nv2a_get_framebuffer_surface
     Mask,
     Logo,
+    FsrEasu, // AMD FidelityFX Super Resolution 1.0: edge-adaptive upscale
+    FsrRcas, // AMD FidelityFX Super Resolution 1.0: robust contrast-adaptive sharpen
 };
 
 typedef struct DecalShader_
@@ -58,12 +60,20 @@ typedef struct DecalShader_
     GLint color_fill_loc;
     GLint time_loc;
     GLint scale_loc;
+    GLint in_size_loc;
+    GLint out_size_loc;
+    GLint sharpness_loc;
     GLint palette_loc[256];
 } DecalShader;
 
 static DecalShader *g_decal_shader,
                    *g_logo_shader,
-                   *g_framebuffer_shader;
+                   *g_framebuffer_shader,
+                   *g_fsr_easu_shader,
+                   *g_fsr_rcas_shader;
+
+// Intermediate targets for the FSR path, (re)allocated when sizes change
+static Fbo *g_fsr_gamma_fbo, *g_fsr_easu_fbo;
 
 GLint Fbo::vp[4];
 GLint Fbo::original_fbo;
@@ -276,12 +286,227 @@ void main() {
 }
 )";
 
+
+    // AMD FidelityFX Super Resolution 1.0 (FSR 1), ported to GLSL from
+    // ffx_fsr1.h (Copyright (c) 2021 Advanced Micro Devices, Inc., MIT
+    // License). Taps are read with texelFetch rather than textureGather so
+    // the shaders only need GLSL 4.00, matching the rest of this file.
+    //
+    // EASU: edge-adaptive spatial upsampling. Analyses luma gradients in a
+    // 12-tap window to find edge direction and length, then resamples with
+    // a stretched, rotated Lanczos-like kernel and clamps to the local
+    // min/max to avoid ringing.
+    const char *fsr_easu_frag_src = R"(
+#version 400 core
+uniform sampler2D tex;
+uniform vec2 in_InSize;
+uniform vec2 in_OutSize;
+in  vec2 Texcoord;
+out vec4 out_Color;
+
+vec4 Tap(ivec2 p)
+{
+    return texelFetch(tex, clamp(p, ivec2(0), ivec2(in_InSize) - 1), 0);
+}
+
+float Luma(vec3 c)
+{
+    return c.b * 0.5 + (c.r * 0.5 + c.g);
+}
+
+void EasuSet(inout vec2 dir, inout float len, float w,
+             float lA, float lB, float lC, float lD, float lE)
+{
+    //   a
+    // b c d
+    //   e
+    float dc = lD - lC;
+    float cb = lC - lB;
+    float lenX = max(abs(dc), abs(cb));
+    lenX = lenX > 0.0 ? 1.0 / lenX : 0.0;
+    float dirX = lD - lB;
+    dir.x += dirX * w;
+    lenX = clamp(abs(dirX) * lenX, 0.0, 1.0);
+    lenX *= lenX;
+    len += lenX * w;
+
+    float ec = lE - lC;
+    float ca = lC - lA;
+    float lenY = max(abs(ec), abs(ca));
+    lenY = lenY > 0.0 ? 1.0 / lenY : 0.0;
+    float dirY = lE - lA;
+    dir.y += dirY * w;
+    lenY = clamp(abs(dirY) * lenY, 0.0, 1.0);
+    lenY *= lenY;
+    len += lenY * w;
+}
+
+void EasuTap(inout vec3 aC, inout float aW, vec2 off, vec2 dir, vec2 len,
+             float lob, float clp, vec3 c)
+{
+    vec2 v;
+    v.x = (off.x * dir.x) + (off.y * dir.y);
+    v.y = (off.x * -dir.y) + (off.y * dir.x);
+    v *= len;
+    float d2 = min(v.x * v.x + v.y * v.y, clp);
+    float wB = (2.0 / 5.0) * d2 - 1.0;
+    float wA = lob * d2 - 1.0;
+    wB *= wB;
+    wA *= wA;
+    wB = (25.0 / 16.0) * wB - (25.0 / 16.0 - 1.0);
+    float w = wB * wA;
+    aC += c * w;
+    aW += w;
+}
+
+void main()
+{
+    // Output pixel center mapped into input texel space
+    vec2 pp = gl_FragCoord.xy * (in_InSize / in_OutSize) - 0.5;
+    vec2 fp = floor(pp);
+    pp -= fp;
+    ivec2 i0 = ivec2(fp);
+
+    //     b c
+    //   e f g h
+    //   i j k l
+    //     n o
+    vec3 b = Tap(i0 + ivec2( 0, -1)).rgb;
+    vec3 c = Tap(i0 + ivec2( 1, -1)).rgb;
+    vec3 e = Tap(i0 + ivec2(-1,  0)).rgb;
+    vec4 f4 = Tap(i0);
+    vec3 f = f4.rgb;
+    vec3 g = Tap(i0 + ivec2( 1,  0)).rgb;
+    vec3 h = Tap(i0 + ivec2( 2,  0)).rgb;
+    vec3 i = Tap(i0 + ivec2(-1,  1)).rgb;
+    vec3 j = Tap(i0 + ivec2( 0,  1)).rgb;
+    vec3 k = Tap(i0 + ivec2( 1,  1)).rgb;
+    vec3 l = Tap(i0 + ivec2( 2,  1)).rgb;
+    vec3 n = Tap(i0 + ivec2( 0,  2)).rgb;
+    vec3 o = Tap(i0 + ivec2( 1,  2)).rgb;
+
+    float bL = Luma(b), cL = Luma(c), eL = Luma(e), fL = Luma(f);
+    float gL = Luma(g), hL = Luma(h), iL = Luma(i), jL = Luma(j);
+    float kL = Luma(k), lL = Luma(l), nL = Luma(n), oL = Luma(o);
+
+    // Accumulate edge direction and length from the four bilinear quads
+    vec2 dir = vec2(0.0);
+    float len = 0.0;
+    EasuSet(dir, len, (1.0 - pp.x) * (1.0 - pp.y), bL, eL, fL, gL, jL);
+    EasuSet(dir, len, pp.x * (1.0 - pp.y),         cL, fL, gL, hL, kL);
+    EasuSet(dir, len, (1.0 - pp.x) * pp.y,         fL, iL, jL, kL, nL);
+    EasuSet(dir, len, pp.x * pp.y,                 gL, jL, kL, lL, oL);
+
+    // Normalize direction, defaulting to +x when there is no gradient
+    vec2 dir2 = dir * dir;
+    float dirR = dir2.x + dir2.y;
+    bool zro = dirR < (1.0 / 32768.0);
+    dirR = zro ? 1.0 : inversesqrt(dirR);
+    dir.x = zro ? 1.0 : dir.x;
+    dir *= dirR;
+
+    // Shape the kernel from edge length
+    len = len * 0.5;
+    len *= len;
+    float stretch = (dir.x * dir.x + dir.y * dir.y) /
+                    max(abs(dir.x), abs(dir.y));
+    vec2 len2 = vec2(1.0 + (stretch - 1.0) * len, 1.0 - 0.5 * len);
+    float lob = 0.5 + ((1.0 / 4.0 - 0.04) - 0.5) * len;
+    float clp = 1.0 / lob;
+
+    vec3 aC = vec3(0.0);
+    float aW = 0.0;
+    EasuTap(aC, aW, vec2( 0.0, -1.0) - pp, dir, len2, lob, clp, b);
+    EasuTap(aC, aW, vec2( 1.0, -1.0) - pp, dir, len2, lob, clp, c);
+    EasuTap(aC, aW, vec2(-1.0,  1.0) - pp, dir, len2, lob, clp, i);
+    EasuTap(aC, aW, vec2( 0.0,  1.0) - pp, dir, len2, lob, clp, j);
+    EasuTap(aC, aW, vec2( 0.0,  0.0) - pp, dir, len2, lob, clp, f);
+    EasuTap(aC, aW, vec2(-1.0,  0.0) - pp, dir, len2, lob, clp, e);
+    EasuTap(aC, aW, vec2( 1.0,  1.0) - pp, dir, len2, lob, clp, k);
+    EasuTap(aC, aW, vec2( 2.0,  1.0) - pp, dir, len2, lob, clp, l);
+    EasuTap(aC, aW, vec2( 2.0,  0.0) - pp, dir, len2, lob, clp, h);
+    EasuTap(aC, aW, vec2( 1.0,  0.0) - pp, dir, len2, lob, clp, g);
+    EasuTap(aC, aW, vec2( 1.0,  2.0) - pp, dir, len2, lob, clp, o);
+    EasuTap(aC, aW, vec2( 0.0,  2.0) - pp, dir, len2, lob, clp, n);
+
+    // Deringing: clamp to the min/max of the nearest 2x2 input texels
+    vec3 mn = min(min(f, g), min(j, k));
+    vec3 mx = max(max(f, g), max(j, k));
+    out_Color = vec4(min(mx, max(mn, aC / aW)), f4.a);
+}
+)";
+
+    // RCAS: robust contrast-adaptive sharpening, run at output resolution
+    // after EASU. Sharpening is limited per pixel so it cannot clip, and is
+    // reduced on noise.
+    const char *fsr_rcas_frag_src = R"(
+#version 400 core
+uniform sampler2D tex;
+uniform vec2 in_InSize;
+uniform float in_Sharpness;
+in  vec2 Texcoord;
+out vec4 out_Color;
+
+#define FSR_RCAS_LIMIT (0.25 - (1.0 / 16.0))
+
+vec4 Tap(ivec2 p)
+{
+    return texelFetch(tex, clamp(p, ivec2(0), ivec2(in_InSize) - 1), 0);
+}
+
+float Luma(vec3 c)
+{
+    return c.b * 0.5 + (c.r * 0.5 + c.g);
+}
+
+void main()
+{
+    ivec2 ip = ivec2(Texcoord * in_InSize);
+
+    //   b
+    // d e f
+    //   h
+    vec3 b = Tap(ip + ivec2( 0, -1)).rgb;
+    vec3 d = Tap(ip + ivec2(-1,  0)).rgb;
+    vec4 e4 = Tap(ip);
+    vec3 e = e4.rgb;
+    vec3 f = Tap(ip + ivec2( 1,  0)).rgb;
+    vec3 h = Tap(ip + ivec2( 0,  1)).rgb;
+
+    float bL = Luma(b), dL = Luma(d), eL = Luma(e), fL = Luma(f), hL = Luma(h);
+
+    // Noise detection
+    float nz = 0.25 * bL + 0.25 * dL + 0.25 * fL + 0.25 * hL - eL;
+    float range = max(max(max(bL, dL), max(eL, fL)), hL) -
+                  min(min(min(bL, dL), min(eL, fL)), hL);
+    nz = range > 0.0 ? clamp(abs(nz) / range, 0.0, 1.0) : 0.0;
+    nz = -0.5 * nz + 1.0;
+
+    // Largest negative lobe that will not clip, per channel
+    vec3 mn4 = min(min(b, d), min(f, h));
+    vec3 mx4 = max(max(b, d), max(f, h));
+    vec3 hitMin = mn4 / max(4.0 * mx4, vec3(1.0 / 65536.0));
+    vec3 hitMax = (1.0 - mx4) / min(4.0 * mn4 - 4.0, vec3(-1.0 / 65536.0));
+    vec3 lobeRGB = max(-hitMin, hitMax);
+    float lobe = max(-FSR_RCAS_LIMIT,
+                     min(max(lobeRGB.r, max(lobeRGB.g, lobeRGB.b)), 0.0)) *
+                 in_Sharpness;
+    lobe *= nz;
+
+    float rcpL = 1.0 / (4.0 * lobe + 1.0);
+    vec3 c = (lobe * b + lobe * d + lobe * h + lobe * f + e) * rcpL;
+    out_Color = vec4(c, e4.a);
+}
+)";
+
     const char *frag_src = NULL;
     switch (type) {
     case ShaderType::Mask: frag_src = mask_frag_src; break;
     // case ShaderType::Blit: frag_src = image_frag_src; break;
     case ShaderType::BlitGamma: frag_src = image_gamma_frag_src; break;
     case ShaderType::Logo: frag_src = xemu_logo_frag_src; break;
+    case ShaderType::FsrEasu: frag_src = fsr_easu_frag_src; break;
+    case ShaderType::FsrRcas: frag_src = fsr_rcas_frag_src; break;
     default: assert(0);
     }
     GLuint frag = Shader(GL_FRAGMENT_SHADER, frag_src);
@@ -309,6 +534,9 @@ void main() {
     s->color_fill_loc = glGetUniformLocation(s->prog, "in_ColorFill");
     s->time_loc = glGetUniformLocation(s->prog, "iTime");
     s->scale_loc = glGetUniformLocation(s->prog, "scale");
+    s->in_size_loc = glGetUniformLocation(s->prog, "in_InSize");
+    s->out_size_loc = glGetUniformLocation(s->prog, "in_OutSize");
+    s->sharpness_loc = glGetUniformLocation(s->prog, "in_Sharpness");
     for (int i = 0; i < 256; i++) {
         char name[64];
         snprintf(name, sizeof(name), "palette[%d]", i);
@@ -457,6 +685,8 @@ void InitCustomRendering(void)
     g_icon_tex = LoadTextureFromMemory(xemu_64x64_data, xemu_64x64_size, false);
 
     g_framebuffer_shader = NewDecalShader(ShaderType::BlitGamma);
+    g_fsr_easu_shader = NewDecalShader(ShaderType::FsrEasu);
+    g_fsr_rcas_shader = NewDecalShader(ShaderType::FsrRcas);
 }
 
 static void RenderMeter(DecalShader *s, float x, float y, float width,
@@ -884,19 +1114,140 @@ void ScaleDimensions(int src_width, int src_height, int max_width, int max_heigh
     }
 }
 
-void RenderFramebuffer(GLint tex, int width, int height, bool flip, float scale[2])
+// Upload the DAC gamma palette in one call instead of 256 separate
+// glUniform1ui calls per frame.
+static void UploadPalette(DecalShader *s)
+{
+    const uint8_t *palette = nv2a_get_dac_palette();
+    GLuint entries[256];
+    for (int i = 0; i < 256; i++) {
+        entries[i] = (palette[i * 3 + 2] << 16) | (palette[i * 3 + 1] << 8) |
+                     palette[i * 3];
+    }
+    glUniform1uiv(s->palette_loc[0], 256, entries);
+}
+
+static Fbo *EnsureFbo(Fbo *fbo, int w, int h)
+{
+    if (fbo && fbo->w == w && fbo->h == h) {
+        return fbo;
+    }
+    delete fbo;
+    return new Fbo(w, h);
+}
+
+static void DrawFullscreenPass(DecalShader *s, GLuint src_tex, float sx,
+                               float sy)
 {
     glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, src_tex);
+    glUseProgram(s->prog);
+    glBindVertexArray(s->vao);
+    glUniform1i(s->flipy_loc, 0);
+    glUniform4f(s->scale_offset_loc, sx, sy, 0, 0);
+    glUniform4f(s->tex_scale_offset_loc, 1.0, 1.0, 0, 0);
+    glUniform1i(s->tex_loc, 0);
+    glDrawElements(GL_TRIANGLE_FAN, 4, GL_UNSIGNED_INT, NULL);
+}
+
+// AMD FSR 1.0 path: gamma (native res) -> EASU (output res) -> RCAS (to
+// target). Returns false when FSR does not apply (no upscaling needed), in
+// which case the caller falls back to the regular blit.
+static bool RenderFramebufferFsr(GLint tex, int width, int height, bool flip,
+                                 float scale[2])
+{
+    int tw, th;
+    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex);
-    
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &tw);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &th);
+
+    int dw = (int)(scale[0] * width + 0.5f);
+    int dh = (int)(scale[1] * height + 0.5f);
+    if (tw < 1 || th < 1 || dw < 1 || dh < 1 || (dw <= tw && dh <= th)) {
+        return false;
+    }
+
+    GLint prev_draw_fbo, prev_read_fbo;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_draw_fbo);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prev_read_fbo);
+    bool blend = glIsEnabled(GL_BLEND);
+    if (blend) {
+        glDisable(GL_BLEND);
+    }
+
+    g_fsr_gamma_fbo = EnsureFbo(g_fsr_gamma_fbo, tw, th);
+    g_fsr_easu_fbo = EnsureFbo(g_fsr_easu_fbo, dw, dh);
+
+    // Pass 1: apply DAC gamma and orientation at native resolution, so EASU
+    // analyses the image as it will actually be displayed.
+    glBindFramebuffer(GL_FRAMEBUFFER, g_fsr_gamma_fbo->fbo);
+    glViewport(0, 0, tw, th);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    DecalShader *s = g_framebuffer_shader;
+    glUseProgram(s->prog);
+    glBindVertexArray(s->vao);
+    glUniform1i(s->flipy_loc, flip);
+    glUniform4f(s->scale_offset_loc, 1.0, 1.0, 0, 0);
+    glUniform4f(s->tex_scale_offset_loc, 1.0, 1.0, 0, 0);
+    glUniform1i(s->tex_loc, 0);
+    UploadPalette(s);
+    glDrawElements(GL_TRIANGLE_FAN, 4, GL_UNSIGNED_INT, NULL);
+
+    // Pass 2: EASU upscale to the exact on-screen size
+    glBindFramebuffer(GL_FRAMEBUFFER, g_fsr_easu_fbo->fbo);
+    glViewport(0, 0, dw, dh);
+    glUseProgram(g_fsr_easu_shader->prog);
+    glUniform2f(g_fsr_easu_shader->in_size_loc, tw, th);
+    glUniform2f(g_fsr_easu_shader->out_size_loc, dw, dh);
+    DrawFullscreenPass(g_fsr_easu_shader, g_fsr_gamma_fbo->tex, 1.0, 1.0);
+
+    // Pass 3: RCAS sharpen into the original target with the usual
+    // letterboxing
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prev_draw_fbo);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, prev_read_fbo);
+    if (blend) {
+        glEnable(GL_BLEND);
+    }
+    glViewport(0, 0, width, height);
+    glClearColor(0, 0, 0, 0);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    // Slider 0..1 maps to AMD's 2..0 "stops" of sharpness reduction
+    float sharp = g_config.display.fsr_sharpness;
+    sharp = sharp < 0.0f ? 0.0f : (sharp > 1.0f ? 1.0f : sharp);
+    glUseProgram(g_fsr_rcas_shader->prog);
+    glUniform2f(g_fsr_rcas_shader->in_size_loc, dw, dh);
+    glUniform1f(g_fsr_rcas_shader->sharpness_loc,
+                exp2f(-2.0f * (1.0f - sharp)));
+    DrawFullscreenPass(g_fsr_rcas_shader, g_fsr_easu_fbo->tex, scale[0],
+                       scale[1]);
+    return true;
+}
+
+void RenderFramebuffer(GLint tex, int width, int height, bool flip, float scale[2])
+{
+    if (g_config.display.filtering == CONFIG_DISPLAY_FILTERING_FSR &&
+        !nv2a_get_screen_off() &&
+        RenderFramebufferFsr(tex, width, height, flip, scale)) {
+        return;
+    }
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+
     switch (g_config.display.filtering) {
-    case CONFIG_DISPLAY_FILTERING_LINEAR:
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    break;
     case CONFIG_DISPLAY_FILTERING_NEAREST:
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    break;
+    case CONFIG_DISPLAY_FILTERING_LINEAR:
+    default: // FSR falls back to linear when not upscaling
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     break;
     }
 
@@ -909,13 +1260,7 @@ void RenderFramebuffer(GLint tex, int width, int height, bool flip, float scale[
     glUniform4f(s->scale_offset_loc, scale[0], scale[1], 0, 0);
     glUniform4f(s->tex_scale_offset_loc, 1.0, 1.0, 0, 0);
     glUniform1i(s->tex_loc, 0);
-
-    const uint8_t *palette = nv2a_get_dac_palette();
-    for (int i = 0; i < 256; i++) {
-        uint32_t e = (palette[i * 3 + 2] << 16) | (palette[i * 3 + 1] << 8) |
-                     palette[i * 3];
-        glUniform1ui(s->palette_loc[i], e);
-    }
+    UploadPalette(s);
 
     glClearColor(0, 0, 0, 0);
     glClear(GL_COLOR_BUFFER_BIT);

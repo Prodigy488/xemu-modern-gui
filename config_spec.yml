@@ -27,6 +27,9 @@ general:
       type: bool
       default: false
   skip_boot_anim: bool
+  discord_presence:
+    type: bool
+    default: true
   # throttle_io: bool
   last_viewed_menu_index: integer
   user_token: string

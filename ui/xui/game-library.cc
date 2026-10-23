@@ -33,6 +33,8 @@
 #include "IconsFontAwesome6.h"
 #include "../xemu-notifications.h"
 #include "../xemu-settings.h"
+#include "../xemu-snapshots.h"
+#include "snapshot-manager.hh"
 
 namespace fs = std::filesystem;
 
@@ -1315,6 +1317,85 @@ void DrawFoldersPopup()
     ImGui::EndPopup();
 }
 
+// xemu snapshots taken while playing this game, newest first
+void DrawSaveStates(LibraryEntry &e, float w)
+{
+    const float s = g_viewport_mgr.m_scale;
+    g_snapshot_mgr.Refresh(); // cached by xemu; cheap unless snapshots changed
+
+    std::string key = PathKey(fs::u8path(e.path));
+    std::string title = Lower(e.title);
+    std::vector<int> mine;
+    for (int i = 0; i < g_snapshot_mgr.m_snapshots_len; i++) {
+        const XemuSnapshotData &d = g_snapshot_mgr.m_extra_data[i];
+        bool same_disc = d.disc_path && d.disc_path[0] &&
+                         PathKey(fs::u8path(d.disc_path)) == key;
+        bool same_title = !title.empty() && d.xbe_title_name &&
+                          Lower(d.xbe_title_name) == title;
+        if (same_disc || same_title) {
+            mine.push_back(i);
+        }
+    }
+    if (mine.empty()) {
+        return;
+    }
+    std::sort(mine.begin(), mine.end(), [](int a, int b) {
+        return g_snapshot_mgr.m_snapshots[a].date_sec >
+               g_snapshot_mgr.m_snapshots[b].date_sec;
+    });
+
+    ImGui::Dummy(ImVec2(0, 6 * s));
+    ImGui::Separator();
+    ImGui::TextDisabled("Save states (%d)", (int)mine.size());
+    const float thumb_h = 42 * s, thumb_w = thumb_h * 4 / 3;
+    int shown = 0;
+    std::string load_name; // loaded after the loop: loading refreshes the list
+    for (int i : mine) {
+        if (shown++ >= 6) {
+            ImGui::TextDisabled("More in Settings > Snapshots");
+            break;
+        }
+        const QEMUSnapshotInfo &info = g_snapshot_mgr.m_snapshots[i];
+        const XemuSnapshotData &d = g_snapshot_mgr.m_extra_data[i];
+        ImGui::PushID(info.name);
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        bool clicked = ImGui::Selectable("##snap", false, 0, ImVec2(w, thumb_h));
+        ImGui::SetItemTooltip("Load this save state");
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        if (d.gl_thumbnail) {
+            dl->AddImageRounded((ImTextureID)(intptr_t)d.gl_thumbnail, p,
+                                ImVec2(p.x + thumb_w, p.y + thumb_h),
+                                ImVec2(0, 0), ImVec2(1, 1), IM_COL32_WHITE,
+                                4 * s);
+        } else {
+            dl->AddRectFilled(p, ImVec2(p.x + thumb_w, p.y + thumb_h),
+                              IM_COL32(40, 40, 44, 255), 4 * s);
+        }
+        time_t t = (time_t)info.date_sec;
+        char date[48] = "";
+        struct tm *tm = localtime(&t);
+        if (tm) {
+            strftime(date, sizeof(date), "%Y-%m-%d %H:%M", tm);
+        }
+        float tx = p.x + thumb_w + 8 * s;
+        ImVec4 clip(tx, p.y, p.x + w, p.y + thumb_h);
+        float fh = ImGui::GetFontSize();
+        dl->AddText(ImGui::GetFont(), fh, ImVec2(tx, p.y + 2 * s),
+                    ImGui::GetColorU32(ImGuiCol_Text), info.name, NULL, 0, &clip);
+        dl->AddText(ImGui::GetFont(), fh * 0.9f, ImVec2(tx, p.y + fh + 6 * s),
+                    ImGui::GetColorU32(ImGuiCol_TextDisabled), date, NULL, 0,
+                    &clip);
+        if (clicked) {
+            load_name = info.name;
+        }
+        ImGui::PopID();
+    }
+    if (!load_name.empty()) {
+        ActionLoadSnapshotChecked(load_name.c_str());
+        game_library_window.is_open = false;
+    }
+}
+
 // Right-hand panel with the selected game's art and details
 void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
 {
@@ -1390,6 +1471,8 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
             "file:///" + fs::u8path(e.path).parent_path().generic_u8string();
         SDL_OpenURL(url.c_str());
     }
+
+    DrawSaveStates(e, w);
 }
 
 } // namespace

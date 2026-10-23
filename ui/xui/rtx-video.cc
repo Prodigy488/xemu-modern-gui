@@ -101,6 +101,19 @@ enum class State { Untried, Ready, Failed };
 State g_state = State::Untried;
 std::string g_status = "Not used yet: choose it while a game is running";
 bool g_nv12; // feed the driver NV12 instead of RGB
+std::string g_err; // the step that failed, for the status line and log
+
+bool Err(const char *step, HRESULT hr = S_OK)
+{
+    char b[160];
+    if (hr != S_OK) {
+        snprintf(b, sizeof(b), "%s (0x%08lX)", step, (unsigned long)hr);
+    } else {
+        snprintf(b, sizeof(b), "%s", step);
+    }
+    g_err = b;
+    return false;
+}
 
 D3D11_VIDEO_PROCESSOR_COLOR_SPACE RgbFull()
 {
@@ -156,33 +169,36 @@ struct Stage {
         cd.OutputWidth = (UINT)ow;
         cd.OutputHeight = (UINT)oh;
         cd.Usage = D3D11_VIDEO_USAGE_OPTIMAL_QUALITY;
-        if (FAILED(g_vdev->CreateVideoProcessorEnumerator(&cd, &en))) {
-            return false;
+        HRESULT hr = g_vdev->CreateVideoProcessorEnumerator(&cd, &en);
+        if (FAILED(hr)) {
+            return Err("video processor enumerator", hr);
         }
         UINT flags = 0;
         if (FAILED(en->CheckVideoProcessorFormat(in_fmt, &flags)) ||
             !(flags & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_INPUT)) {
-            return false;
+            return Err("input format not supported");
         }
         flags = 0;
         if (FAILED(en->CheckVideoProcessorFormat(out_fmt, &flags)) ||
             !(flags & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT)) {
-            return false;
+            return Err("output format not supported");
         }
-        if (FAILED(g_vdev->CreateVideoProcessor(en.Get(), 0, &vp))) {
-            return false;
+        hr = g_vdev->CreateVideoProcessor(en.Get(), 0, &vp);
+        if (FAILED(hr)) {
+            return Err("create video processor", hr);
         }
         D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC iv = {};
         iv.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
-        if (FAILED(g_vdev->CreateVideoProcessorInputView(in, en.Get(), &iv,
-                                                         &in_view))) {
-            return false;
+        hr = g_vdev->CreateVideoProcessorInputView(in, en.Get(), &iv, &in_view);
+        if (FAILED(hr)) {
+            return Err("video processor input view", hr);
         }
         D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC ov = {};
         ov.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
-        if (FAILED(g_vdev->CreateVideoProcessorOutputView(out, en.Get(), &ov,
-                                                          &out_view))) {
-            return false;
+        hr = g_vdev->CreateVideoProcessorOutputView(out, en.Get(), &ov,
+                                                    &out_view);
+        if (FAILED(hr)) {
+            return Err("video processor output view", hr);
         }
         RECT src = { 0, 0, iw, ih }, dst = { 0, 0, ow, oh };
         g_vctx->VideoProcessorSetStreamFrameFormat(
@@ -196,9 +212,10 @@ struct Stage {
         g_vctx->VideoProcessorSetStreamAutoProcessingMode(vp.Get(), 0, FALSE);
         if (super_res) {
             NvidiaPpeExtension ext = { 1, 2, 1 };
-            if (FAILED(g_vctx->VideoProcessorSetStreamExtension(
-                    vp.Get(), 0, &kNvidiaPpeGuid, sizeof(ext), &ext))) {
-                return false;
+            HRESULT he = g_vctx->VideoProcessorSetStreamExtension(
+                vp.Get(), 0, &kNvidiaPpeGuid, sizeof(ext), &ext);
+            if (FAILED(he)) {
+                return Err("enable super resolution", he);
             }
         }
         return true;
@@ -230,7 +247,7 @@ struct Pipeline {
         in_tex = MakeTexture(tw, th, DXGI_FORMAT_B8G8R8A8_UNORM);
         out_tex = MakeTexture(dw, dh, DXGI_FORMAT_B8G8R8A8_UNORM);
         if (!in_tex || !out_tex) {
-            return false;
+            return Err("create Direct3D textures");
         }
         if (!nv12) {
             return scale.Build(in_tex.Get(), tw, th, DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -240,7 +257,10 @@ struct Pipeline {
         }
         int mw = (tw + 1) & ~1, mh = (th + 1) & ~1; // NV12 needs even sizes
         mid_tex = MakeTexture(mw, mh, DXGI_FORMAT_NV12);
-        return mid_tex &&
+        if (!mid_tex) {
+            return Err("create NV12 texture");
+        }
+        return
                conv.Build(in_tex.Get(), tw, th, DXGI_FORMAT_B8G8R8A8_UNORM,
                           RgbFull(), mid_tex.Get(), tw, th, DXGI_FORMAT_NV12,
                           Yuv709(), false) &&
@@ -488,31 +508,72 @@ GLuint NewTexture()
     return t;
 }
 
+// The input normally goes GPU to GPU through a shared texture; if the
+// driver won't share that one, it is copied through the CPU instead
+// (slower, but only the small native-resolution image).
+bool g_cpu_input;
+std::vector<uint8_t> g_cpu_buf;
+
 bool BuildSized(int tw, int th, int dw, int dh)
 {
     ReleaseSized();
     if (!g_pipe.Build(tw, th, dw, dh, g_nv12, true)) {
-        return false;
+        std::string first = g_err;
+        g_pipe = Pipeline();
+        // Some sizes only work with the video (NV12) input path
+        if (g_nv12 || !g_pipe.Build(tw, th, dw, dh, true, true)) {
+            if (!g_nv12) {
+                g_err = first + "; NV12: " + g_err;
+            }
+            return false;
+        }
+        g_nv12 = true;
     }
-    g_gl_in = NewTexture();
     g_gl_out = NewTexture();
-    g_h_in = wglDXRegisterObject(g_gl_dev, g_pipe.in_tex.Get(), g_gl_in,
-                                 GL_TEXTURE_2D, WGL_ACCESS_READ_WRITE_NV);
     g_h_out = wglDXRegisterObject(g_gl_dev, g_pipe.out_tex.Get(), g_gl_out,
                                   GL_TEXTURE_2D, WGL_ACCESS_READ_ONLY_NV);
-    if (!g_h_in || !g_h_out) {
-        return false;
+    if (!g_h_out) {
+        return Err("share output texture with OpenGL",
+                   HRESULT_FROM_WIN32(GetLastError()));
     }
-    GLint prev;
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev);
-    glGenFramebuffers(1, &g_gl_in_fbo);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_gl_in_fbo);
-    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                           GL_TEXTURE_2D, g_gl_in, 0);
-    bool ok = glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) ==
-              GL_FRAMEBUFFER_COMPLETE;
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prev);
-    return ok;
+
+    // Input: shared texture with an FBO to blit into (checked while locked;
+    // an unlocked shared texture has no storage on the OpenGL side)
+    g_cpu_input = false;
+    g_gl_in = NewTexture();
+    g_h_in = wglDXRegisterObject(g_gl_dev, g_pipe.in_tex.Get(), g_gl_in,
+                                 GL_TEXTURE_2D, WGL_ACCESS_READ_WRITE_NV);
+    bool ok = false;
+    if (g_h_in && wglDXLockObjects(g_gl_dev, 1, &g_h_in)) {
+        GLint prev;
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev);
+        glGenFramebuffers(1, &g_gl_in_fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_gl_in_fbo);
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, g_gl_in, 0);
+        ok = glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) ==
+             GL_FRAMEBUFFER_COMPLETE;
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prev);
+        wglDXUnlockObjects(g_gl_dev, 1, &g_h_in);
+    }
+    if (!ok) {
+        fprintf(stderr, "rtx-video: shared input texture unusable "
+                        "(registered %d); copying input through the CPU\n",
+                g_h_in != nullptr);
+        if (g_gl_in_fbo) {
+            glDeleteFramebuffers(1, &g_gl_in_fbo);
+            g_gl_in_fbo = 0;
+        }
+        if (g_h_in) {
+            wglDXUnregisterObject(g_gl_dev, g_h_in);
+            g_h_in = nullptr;
+        }
+        g_cpu_input = true;
+        g_cpu_buf.resize((size_t)tw * th * 4);
+    }
+    fprintf(stderr, "rtx-video: %dx%d -> %dx%d ready (%s input, %s)\n", tw, th,
+            dw, dh, g_nv12 ? "NV12" : "RGB", g_cpu_input ? "CPU copy" : "shared");
+    return true;
 }
 
 void ReleaseAll()
@@ -543,30 +604,56 @@ bool RtxVideoUpscale(GLuint src_fbo, int tw, int th, int dw, int dh,
         RtxVideoEndFrame();
     }
     if (tw != g_pipe.tw || th != g_pipe.th || dw != g_pipe.dw ||
-        dh != g_pipe.dh || !g_h_in) {
+        dh != g_pipe.dh || !g_h_out) {
+        g_err.clear();
         if (!BuildSized(tw, th, dw, dh)) {
+            char b[320];
+            snprintf(b, sizeof(b),
+                     "Couldn't set up %dx%d -> %dx%d: %s. Using NIS.", tw, th,
+                     dw, dh, g_err.empty() ? "unknown step" : g_err.c_str());
             ReleaseAll();
-            Fail("Couldn't set up RTX Video at this size; using NIS");
+            Fail(b);
             return false;
         }
     }
 
     // 1. OpenGL copies the frame in, top row first as Direct3D expects
-    if (!wglDXLockObjects(g_gl_dev, 1, &g_h_in)) {
-        ReleaseAll();
-        Fail("Lost the OpenGL/Direct3D sharing; using NIS");
-        return false;
+    if (g_cpu_input) {
+        GLint prev_read, pack;
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prev_read);
+        glGetIntegerv(GL_PACK_ALIGNMENT, &pack);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, src_fbo);
+        glPixelStorei(GL_PACK_ALIGNMENT, 4);
+        glReadPixels(0, 0, tw, th, GL_BGRA, GL_UNSIGNED_BYTE, g_cpu_buf.data());
+        glPixelStorei(GL_PACK_ALIGNMENT, pack);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, prev_read);
+        // OpenGL rows are bottom first: hand them over in reverse
+        const uint8_t *last = g_cpu_buf.data() + (size_t)(th - 1) * tw * 4;
+        static std::vector<uint8_t> flipped;
+        flipped.resize(g_cpu_buf.size());
+        for (int y = 0; y < th; y++) {
+            memcpy(&flipped[(size_t)y * tw * 4], last - (size_t)y * tw * 4,
+                   (size_t)tw * 4);
+        }
+        g_ctx->UpdateSubresource(g_pipe.in_tex.Get(), 0, nullptr,
+                                 flipped.data(), tw * 4, 0);
+    } else {
+        if (!wglDXLockObjects(g_gl_dev, 1, &g_h_in)) {
+            ReleaseAll();
+            Fail("Lost the OpenGL/Direct3D sharing; using NIS");
+            return false;
+        }
+        GLint prev_read, prev_draw;
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prev_read);
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_draw);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, src_fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_gl_in_fbo);
+        glBlitFramebuffer(0, 0, tw, th, 0, th, tw, 0, GL_COLOR_BUFFER_BIT,
+                          GL_NEAREST);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, prev_read);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prev_draw);
+        wglDXUnlockObjects(g_gl_dev, 1, &g_h_in);
     }
-    GLint prev_read, prev_draw;
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prev_read);
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_draw);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, src_fbo);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_gl_in_fbo);
-    glBlitFramebuffer(0, 0, tw, th, 0, th, tw, 0, GL_COLOR_BUFFER_BIT,
-                      GL_NEAREST);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, prev_read);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prev_draw);
-    wglDXUnlockObjects(g_gl_dev, 1, &g_h_in);
 
     // 2. The driver upscales it
     if (!g_pipe.Run()) {

@@ -19,6 +19,7 @@
 
 #include "qemu/osdep.h"
 #include "qemu/fast-hash.h"
+#include "ui/xemu-settings.h"
 #include "renderer.h"
 #include <math.h>
 
@@ -121,19 +122,109 @@ static bool pipeline_cache_entry_compare(Lru *lru, LruNode *node,
     return memcmp(&snode->key, key, sizeof(PipelineKey));
 }
 
+/*
+ * Persist the Vulkan pipeline cache across launches so pipelines built in
+ * earlier sessions do not have to be built again (less stutter). Saved on
+ * shutdown and, during play, at most once a minute when new pipelines were
+ * created. Data from a different GPU or driver is ignored. Honors "Cache
+ * shaders to disk" (perf.cache_shaders).
+ */
+#define PIPELINE_CACHE_SAVE_INTERVAL_MS 60000
+
+static char *pipeline_cache_path(void)
+{
+    return g_strdup_printf("%s/vk_pipeline_cache.bin",
+                           xemu_settings_get_base_path());
+}
+
+static gchar *load_pipeline_cache_data(PGRAPHVkState *r, gsize *len)
+{
+    *len = 0;
+    if (!g_config.perf.cache_shaders) {
+        return NULL;
+    }
+    char *path = pipeline_cache_path();
+    gchar *data = NULL;
+    gsize size = 0;
+    bool ok = g_file_get_contents(path, &data, &size, NULL);
+    g_free(path);
+    if (!ok) {
+        return NULL;
+    }
+
+    // VkPipelineCacheHeaderVersionOne
+    uint32_t header_size, header_version, vendor_id, device_id;
+    if (size < 16 + VK_UUID_SIZE) {
+        g_free(data);
+        return NULL;
+    }
+    memcpy(&header_size, data, 4);
+    memcpy(&header_version, data + 4, 4);
+    memcpy(&vendor_id, data + 8, 4);
+    memcpy(&device_id, data + 12, 4);
+    if (header_size < 16 + VK_UUID_SIZE ||
+        header_version != VK_PIPELINE_CACHE_HEADER_VERSION_ONE ||
+        vendor_id != r->device_props.vendorID ||
+        device_id != r->device_props.deviceID ||
+        memcmp(data + 16, r->device_props.pipelineCacheUUID, VK_UUID_SIZE)) {
+        g_free(data); // different GPU or driver: start fresh
+        return NULL;
+    }
+    *len = size;
+    return data;
+}
+
+static void save_pipeline_cache(PGRAPHVkState *r)
+{
+    r->pipelines_since_cache_save = 0;
+    r->pipeline_cache_last_save_ms = g_get_monotonic_time() / 1000;
+    if (!g_config.perf.cache_shaders ||
+        r->vk_pipeline_cache == VK_NULL_HANDLE) {
+        return;
+    }
+    size_t size = 0;
+    if (vkGetPipelineCacheData(r->device, r->vk_pipeline_cache, &size,
+                               NULL) != VK_SUCCESS ||
+        size == 0) {
+        return;
+    }
+    void *data = g_malloc(size);
+    if (vkGetPipelineCacheData(r->device, r->vk_pipeline_cache, &size,
+                               data) == VK_SUCCESS) {
+        char *path = pipeline_cache_path();
+        g_file_set_contents(path, data, size, NULL);
+        g_free(path);
+    }
+    g_free(data);
+}
+
 static void init_pipeline_cache(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
 
+    gsize initial_size = 0;
+    gchar *initial_data = load_pipeline_cache_data(r, &initial_size);
+
     VkPipelineCacheCreateInfo cache_info = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
         .flags = 0,
-        .initialDataSize = 0,
-        .pInitialData = NULL,
+        .initialDataSize = initial_size,
+        .pInitialData = initial_data,
         .pNext = NULL,
     };
-    VK_CHECK(vkCreatePipelineCache(r->device, &cache_info, NULL,
-                                   &r->vk_pipeline_cache));
+    VkResult result = vkCreatePipelineCache(r->device, &cache_info, NULL,
+                                            &r->vk_pipeline_cache);
+    if (result != VK_SUCCESS && initial_data) {
+        // Driver rejected the saved data; start with an empty cache
+        cache_info.initialDataSize = 0;
+        cache_info.pInitialData = NULL;
+        result = vkCreatePipelineCache(r->device, &cache_info, NULL,
+                                       &r->vk_pipeline_cache);
+    }
+    VK_CHECK(result);
+    g_free(initial_data);
+    r->pipelines_since_cache_save = 0;
+    r->pipeline_cache_last_save_ms = g_get_monotonic_time() / 1000;
 
     const size_t pipeline_cache_size = 2048;
     lru_init(&r->pipeline_cache);
@@ -157,6 +248,7 @@ static void finalize_pipeline_cache(PGRAPHState *pg)
     g_free(r->pipeline_cache_entries);
     r->pipeline_cache_entries = NULL;
 
+    save_pipeline_cache(r);
     vkDestroyPipelineCache(r->device, r->vk_pipeline_cache, NULL);
 }
 
@@ -1007,6 +1099,12 @@ static void create_pipeline(PGRAPHState *pg)
     VkPipeline pipeline;
     VK_CHECK(vkCreateGraphicsPipelines(r->device, r->vk_pipeline_cache, 1,
                                        &pipeline_create_info, NULL, &pipeline));
+
+    r->pipelines_since_cache_save++;
+    if (g_get_monotonic_time() / 1000 - r->pipeline_cache_last_save_ms >=
+        PIPELINE_CACHE_SAVE_INTERVAL_MS) {
+        save_pipeline_cache(r);
+    }
 
     snode->pipeline = pipeline;
     snode->layout = layout;

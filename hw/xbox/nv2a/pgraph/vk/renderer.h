@@ -360,6 +360,8 @@ typedef struct PGRAPHVkState {
 
     Lru pipeline_cache;
     VkPipelineCache vk_pipeline_cache;
+    int pipelines_since_cache_save;
+    int64_t pipeline_cache_last_save_ms;
     PipelineBinding *pipeline_cache_entries;
     PipelineBinding *pipeline_binding;
     bool pipeline_binding_changed;

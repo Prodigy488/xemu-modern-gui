@@ -235,7 +235,8 @@ void ShowMainMenu()
             HelpMarker("Controls how the rendered content should be scaled "
                        "into the window");
             ImGui::Combo("Filter Method", &g_config.display.filtering,
-                         "Linear\0Nearest\0AMD FSR 1.0\0");
+                         "Linear\0Nearest\0AMD FSR 1.0\0Bicubic\0"
+                         "Lanczos\0Snapdragon GSR\0");
             ImGui::Combo("Aspect Ratio", &g_config.display.ui.aspect_ratio,
                          "Native\0Auto\0""4:3\0""16:9\0");
             if (ImGui::MenuItem("Fullscreen", "F11",

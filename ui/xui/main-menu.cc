@@ -78,6 +78,7 @@ void MainMenuGeneralView::Draw()
     FilePicker("Games directory", g_config.general.games_dir, nullptr, 0, true,
                [](const char *path) {
                    xemu_settings_set_string(&g_config.general.games_dir, path);
+                   xemu_settings_save(); // remember the folder right away
                });
     Toggle("Show game library on startup",
            &g_config.general.library.show_on_startup,
@@ -769,14 +770,18 @@ void MainMenuDisplayView::Draw()
     ChevronCombo("Upscaling filter", &g_config.display.filtering,
                  "Linear\0"
                  "Nearest\0"
-                 "AMD FidelityFX FSR 1.0\0",
-                 "How the image is scaled up to fit the window. FSR gives "
-                 "sharper edges than Linear at a small GPU cost");
-    if (g_config.display.filtering == CONFIG_DISPLAY_FILTERING_FSR) {
+                 "AMD FidelityFX FSR 1.0\0"
+                 "Bicubic (Catmull-Rom)\0"
+                 "Lanczos\0"
+                 "Snapdragon GSR 1\0",
+                 "How the image is scaled up to fit the window. FSR and "
+                 "Snapdragon GSR sharpen edges, Lanczos and Bicubic are "
+                 "classic sharp filters");
+    if (g_config.display.filtering >= CONFIG_DISPLAY_FILTERING_FSR) {
         char buf[48];
-        snprintf(buf, sizeof(buf), "FSR sharpening strength (%d%%)",
+        snprintf(buf, sizeof(buf), "Sharpening strength (%d%%, AMD RCAS)",
                  (int)(g_config.display.fsr_sharpness * 100));
-        Slider("FSR sharpness", &g_config.display.fsr_sharpness, buf);
+        Slider("Sharpening", &g_config.display.fsr_sharpness, buf);
     }
 
     SectionTitle("Window");

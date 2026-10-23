@@ -39,6 +39,10 @@ shared.
   the game you're playing, with its cover, title ID, play time and an Insignia
   badge for online-capable games. Turn it off in Settings > General > Discord
   status. Requires the Discord app running on the same PC.
+- **New in v1.4: compatibility ratings.** Each game shows its rating from
+  xemu's community [compatibility list](https://xemu.app/#compatibility):
+  a coloured dot on its cover, a badge on Home and a row in its details with
+  a link to the report. Sort the library by it too.
 - **New in v1.3: Blades and Metro styles.** Two more dashboard layouts:
   sliding side-by-side panels, or slim XBMC4Gamers-style lists. Save states
   also get a right-click menu (load, delete, show file).

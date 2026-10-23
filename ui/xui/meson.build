@@ -7,6 +7,7 @@ xemu_ss.add(files(
   'game-library.cc',
   'game-library-scan.cc',
   'game-patches.cc',
+  'game-compat.cc',
   'game-preview.cc',
   'perf-overlay.cc',
   'game-shortcut.cc',

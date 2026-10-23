@@ -18,7 +18,7 @@ general:
       default: grid
     sort:
       type: enum
-      values: [title, last_played, play_time]
+      values: [title, last_played, play_time, compatibility]
       default: title
     tile_size:
       type: number

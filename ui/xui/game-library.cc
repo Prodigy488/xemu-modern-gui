@@ -31,6 +31,7 @@
 #include "rtx-video.hh"
 #include "xbox-drive-explorer.hh"
 #include "game-patches.hh"
+#include "game-compat.hh"
 #include "game-preview.hh"
 #include "insignia-titles.hh"
 #include "jmp-index.hh"
@@ -1751,6 +1752,8 @@ bool IsCurrentDisc(const LibraryEntry &e)
     return p && p[0] && e.path == OriginalDiscPath(p);
 }
 
+CompatStatus CompatFor(const LibraryEntry &e); // compatibility, below
+
 void SortedFiltered(std::vector<LibraryEntry *> &out)
 {
     out.clear();
@@ -1784,6 +1787,12 @@ void SortedFiltered(std::vector<LibraryEntry *> &out)
         if (sort == CONFIG_GENERAL_LIBRARY_SORT_PLAY_TIME &&
             sa.play_seconds != sb.play_seconds) {
             return sa.play_seconds > sb.play_seconds;
+        }
+        if (sort == CONFIG_GENERAL_LIBRARY_SORT_COMPATIBILITY) {
+            int ca = (int)CompatFor(*a), cb = (int)CompatFor(*b);
+            if (ca != cb) {
+                return ca > cb; // best first
+            }
         }
         return Lower(a->DisplayName()) < Lower(b->DisplayName());
     });
@@ -2867,6 +2876,125 @@ void DrawCover3D(ImDrawList *dl, ImVec2 a, ImVec2 b, const LibraryEntry &e, floa
     dl->PopClipRect();
 }
 
+// ---- Compatibility ratings (xemu.app) ----------------------------------------
+
+// The list is cached in library-cache/compat.json and refreshed once a day in
+// the background
+std::map<uint32_t, CompatStatus> g_compat;
+std::thread g_compat_thread;
+std::atomic<bool> g_compat_downloaded{ false };
+bool g_compat_started = false;
+
+fs::path CompatCachePath()
+{
+    return IconCacheDir() / "compat.json";
+}
+
+void LoadCompatCache()
+{
+    std::ifstream f(CompatCachePath(), std::ios::binary);
+    if (!f) {
+        return;
+    }
+    std::string text((std::istreambuf_iterator<char>(f)), {});
+    std::map<uint32_t, CompatStatus> list;
+    if (ParseCompatJson(text, &list)) {
+        g_compat = std::move(list);
+    }
+}
+
+void StartCompatRefresh()
+{
+    if (g_compat_started) {
+        return;
+    }
+    g_compat_started = true;
+    LoadCompatCache();
+    std::error_code ec;
+    fs::path cache = CompatCachePath();
+    if (fs::exists(cache, ec)) {
+        auto age = fs::file_time_type::clock::now() - fs::last_write_time(cache, ec);
+        if (!ec && age < std::chrono::hours(24) && !g_compat.empty()) {
+            return;
+        }
+    }
+    g_compat_thread = std::thread([cache] {
+        Error *err = NULL;
+        if (!ensure_libcurl_initialized(&err)) {
+            if (err) {
+                error_free(err);
+            }
+            return;
+        }
+        GByteArray *body = g_byte_array_new();
+        int code = http_get(kCompatJsonUrl, body, NULL, NULL);
+        std::string text((const char *)body->data, body->len);
+        g_byte_array_unref(body);
+        std::map<uint32_t, CompatStatus> check;
+        if (code != 200 || !ParseCompatJson(text, &check) || check.size() < 50) {
+            return; // keep the cached list
+        }
+        std::error_code ec2;
+        fs::create_directories(cache.parent_path(), ec2);
+        fs::path tmp = cache;
+        tmp += ".tmp";
+        {
+            std::ofstream o(tmp, std::ios::binary | std::ios::trunc);
+            o.write(text.data(), (std::streamsize)text.size());
+            if (!o) {
+                return;
+            }
+        }
+        fs::rename(tmp, cache, ec2);
+        if (!ec2) {
+            g_compat_downloaded = true;
+        }
+    });
+}
+
+CompatStatus CompatFor(const LibraryEntry &e)
+{
+    if (!e.valid || g_compat.empty()) {
+        return CompatStatus::None;
+    }
+    return CompatLookup(g_compat, e.title_id);
+}
+
+ImU32 CompatColor(CompatStatus c)
+{
+    switch (c) {
+    case CompatStatus::Perfect: return IM_COL32(60, 205, 95, 255);
+    case CompatStatus::Playable: return IM_COL32(45, 165, 235, 255);
+    case CompatStatus::Starts: return IM_COL32(240, 190, 40, 255);
+    case CompatStatus::Intro: return IM_COL32(240, 125, 40, 255);
+    case CompatStatus::Broken: return IM_COL32(225, 65, 60, 255);
+    default: return IM_COL32(130, 130, 136, 255);
+    }
+}
+
+// Details row: coloured dot, rating, and a link to the game's page
+void DrawCompatRow(const LibraryEntry &e, float label_x)
+{
+    CompatStatus c = CompatFor(e);
+    if (c == CompatStatus::None && g_compat.empty()) {
+        return; // list not loaded (yet)
+    }
+    ImGui::TextDisabled("Compatibility");
+    ImGui::SameLine(label_x);
+    float h = ImGui::GetFontSize();
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + h * 0.3f, p.y + h * 0.55f),
+                                                h * 0.28f, CompatColor(c), 16);
+    ImGui::Dummy(ImVec2(h * 0.75f, h));
+    ImGui::SameLine();
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(CompatColor(c)), "%s",
+                       CompatName(c));
+    ImGui::SetItemTooltip("%s\nRated by xemu users on xemu.app", CompatDescription(c));
+    if (e.valid && ImGui::SmallButton("Compatibility report...")) {
+        SDL_OpenURL(CompatTitleUrl(e.title_id).c_str());
+    }
+}
+
 bool ActivatedByNav()
 {
     return ImGui::IsItemFocused() &&
@@ -2914,14 +3042,17 @@ void DrawTile(LibraryEntry &e, float tile_w, int &tex_budget)
         g_dirty = true;
     }
     if (hovered) {
-        ImGui::SetItemTooltip("%s\n%s%s%s\nPlay time: %s\nLast played: %s",
+        CompatStatus cs = CompatFor(e);
+        ImGui::SetItemTooltip("%s\n%s%s%s\nPlay time: %s\nLast played: %s%s%s",
                               e.DisplayName().c_str(),
                               e.valid ? FormatTitleId(e.title_id).c_str() : "",
                               e.valid ? "  -  " : "",
                               e.valid ? FormatRegion(e.region).c_str()
                                       : "Unrecognized image",
                               FormatPlayTime(st.play_seconds).c_str(),
-                              FormatLastPlayed(st.last_played).c_str());
+                              FormatLastPlayed(st.last_played).c_str(),
+                              cs != CompatStatus::None ? "\nCompatibility: " : "",
+                              cs != CompatStatus::None ? CompatName(cs) : "");
     }
     DrawContextMenu(e);
 
@@ -2977,6 +3108,13 @@ void DrawTile(LibraryEntry &e, float tile_w, int &tex_budget)
                 dl->AddRectFilled(b0, b1, IM_COL32(16, 124, 16, 230), 3 * s);
                 dl->AddText(bf, fs, p, IM_COL32(255, 255, 255, 255), badge);
             }
+        }
+        CompatStatus tcs = CompatFor(e);
+        if (tcs != CompatStatus::None && tcs != CompatStatus::Unknown) {
+            // Compatibility dot in the bottom-left corner of the art
+            ImVec2 c(a.x + 11 * s, art_b.y - 11 * s);
+            dl->AddCircleFilled(c, 6.5f * s, IM_COL32(0, 0, 0, 170), 16);
+            dl->AddCircleFilled(c, 4.5f * s, CompatColor(tcs), 16);
         }
         if (e.valid && (EnabledPatchCount(e.title_id) || OnlinePatchCount(e.title_id))) {
             // Wrench: green when patches are on, grey when some are online
@@ -4263,6 +4401,7 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
     };
     row("Play time", FormatPlayTime(st.play_seconds));
     row("Last played", IsCurrentDisc(e) ? "Playing now" : FormatLastPlayed(st.last_played));
+    DrawCompatRow(e, w * 0.42f);
     if (SupportsOnline(e)) {
         row("Online", "Supported on Insignia");
         if (ImGui::SmallButton("How to play online...")) {
@@ -5117,6 +5256,12 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
     if (SupportsOnline(e)) {
         ImGui::SameLine(0, 18 * s);
         DashPill("ONLINE", T().online);
+    }
+    CompatStatus hcs = CompatFor(e);
+    if (hcs != CompatStatus::None && hcs != CompatStatus::Unknown) {
+        ImGui::SameLine(0, 10 * s);
+        DashPill(Upper(CompatName(hcs)).c_str(), CompatColor(hcs));
+        ImGui::SetItemTooltip("Compatibility: %s", CompatDescription(hcs));
     }
     int npatch = e.valid ? EnabledPatchCount(e.title_id) : 0;
     if (npatch) {
@@ -6088,7 +6233,8 @@ void DrawLibraryTab(int &tex_budget)
     ImGui::SameLine();
     ImGui::SetNextItemWidth(150 * s);
     ImGui::Combo("##sort", &g_config.general.library.sort,
-                 "Sort: Title\0Sort: Last played\0Sort: Play time\0");
+                 "Sort: Title\0Sort: Last played\0Sort: Play time\0"
+                 "Sort: Compatibility\0");
     if (grid) {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(110 * s);
@@ -6366,10 +6512,14 @@ static std::vector<RecentGame> GetRecentGamesUncached(int max_count)
 
 void GameLibraryWindow::Update()
 {
+    if (g_compat_downloaded.exchange(false)) {
+        LoadCompatCache();
+    }
     if (!g_loaded) {
         g_loaded = true;
         atexit(GameLibraryShutdown);
         LoadLibrary();
+        StartCompatRefresh();
         g_last_tick = SDL_GetTicks();
         g_last_save_tick = g_last_tick;
     }
@@ -6841,6 +6991,16 @@ void DrawMetroStart(int &tex_budget)
     }
     line("Play time", FormatPlayTime(st.play_seconds));
     line("Last played", FormatLastPlayed(st.last_played));
+    CompatStatus mcs = CompatFor(*cur);
+    if (mcs != CompatStatus::None) {
+        dl->AddText(ImVec2(dx, y), ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                    "Compatibility");
+        dl->AddCircleFilled(ImVec2(dx + 110 * s + fh * 0.3f, y + fh * 0.55f),
+                            fh * 0.28f, CompatColor(mcs), 16);
+        dl->AddText(ImVec2(dx + 110 * s + fh * 0.8f, y), CompatColor(mcs),
+                    CompatName(mcs));
+        y += fh + 6 * s;
+    }
     if (SupportsOnline(*cur)) {
         line("Online", "Plays on Insignia");
     }
@@ -7248,6 +7408,9 @@ static void GameLibraryShutdown(void)
     StopImageWorker();
     if (g_insignia_thread.joinable()) {
         g_insignia_thread.join();
+    }
+    if (g_compat_thread.joinable()) {
+        g_compat_thread.join();
     }
     if (g_loaded) {
         SaveLibrary();

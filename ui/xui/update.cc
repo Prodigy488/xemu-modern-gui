@@ -26,10 +26,47 @@
 #include "util/miniz/miniz.h"
 #include "xemu-version.h"
 #include <nlohmann/json.hpp>
+#include <cctype>
+#include <string>
+#include <vector>
 
 using json = nlohmann::json;
 
-const char *releases_url = "https://api.github.com/repos/xemu-project/xemu/releases/latest";
+// This unofficial build updates from its own releases, so updating never
+// replaces it with official xemu (which doesn't have its features)
+const char *releases_url = "https://api.github.com/repos/Prodigy488/xemu-modern-gui/releases/latest";
+const char *const kModernGuiVersion = "1.4";
+
+// "v1.10" > "1.9": compare the numbers; anything after them ("-classic")
+// marks a different edition and is never offered
+static bool IsNewerVersion(const std::string &release, const std::string &current)
+{
+    auto parse = [](const std::string &v, std::vector<int> *out) {
+        size_t i = (!v.empty() && (v[0] == 'v' || v[0] == 'V')) ? 1 : 0;
+        while (i < v.size()) {
+            if (!isdigit((unsigned char)v[i])) {
+                return false;
+            }
+            int n = 0;
+            while (i < v.size() && isdigit((unsigned char)v[i])) {
+                n = n * 10 + (v[i++] - '0');
+            }
+            out->push_back(n);
+            if (i < v.size()) {
+                if (v[i] != '.') {
+                    return false;
+                }
+                i++;
+            }
+        }
+        return !out->empty();
+    };
+    std::vector<int> r, c;
+    if (!parse(release, &r) || !parse(current, &c)) {
+        return false;
+    }
+    return r > c;
+}
 
 #if defined(__x86_64__)
 #define PACKAGE_ARCH "x86_64"
@@ -73,12 +110,12 @@ void AutoUpdateWindow::Draw()
         "An error has occured. Try again.",
         "Checking for update...",
         "Downloading update...",
-        "Update successful! Restart to launch updated version of xemu."
+        "Update successful! Restart to launch the updated version."
     };
     const char *available_msg[] = {
         "Update availability unknown.",
-        "This version of xemu is up to date.",
-        "An updated version of xemu is available!",
+        "This version of xemu Modern GUI is up to date.",
+        "An updated version of xemu Modern GUI is available!",
     };
 
     if (updater.get_status() == UPDATER_IDLE) {
@@ -90,7 +127,7 @@ void AutoUpdateWindow::Draw()
     if (updater.is_update_available()) {
         ImGui::Dummy(ImVec2(0.0f, ImGui::GetStyle().WindowPadding.y));
 
-        ImGui::Text("Current version: %s", xemu_version);
+        ImGui::Text("Current version: %s (xemu %s)", kModernGuiVersion, xemu_version);
         ImGui::Text("Latest version: %s", updater.get_release_version().c_str());
 
         ImGui::Dummy(ImVec2(0.0f, ImGui::GetStyle().ItemSpacing.y));
@@ -178,29 +215,33 @@ void Updater::check_for_update_internal()
 
     try {
         json release = json::parse(std::string((const char *)data->data, data->len));
-        m_release_url = release.value("html_url", "https://github.com/xemu-project/xemu/releases/latest");
+        m_release_url = release.value("html_url", "https://github.com/Prodigy488/xemu-modern-gui/releases/latest");
         m_release_version = release["tag_name"].get<std::string>();
-        if (!m_release_version.empty() && m_release_version[0] == 'v') {
+        if (!m_release_version.empty() &&
+            (m_release_version[0] == 'v' || m_release_version[0] == 'V')) {
             m_release_version = m_release_version.substr(1);
         }
 
+        // The Windows build: xemu-<xemu version>-custom-windows-x86_64.zip
+        // (GitHub may add ".1" to a re-uploaded name)
         m_release_package_url.clear();
-        std::string expected_filename = "xemu-" + m_release_version + "-windows-" PACKAGE_ARCH ".zip";
         for (const auto &asset : release["assets"]) {
             std::string name = asset["name"].get<std::string>();
-            if (name == expected_filename) {
+            if (name.rfind("xemu-", 0) == 0 &&
+                name.find("-custom-windows-" PACKAGE_ARCH) != std::string::npos &&
+                name.size() > 4 && name.compare(name.size() - 4, 4, ".zip") == 0) {
                 m_release_package_url = asset["browser_download_url"].get<std::string>();
                 break;
             }
         }
 
         if (m_release_package_url.empty()) {
-            DPRINTF("Could not find asset matching %s\n", expected_filename.c_str());
+            DPRINTF("No Windows build in release %s\n", m_release_version.c_str());
             m_status = UPDATER_ERROR;
             goto finished;
         }
 
-        if (m_release_version != xemu_version) {
+        if (IsNewerVersion(m_release_version, kModernGuiVersion)) {
             m_update_availability = UPDATE_AVAILABLE;
         } else {
             m_update_availability = UPDATE_NOT_AVAILABLE;

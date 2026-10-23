@@ -25,6 +25,7 @@
 #include "data/xemu_64x64.png.h"
 #include "data/xmu_mask.png.h"
 #include "notifications.hh"
+#include "../xemu-xbe.h"
 #include "stb_image.h"
 #include <fpng.h>
 #include <math.h>
@@ -1584,8 +1585,18 @@ void SaveScreenshot(GLuint tex, bool flip)
     if (RenderFramebufferToPng(tex, flip, png)) {
         time_t t = time(NULL);
         struct tm *tmp = localtime(&t);
+        // Include the running title's ID so the game library can show each
+        // game's screenshots: xemu-4D530064-2026-10-22-09-30-00.png
+        char prefix[32] = "xemu-";
+        struct xbe *xbe = xemu_get_xbe_info();
+        if (xbe && xbe->cert) {
+            snprintf(prefix, sizeof(prefix), "xemu-%08X-",
+                     (unsigned)xbe->cert->m_titleid);
+        }
         if (tmp) {
-            strftime(fname, sizeof(fname), "xemu-%Y-%m-%d-%H-%M-%S.png", tmp);
+            char stamp[64];
+            strftime(stamp, sizeof(stamp), "%Y-%m-%d-%H-%M-%S", tmp);
+            snprintf(fname, sizeof(fname), "%s%s.png", prefix, stamp);
         } else {
             strcpy(fname, "xemu.png");
         }

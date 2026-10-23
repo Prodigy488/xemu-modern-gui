@@ -19,6 +19,7 @@
 #pragma once
 
 void ActionEjectDisc();
+void ActionEjectDiscNow(void); // without the library's resume-point save
 void ActionLoadDisc();
 void ActionLoadDiscFile(const char *file_path);
 void ActionTogglePause();

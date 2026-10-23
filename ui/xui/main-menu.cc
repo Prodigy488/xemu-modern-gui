@@ -83,6 +83,10 @@ void MainMenuGeneralView::Draw()
     Toggle("Show game library on startup",
            &g_config.general.library.show_on_startup,
            "Open the game library when xemu starts (Ctrl+L)");
+    Toggle("Resume where you left off",
+           &g_config.general.library.auto_resume,
+           "Save a resume point (snapshot) when you exit, eject or switch "
+           "games, and show a Resume button in the game library");
     // toggle("Throttle DVD/HDD speeds", &g_config.general.throttle_io,
     //        "Limit DVD/HDD throughput to approximate Xbox load times");
 }

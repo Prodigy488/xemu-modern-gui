@@ -46,4 +46,8 @@ extern GameLibraryWindow game_library_window;
 // Keep per-game setting overrides out of the saved global config. Called by
 // xemu_settings_save() around writing the config file.
 void GameLibraryBeforeSettingsSave(void);
+
+// Called by ActionEjectDisc(): returns true if the library will save a
+// resume point and then eject itself.
+bool GameLibraryInterceptEject(void);
 void GameLibraryAfterSettingsSave(void);

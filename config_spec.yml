@@ -23,6 +23,9 @@ general:
     tile_size:
       type: number
       default: 0.4
+    auto_resume:
+      type: bool
+      default: false
   skip_boot_anim: bool
   # throttle_io: bool
   last_viewed_menu_index: integer

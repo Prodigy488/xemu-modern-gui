@@ -209,8 +209,9 @@ void xemu_hud_update(void)
     static bool library_startup_checked = false;
     if (!library_startup_checked) {
         library_startup_checked = true;
+        // Not when started with a game (e.g. from a desktop shortcut)
         if (g_config.general.library.show_on_startup &&
-            !first_boot_window.is_open) {
+            !first_boot_window.is_open && !g_xemu_started_with_disc) {
             game_library_window.Open();
         }
     }

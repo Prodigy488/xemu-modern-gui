@@ -9,6 +9,7 @@ xemu_ss.add(files(
   'game-patches.cc',
   'game-preview.cc',
   'perf-overlay.cc',
+  'game-shortcut.cc',
   'gl-helpers.cc',
   'input-manager.cc',
   'main-menu.cc',

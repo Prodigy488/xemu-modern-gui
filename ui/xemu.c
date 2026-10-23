@@ -583,7 +583,9 @@ static void handle_windowevent(SDL_Event *ev)
             }
             if (allow_close) {
                 shutdown_action = SHUTDOWN_ACTION_POWEROFF;
-                qemu_system_shutdown_request(SHUTDOWN_CAUSE_HOST_UI);
+                if (!xemu_hud_intercept_quit()) {
+                    qemu_system_shutdown_request(SHUTDOWN_CAUSE_HOST_UI);
+                }
             }
         } else {
             SDL_HideWindow(scon->real_window);
@@ -966,7 +968,9 @@ static void poll_events(struct xemu_console *scon)
             }
             if (allow_close) {
                 shutdown_action = SHUTDOWN_ACTION_POWEROFF;
-                qemu_system_shutdown_request(SHUTDOWN_CAUSE_HOST_UI);
+                if (!xemu_hud_intercept_quit()) {
+                    qemu_system_shutdown_request(SHUTDOWN_CAUSE_HOST_UI);
+                }
             }
             break;
         case SDL_EVENT_MOUSE_MOTION:
@@ -1257,6 +1261,7 @@ type_init(register_xemu_display);
 
 int gArgc;
 char **gArgv;
+bool g_xemu_started_with_disc;
 
 static void *qemu_main(void *opaque)
 {
@@ -1369,6 +1374,14 @@ int main(int argc, char **argv)
 
     gArgc = argc;
     gArgv = argv;
+
+    // Remembered before qemu_init() consumes it: the game library does not
+    // open on startup when xemu is started with a game (e.g. a shortcut).
+    for (int i = 1; i < argc; i++) {
+        if (argv[i] && strcmp(argv[i], "-dvd_path") == 0) {
+            g_xemu_started_with_disc = true;
+        }
+    }
 
     for (int i = 1; i < argc; i++) {
         if (argv[i] && strcmp(argv[i], "-config_path") == 0) {

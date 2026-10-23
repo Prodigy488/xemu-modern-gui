@@ -36,6 +36,13 @@ void xemu_toggle_fullscreen(void);
 SDL_Window *xemu_get_window(void);
 void xemu_eject_disc(Error **errp);
 void xemu_load_disc(const char *path, Error **errp);
+
+// True when xemu was started with -dvd_path (e.g. from a game shortcut)
+extern bool g_xemu_started_with_disc;
+
+// Window close / quit: returns true if the UI will finish quitting itself
+// (to save a resume point first). Implemented by the game library.
+bool xemu_hud_intercept_quit(void);
 void xemu_main_loop_lock(void);
 void xemu_main_loop_unlock(void);
 

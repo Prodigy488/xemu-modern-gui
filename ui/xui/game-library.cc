@@ -31,6 +31,7 @@
 #include "game-patches.hh"
 #include "game-preview.hh"
 #include "insignia-titles.hh"
+#include "game-shortcut.hh"
 #include "actions.hh"
 #include "misc.hh"
 #include "viewport-manager.hh"
@@ -73,6 +74,7 @@ struct LibraryEntry {
     GLuint tex = 0;
     int tex_w = 0, tex_h = 0;
     bool tex_attempted = false;
+    uint32_t tex_gen = 0; // bumped on reload; stale decodes are dropped
 
     const std::string &DisplayName() const
     {
@@ -244,6 +246,13 @@ void ApplyPreviewRequests()
         g_preview_open_requested.clear();
     }
 }
+
+// Resume points: a snapshot named "Resume <TITLE ID>" saved when leaving a
+// game. Saving needs the main loop lock and the GL context, so actions that
+// leave a game are queued and run from Update().
+enum class LeaveAction { None, Quit, Eject, Launch };
+LeaveAction g_leave_action = LeaveAction::None;
+std::string g_leave_launch_path;
 
 // Loaded disc tracking
 std::string g_last_dvd_path;
@@ -445,6 +454,7 @@ void FreeTexture(LibraryEntry &e)
     DeleteTextureLater(e.tex);
     e.tex = 0;
     e.tex_attempted = false;
+    e.tex_gen++;
 }
 
 // ---------------------------------------------------------------------------
@@ -808,7 +818,9 @@ void MergeScanResults()
             GLuint tex = e->tex;
             int tw = e->tex_w, th = e->tex_h;
             bool attempted = e->tex_attempted;
+            uint32_t gen = e->tex_gen;
             *e = r;
+            e->tex_gen = gen + (changed ? 1 : 0);
             if (changed) {
                 DeleteTextureLater(tex);
             } else {
@@ -894,11 +906,14 @@ std::vector<fs::path> ArtworkCandidates(const LibraryEntry &e)
 // emulation (visible as a slow boot animation). The main thread only
 // uploads finished, already-downscaled images, a couple per frame.
 struct ImageJob {
-    std::string key; // entry path
+    std::string key; // entry path, or "shot:<path>" for a screenshot
     std::vector<fs::path> candidates;
+    int max_h = 600;
+    uint32_t gen = 0;
 };
 struct ImageResult {
     std::string key;
+    uint32_t gen = 0;
     std::vector<uint8_t> rgba;
     int w = 0, h = 0;
 };
@@ -959,6 +974,7 @@ void ImageWorker()
         }
         ImageResult res;
         res.key = job.key;
+        res.gen = job.gen;
         std::error_code ec;
         for (auto &p : job.candidates) {
             if (!fs::is_regular_file(p, ec)) {
@@ -978,7 +994,7 @@ void ImageWorker()
             stbi_image_free(rgba);
             res.w = w;
             res.h = h;
-            Downscale(res.rgba, res.w, res.h, 600);
+            Downscale(res.rgba, res.w, res.h, job.max_h);
             break;
         }
         std::lock_guard<std::mutex> lock(g_img_mutex);
@@ -1006,7 +1022,56 @@ void EnsureTexture(LibraryEntry &e, int &budget)
         return;
     }
     e.tex_attempted = true;
-    ImageJob job{ e.path, ArtworkCandidates(e) };
+    ImageJob job{ e.path, ArtworkCandidates(e), 600, e.tex_gen };
+    {
+        std::lock_guard<std::mutex> lock(g_img_mutex);
+        if (g_img_quit) {
+            return;
+        }
+        g_img_jobs.push_back(std::move(job));
+    }
+    if (!g_img_thread.joinable()) {
+        g_img_thread = std::thread(ImageWorker);
+    }
+    g_img_cv.notify_one();
+}
+
+// Screenshot thumbnails, by file path
+struct ShotThumb {
+    GLuint tex = 0;
+    int w = 0, h = 0;
+    bool requested = false;
+};
+std::map<std::string, ShotThumb> g_shot_thumbs;
+
+void StoreScreenshotThumb(const std::string &path, const ImageResult &r)
+{
+    auto it = g_shot_thumbs.find(path);
+    if (it == g_shot_thumbs.end() || r.rgba.empty()) {
+        return;
+    }
+    DeleteTextureLater(it->second.tex);
+    it->second.tex = UploadTexture(r.rgba.data(), r.w, r.h);
+    it->second.w = r.w;
+    it->second.h = r.h;
+}
+
+void FreeScreenshotThumbs()
+{
+    for (auto &kv : g_shot_thumbs) {
+        DeleteTextureLater(kv.second.tex);
+    }
+    g_shot_thumbs.clear();
+}
+
+void RequestScreenshotThumb(const std::string &path)
+{
+    ShotThumb &t = g_shot_thumbs[path];
+    if (t.requested) {
+        return;
+    }
+    t.requested = true;
+    ImageJob job{ "shot:" + path, { fs::u8path(path) }, 120 };
     {
         std::lock_guard<std::mutex> lock(g_img_mutex);
         if (g_img_quit) {
@@ -1032,14 +1097,103 @@ void UploadDecodedImages(int max_uploads)
         g_img_results.erase(g_img_results.begin(), g_img_results.begin() + n);
     }
     for (auto &r : ready) {
+        if (r.key.compare(0, 5, "shot:") == 0) {
+            StoreScreenshotThumb(r.key.substr(5), r);
+            continue;
+        }
         LibraryEntry *e = FindEntry(r.key);
-        if (!e || r.rgba.empty() || !e->tex_attempted) {
-            continue; // removed, nothing found, or reset since requested
+        if (!e || r.rgba.empty() || !e->tex_attempted || r.gen != e->tex_gen) {
+            continue; // removed, nothing found, or reloaded since requested
         }
         DeleteTextureLater(e->tex);
         e->tex = UploadTexture(r.rgba.data(), r.w, r.h);
         e->tex_w = r.w;
         e->tex_h = r.h;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Resume points
+// ---------------------------------------------------------------------------
+
+std::string ResumeSnapshotName(uint32_t title_id)
+{
+    return "Resume " + FormatTitleId(title_id);
+}
+
+// Index into g_snapshot_mgr of this game's resume point, or -1
+int FindResumeSnapshot(const LibraryEntry &e)
+{
+    if (!e.valid) {
+        return -1;
+    }
+    std::string name = ResumeSnapshotName(e.title_id);
+    for (int i = 0; i < g_snapshot_mgr.m_snapshots_len; i++) {
+        if (name == g_snapshot_mgr.m_snapshots[i].name) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+std::string OriginalDiscPath(const std::string &path);
+
+// The library game currently in the drive, if any
+LibraryEntry *CurrentGame()
+{
+    const char *dvd = g_config.sys.files.dvd_path;
+    if (!dvd || !dvd[0]) {
+        return nullptr;
+    }
+    LibraryEntry *e = FindEntry(OriginalDiscPath(dvd));
+    return (e && e->valid) ? e : nullptr;
+}
+
+bool ShouldSaveResumePoint()
+{
+    return g_config.general.library.auto_resume && CurrentGame() != nullptr;
+}
+
+void SaveResumePoint()
+{
+    LibraryEntry *e = CurrentGame();
+    if (!e) {
+        return;
+    }
+    std::string name = ResumeSnapshotName(e->title_id);
+    Error *err = NULL;
+    xemu_snapshots_save(name.c_str(), &err);
+    if (err) {
+        std::string msg = std::string("Could not save a resume point: ") +
+                          error_get_pretty(err);
+        xemu_queue_error_message(msg.c_str());
+        error_free(err);
+    }
+}
+
+void LaunchNow(const std::string &path);
+
+// Run a queued action that leaves the current game (from Update())
+void RunLeaveAction()
+{
+    LeaveAction action = g_leave_action;
+    g_leave_action = LeaveAction::None;
+    if (action == LeaveAction::None) {
+        return;
+    }
+    SaveResumePoint();
+    switch (action) {
+    case LeaveAction::Quit:
+        qemu_system_shutdown_request(SHUTDOWN_CAUSE_HOST_UI);
+        break;
+    case LeaveAction::Eject:
+        ActionEjectDiscNow();
+        break;
+    case LeaveAction::Launch:
+        LaunchNow(g_leave_launch_path);
+        break;
+    default:
+        break;
     }
 }
 
@@ -1579,6 +1733,15 @@ void DrawContextMenu(LibraryEntry &e)
         std::string url =
             "file:///" + fs::u8path(e.path).parent_path().generic_u8string();
         SDL_OpenURL(url.c_str());
+    }
+    if (GameShortcutsSupported() &&
+        ImGui::MenuItem("Create desktop shortcut")) {
+        std::string error;
+        if (CreateGameDesktopShortcut(e.DisplayName(), e.path, error)) {
+            xemu_queue_notification("Shortcut created on your desktop");
+        } else {
+            xemu_queue_error_message(error.c_str());
+        }
     }
     ImGui::Separator();
     if (ImGui::MenuItem(ICON_FA_XMARK "  Remove from library")) {
@@ -2473,6 +2636,13 @@ std::map<std::string, std::string> g_preview_cache;
 
 std::string FindPreviewCached(const LibraryEntry &e)
 {
+    // Forget answers after a few seconds so newly added videos show up
+    static uint64_t cleared_at = 0;
+    uint64_t now = SDL_GetTicks();
+    if (now - cleared_at > 3000) {
+        g_preview_cache.clear();
+        cleared_at = now;
+    }
     auto it = g_preview_cache.find(e.path);
     if (it == g_preview_cache.end()) {
         it = g_preview_cache.emplace(e.path, FindPreview(e)).first;
@@ -2614,6 +2784,93 @@ void DrawSaveStates(LibraryEntry &e, float w)
     }
 }
 
+// This game's screenshots (xemu-<TITLEID>-*.png in the screenshot folder),
+// newest first. The folder listing is cached for a few seconds.
+std::vector<std::string> ScreenshotsFor(uint32_t title_id)
+{
+    static std::map<uint32_t, std::vector<std::string>> cache;
+    static uint64_t cached_at = 0;
+    uint64_t now = SDL_GetTicks();
+    if (now - cached_at > 3000) {
+        cache.clear();
+        cached_at = now;
+    }
+    auto it = cache.find(title_id);
+    if (it != cache.end()) {
+        return it->second;
+    }
+    std::vector<std::string> out;
+    const char *dir = g_config.general.screenshot_dir;
+    std::string prefix = "xemu-" + TitleIdHex(title_id) + "-";
+    std::error_code ec;
+    for (fs::directory_iterator d(fs::u8path(dir && dir[0] ? dir : "."), ec), end;
+         !ec && d != end; d.increment(ec)) {
+        std::string name = d->path().filename().u8string();
+        if (name.compare(0, prefix.size(), prefix) == 0 &&
+            Lower(d->path().extension().u8string()) == ".png") {
+            out.push_back(d->path().u8string());
+        }
+    }
+    std::sort(out.rbegin(), out.rend()); // names carry the date
+    cache[title_id] = out;
+    return out;
+}
+
+void DrawScreenshots(const LibraryEntry &e, float w)
+{
+    if (!e.valid) {
+        return;
+    }
+    std::vector<std::string> shots = ScreenshotsFor(e.title_id);
+    if (shots.empty()) {
+        return;
+    }
+    const float s = g_viewport_mgr.m_scale;
+    ImGui::Dummy(ImVec2(0, 6 * s));
+    ImGui::Separator();
+    ImGui::TextDisabled("Screenshots (%d)", (int)shots.size());
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Open folder")) {
+        const char *dir = g_config.general.screenshot_dir;
+        std::string p = fs::absolute(fs::u8path(dir && dir[0] ? dir : ".")).generic_u8string();
+        SDL_OpenURL(("file:///" + p).c_str());
+    }
+    const int per_row = 3;
+    float gap = 4 * s;
+    float tw = (w - gap * (per_row - 1)) / per_row, th = tw * 3 / 4;
+    int shown = 0;
+    for (auto &path : shots) {
+        if (shown == 6) {
+            break;
+        }
+        if (shown % per_row) {
+            ImGui::SameLine(0, gap);
+        }
+        shown++;
+        RequestScreenshotThumb(path);
+        ImGui::PushID(path.c_str());
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        if (ImGui::InvisibleButton("##shot", ImVec2(tw, th))) {
+            SDL_OpenURL(("file:///" + fs::u8path(path).generic_u8string()).c_str());
+        }
+        ImGui::SetItemTooltip("%s", fs::u8path(path).filename().u8string().c_str());
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        const ShotThumb &t = g_shot_thumbs[path];
+        dl->AddRectFilled(p, ImVec2(p.x + tw, p.y + th), IM_COL32(30, 30, 34, 255), 3 * s);
+        if (t.tex && t.w > 0) {
+            float sc = std::min(tw / t.w, th / t.h);
+            ImVec2 a(p.x + (tw - t.w * sc) / 2, p.y + (th - t.h * sc) / 2);
+            dl->AddImageRounded((ImTextureID)(intptr_t)t.tex, a,
+                                ImVec2(a.x + t.w * sc, a.y + t.h * sc), ImVec2(0, 0),
+                                ImVec2(1, 1), IM_COL32_WHITE, 3 * s);
+        }
+        if (ImGui::IsItemHovered()) {
+            dl->AddRect(p, ImVec2(p.x + tw, p.y + th), kAccent, 3 * s, 0, 2 * s);
+        }
+        ImGui::PopID();
+    }
+}
+
 // Right-hand panel with the selected game's art and details
 void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
 {
@@ -2681,6 +2938,29 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
     }
     ImGui::Dummy(ImVec2(0, 8 * s));
 
+    g_snapshot_mgr.Refresh(); // cached by xemu
+    int resume = FindResumeSnapshot(e);
+    if (resume >= 0) {
+        const QEMUSnapshotInfo &info = g_snapshot_mgr.m_snapshots[resume];
+        time_t t = (time_t)info.date_sec;
+        char when[48] = "";
+        struct tm *tm = localtime(&t);
+        if (tm) {
+            strftime(when, sizeof(when), "%b %d, %H:%M", tm);
+        }
+        std::string label = std::string(ICON_FA_PLAY "  Resume  ") + when;
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.42f, 0.78f, 1));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.5f, 0.88f, 1));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.36f, 0.68f, 1));
+        if (ImGui::Button(label.c_str(), ImVec2(w, 40 * s))) {
+            std::string name = info.name; // the list may refresh on load
+            RequestPreviewStop();
+            ActionLoadSnapshotChecked(name.c_str());
+            game_library_window.is_open = false;
+        }
+        ImGui::PopStyleColor(3);
+        ImGui::SetItemTooltip("Continue from where you left off");
+    }
     ImGui::PushStyleColor(ImGuiCol_Button, ImGui::ColorConvertU32ToFloat4(kAccent));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.45f, 0.86f, 0.16f, 1));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.32f, 0.70f, 0.06f, 1));
@@ -2739,6 +3019,7 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
     }
 
     DrawSaveStates(e, w);
+    DrawScreenshots(e, w);
 }
 
 } // namespace
@@ -2796,10 +3077,14 @@ void GameLibraryWindow::Rescan()
     }
     g_preview_cache.clear();
     g_pathkey_cache.clear();
+    FreeScreenshotThumbs();
     StartScan();
 }
 
-void GameLibraryWindow::Launch(const std::string &path)
+namespace {
+
+// Load and boot a game (no resume-point handling)
+void LaunchNow(const std::string &path)
 {
     LibraryEntry *e = FindEntry(path);
     std::string name = e ? e->DisplayName() : fs::u8path(path).stem().u8string();
@@ -2830,7 +3115,24 @@ void GameLibraryWindow::Launch(const std::string &path)
     }
     std::string msg = "Starting " + name;
     xemu_queue_notification(msg.c_str());
-    is_open = false;
+    game_library_window.is_open = false;
+}
+
+} // namespace
+
+
+void GameLibraryWindow::Launch(const std::string &path)
+{
+    LibraryEntry *cur = CurrentGame();
+    if (ShouldSaveResumePoint() && cur && cur->path != path) {
+        // Leaving a running game: save its resume point first (in Update)
+        g_leave_action = LeaveAction::Launch;
+        g_leave_launch_path = path;
+        is_open = false;
+        xemu_queue_notification("Saving a resume point...");
+        return;
+    }
+    LaunchNow(path);
 }
 
 std::vector<RecentGame> GameLibraryWindow::GetRecentGames(int max_count)
@@ -2891,6 +3193,7 @@ void GameLibraryWindow::Update()
     }
     ApplyPreviewRequests();
     FlushDeletedTextures();
+    RunLeaveAction();
     MergeScanResults();
     MergeCoverResults();
     UploadDecodedImages(2);
@@ -3182,6 +3485,29 @@ void GameLibraryWindow::Draw()
     }
     ImGui::End();
     ImGui::PopStyleVar();
+}
+
+bool xemu_hud_intercept_quit(void)
+{
+    if (g_leave_action == LeaveAction::Quit) {
+        return true; // already saving; quit follows
+    }
+    if (!ShouldSaveResumePoint()) {
+        return false;
+    }
+    g_leave_action = LeaveAction::Quit;
+    xemu_queue_notification("Saving a resume point...");
+    return true;
+}
+
+bool GameLibraryInterceptEject(void)
+{
+    if (!ShouldSaveResumePoint()) {
+        return false;
+    }
+    g_leave_action = LeaveAction::Eject;
+    xemu_queue_notification("Saving a resume point...");
+    return true;
 }
 
 void GameLibraryBeforeSettingsSave(void)

@@ -23,9 +23,18 @@
 #include "../xemu-snapshots.h"
 #include "../xemu-notifications.h"
 #include "snapshot-manager.hh"
+#include "game-library.hh"
 #include <filesystem>
 
 void ActionEjectDisc(void)
+{
+    if (GameLibraryInterceptEject()) {
+        return; // saving a resume point first; the library ejects after
+    }
+    ActionEjectDiscNow();
+}
+
+void ActionEjectDiscNow(void)
 {
     Error *err = NULL;
     xemu_eject_disc(&err);
@@ -84,6 +93,9 @@ void ActionReset(void)
 
 void ActionShutdown(void)
 {
+    if (xemu_hud_intercept_quit()) {
+        return; // saving a resume point first; the library quits after
+    }
     qemu_system_shutdown_request(SHUTDOWN_CAUSE_HOST_UI);
 }
 

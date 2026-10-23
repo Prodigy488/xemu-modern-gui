@@ -31,6 +31,8 @@
 #include "qapi/error.h"
 #include "hw/loader.h"
 #include "migration/vmstate.h"
+#include "eeprom_generation.h"
+#include "eeprom_video.h"
 
 #define TYPE_SMBUS_STORAGE "smbus-storage"
 #define SMBUS_STORAGE(obj) OBJECT_CHECK(SMBusStorageDevice, (obj), \
@@ -52,6 +54,27 @@ typedef struct SMBusStorageDevice {
     uint32_t offset;
     bool persist;
 } SMBusStorageDevice;
+
+/* The Xbox EEPROM (address 0x54), for the video settings in the UI */
+static SMBusStorageDevice *xbox_eeprom;
+
+static int smbus_storage_save(SMBusStorageDevice *s)
+{
+    int fd = qemu_open(s->file, O_WRONLY | O_BINARY, NULL);
+    if (fd < 0) {
+        DPRINTF("%s: file '%s' could not be opened\n", __func__, s->file);
+        return -1;
+    }
+
+    int wc = write(fd, s->data, s->size);
+    if (wc != s->size) {
+        DPRINTF("%s: file '%s' write failure\n", __func__, s->file);
+        close(fd);
+        return -1;
+    }
+    close(fd);
+    return 0;
+}
 
 static void smbus_storage_realize(DeviceState *dev, Error **errp)
 {
@@ -82,6 +105,9 @@ static void smbus_storage_realize(DeviceState *dev, Error **errp)
             return;
         }
         close(fd);
+        if (s->addr == 0x54 && s->size == 256) {
+            xbox_eeprom = s;
+        }
     } else {
         error_setg(errp, "%s: file unspecified\n", __func__);
     }
@@ -109,22 +135,34 @@ static int smbus_storage_write_data(SMBusDevice *dev, uint8_t *buf, uint8_t len)
     }
 
     if (changed && s->file && s->persist) {
-        int fd = qemu_open(s->file, O_WRONLY | O_BINARY, NULL);
-        if (fd < 0) {
-            DPRINTF("%s: file '%s' could not be opened\n", __func__, s->file);
-            return -1;
-        }
-
-        int wc = write(fd, s->data, s->size);
-        if (wc != s->size) {
-            DPRINTF( "%s: file '%s' write failure\n", __func__, s->file);
-            close(fd);
-            return -1;
-        }
-        close(fd);
+        return smbus_storage_save(s);
     }
 
     return 0;
+}
+
+bool xbox_eeprom_get_video_flags(uint32_t *flags)
+{
+    if (!xbox_eeprom) {
+        return false;
+    }
+    *flags = ldl_le_p(xbox_eeprom->data + 0x94);
+    return true;
+}
+
+bool xbox_eeprom_set_video_flags(uint32_t flags)
+{
+    SMBusStorageDevice *s = xbox_eeprom;
+    if (!s) {
+        return false;
+    }
+    stl_le_p(s->data + 0x94, flags);
+    /* The user section checksum at 0x60 covers 0x64-0xBF */
+    stl_le_p(s->data + 0x60, xbox_eeprom_crc(s->data + 0x64, 0x5C));
+    if (s->file && s->persist) {
+        return smbus_storage_save(s) == 0;
+    }
+    return true;
 }
 
 static uint8_t smbus_storage_receive_byte(SMBusDevice *dev)

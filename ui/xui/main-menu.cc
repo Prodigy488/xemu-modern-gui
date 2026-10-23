@@ -42,6 +42,10 @@
 
 #include "../thirdparty/fatx/fatx.h"
 
+extern "C" {
+#include "hw/xbox/eeprom_video.h"
+}
+
 #define DEFAULT_XMU_SIZE 8388608
 
 MainMenuScene g_main_menu;
@@ -1578,6 +1582,52 @@ void MainMenuSystemView::Draw()
             "SCART\0HDTV (Default)\0VGA\0RFU\0S-Video\0Composite\0None\0",
             "Select the attached AV pack")) {
         m_dirty = true;
+    }
+
+    // The Xbox dashboard's video settings, kept in the console's EEPROM
+    SectionTitle("Video Modes");
+    uint32_t video_flags = 0;
+    if (!xbox_eeprom_get_video_flags(&video_flags)) {
+        ImGui::TextDisabled("Available once the console is running.");
+    } else {
+        static const struct {
+            const char *label;
+            uint32_t flag;
+            const char *description;
+        } modes[] = {
+            { "Widescreen", XBOX_EEPROM_VIDEO_WIDESCREEN,
+              "Games that support it render in 16:9" },
+            { "480p", XBOX_EEPROM_VIDEO_480P,
+              "Allow progressive scan (HDTV AV pack)" },
+            { "720p", XBOX_EEPROM_VIDEO_720P,
+              "Allow 720p in the few games that support it (HDTV AV pack)" },
+            { "1080i", XBOX_EEPROM_VIDEO_1080I,
+              "Allow 1080i in the few games that support it (HDTV AV pack)" },
+        };
+        for (auto &m : modes) {
+            bool on = (video_flags & m.flag) != 0;
+            if (Toggle(m.label, &on, m.description)) {
+                uint32_t flags = on ? (video_flags | m.flag)
+                                    : (video_flags & ~m.flag);
+                if (xbox_eeprom_set_video_flags(flags)) {
+                    video_flags = flags;
+                    xemu_queue_notification(
+                        "Video modes saved. Games use them the next time "
+                        "they start.");
+                } else {
+                    xemu_queue_error_message(
+                        "Could not save the video modes to the EEPROM file");
+                }
+            }
+        }
+        if (g_config.sys.avpack != CONFIG_SYS_AVPACK_HDTV &&
+            (video_flags & (XBOX_EEPROM_VIDEO_480P | XBOX_EEPROM_VIDEO_720P |
+                            XBOX_EEPROM_VIDEO_1080I))) {
+            ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1),
+                               "480p, 720p and 1080i need the HDTV AV pack.");
+        }
+        ImGui::TextDisabled("Same as the video settings in the Xbox dashboard. "
+                            "Patches can force these too.");
     }
 
     SectionTitle("Files");

@@ -22,7 +22,7 @@
 #include "util/sha1.h"
 #include "util/rc4.h"
 
-static uint32_t xbox_eeprom_crc(uint8_t *data, size_t len) {
+uint32_t xbox_eeprom_crc(uint8_t *data, size_t len) {
 	uint32_t high = 0;
     uint32_t low = 0;
 	for (int i = 0; i < len / 4; i++) {

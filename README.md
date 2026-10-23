@@ -13,13 +13,13 @@ quality-of-life features on top of the official release.
 
 ![Home tab, Neon theme](docs/screenshots/home.jpg)
 
-| Library | Insignia | Classic style |
+| Library | Insignia | Drive (hard drive explorer) |
 |---|---|---|
-| ![Library](docs/screenshots/library.jpg) | ![Insignia](docs/screenshots/insignia.jpg) | ![Classic](docs/screenshots/classic.jpg) |
+| ![Library](docs/screenshots/library.jpg) | ![Insignia](docs/screenshots/insignia.jpg) | ![Drive](docs/screenshots/drive.jpg) |
 
-| Blades style | Metro style |
-|---|---|
-| ![Blades](docs/screenshots/blades.jpg) | ![Metro](docs/screenshots/metro.jpg) |
+| Blades style | Metro style | Classic style |
+|---|---|---|
+| ![Blades](docs/screenshots/blades.jpg) | ![Metro](docs/screenshots/metro.jpg) | ![Classic](docs/screenshots/classic.jpg) |
 
 <sub>Screenshots use placeholder cover art.</sub>
 
@@ -39,15 +39,15 @@ shared.
   the game you're playing, with its cover, title ID, play time and an Insignia
   badge for online-capable games. Turn it off in Settings > General > Discord
   status. Requires the Discord app running on the same PC.
-- **New in v1.5: Blades and Metro styles.** Two more dashboard layouts:
+- **New in v1.3: Blades and Metro styles.** Two more dashboard layouts:
   sliding side-by-side panels, or slim XBMC4Gamers-style lists. Save states
   also get a right-click menu (load, delete, show file).
-- **New in v1.5: Xbox hard drive explorer.** A Drive tab to browse the
+- **New in v1.3: Xbox hard drive explorer.** A Drive tab to browse the
   emulated hard drive's C, E, F and X/Y/Z partitions and copy files and
   folders in and out, rename and delete (uses
   [libfatx](https://github.com/mborgerson/fatx)). Copying to the Xbox pauses
   it and restarts it afterwards.
-- **New in v1.5: 3D game cases.** Covers on the Home screen stand as 3D game
+- **New in v1.3: 3D game cases.** Covers on the Home screen stand as 3D game
   cases with a spine and a reflection, made from your existing covers. Use
   your own 3D box art by saving it as `covers\<title ID>-3d.png`, or switch
   back with Settings > Home screen covers. The Insignia status in the top bar
@@ -55,7 +55,7 @@ shared.
   upscaling, using the RTX Video Super Resolution built into NVIDIA's driver
   (RTX cards, with the feature turned on in the NVIDIA app), and **NVIDIA
   Image Scaling (NIS)** for any GPU.
-- **New in v1.4: motion.** The dashboard animates: flowing light ribbons, a
+- **New in v1.3: motion.** The dashboard animates: flowing light ribbons, a
   slowly turning wireframe orb and drifting specks in the background (plus a
   grid floor in Neon), content that sweeps in when you switch tabs, a tab
   highlight that glides, and a selection glow. Turn it off with

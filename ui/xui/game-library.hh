@@ -35,6 +35,7 @@ public:
     std::vector<RecentGame> GetRecentGames(int max_count);
     void Launch(const std::string &path);
     void Rescan();
+    void OpenFolderManager();
 };
 
 extern GameLibraryWindow game_library_window;

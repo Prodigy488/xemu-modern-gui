@@ -48,6 +48,21 @@ void FontManager::Rebuild()
         m_default_font = io.Fonts->AddFontFromMemoryTTF(
             (void *)Roboto_Medium_data, Roboto_Medium_size,
             16.0f * scale, &config);
+        {
+            // Icons in the regular UI font too (game library toolbar etc.)
+            ImFontConfig icon_config;
+            icon_config.FontDataOwnedByAtlas = false;
+            icon_config.RasterizerDensity = pixel_density;
+            icon_config.MergeMode = true;
+            icon_config.PixelSnapH = true;
+            icon_config.GlyphMinAdvanceX = 16.0f * scale;
+            icon_config.GlyphOffset = ImVec2(0, 1 * scale);
+            static const ImWchar fa_ranges[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
+            io.Fonts->AddFontFromMemoryTTF(
+                (void *)font_awesome_6_1_1_solid_min_data,
+                font_awesome_6_1_1_solid_min_size, 14.0f * scale,
+                &icon_config, fa_ranges);
+        }
         m_menu_font_small = io.Fonts->AddFontFromMemoryTTF(
             (void *)RobotoCondensed_Regular_data, RobotoCondensed_Regular_size,
             22.0f * scale, &config);

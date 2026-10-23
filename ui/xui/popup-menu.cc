@@ -445,10 +445,6 @@ public:
             game_library_window.Open();
             pop = true;
         }
-        if (PopupMenuSubmenuButton("Games", ICON_FA_COMPACT_DISC)) {
-            nav.PushFocus();
-            nav.PushMenu(games);
-        }
         if (PopupMenuButton("Eject Disc", ICON_FA_EJECT)) {
             ActionEjectDisc();
             pop = true;

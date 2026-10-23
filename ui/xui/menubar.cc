@@ -96,13 +96,16 @@ void ShowMainMenu()
 
     if (ImGui::BeginMainMenuBar())
     {
-        if (ImGui::BeginMenu("Library"))
+        if (ImGui::BeginMenu("Games"))
         {
             if (ImGui::MenuItem("Game Library", SHORTCUT_MENU_TEXT(L))) {
                 game_library_window.Open();
             }
-            if (ImGui::MenuItem("Rescan Games Folder")) {
+            if (ImGui::MenuItem("Scan Folders")) {
                 game_library_window.Rescan();
+            }
+            if (ImGui::MenuItem("Manage Folders...")) {
+                game_library_window.OpenFolderManager();
             }
             ImGui::Separator();
             auto recent = game_library_window.GetRecentGames(8);

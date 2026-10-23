@@ -57,6 +57,8 @@ struct LibraryEntry {
     uint32_t title_id = 0;
     std::string title;
     uint32_t region = 0;
+    uint32_t version = 0;
+    uint32_t disc_number = 0;
     bool has_icon = false;
 
     // Display texture (main thread only)
@@ -199,6 +201,33 @@ std::string Lower(std::string s)
     return s;
 }
 
+// Normalized form of a path for duplicate checks: resolves "..", links and
+// trailing slashes; case-insensitive on Windows.
+std::string PathKey(const fs::path &p)
+{
+    std::error_code ec;
+    fs::path c = fs::weakly_canonical(p, ec);
+    if (ec) {
+        c = p.lexically_normal();
+    }
+    std::string k = c.generic_u8string();
+#ifdef _WIN32
+    k = Lower(k);
+#endif
+    while (k.size() > 1 && k.back() == '/') {
+        k.pop_back();
+    }
+    return k;
+}
+
+bool PathWithin(const std::string &child_key, const std::string &parent_key)
+{
+    return child_key == parent_key ||
+           (child_key.size() > parent_key.size() &&
+            child_key.compare(0, parent_key.size(), parent_key) == 0 &&
+            (parent_key.back() == '/' || child_key[parent_key.size()] == '/'));
+}
+
 bool ReadWholeFile(const fs::path &p, std::vector<uint8_t> &out)
 {
     std::ifstream f(p, std::ios::binary);
@@ -308,6 +337,8 @@ void LoadLibrary()
             e.title_id = g.value("title_id", (uint32_t)0);
             e.title = g.value("title", "");
             e.region = g.value("region", (uint32_t)0);
+            e.version = g.value("version", (uint32_t)0);
+            e.disc_number = g.value("disc", (uint32_t)0);
             e.has_icon = g.value("has_icon", false);
             g_entries.push_back(std::move(e));
         }
@@ -345,6 +376,8 @@ void SaveLibrary()
                           { "title_id", e.title_id },
                           { "title", e.title },
                           { "region", e.region },
+                          { "version", e.version },
+                          { "disc", e.disc_number },
                           { "has_icon", e.has_icon } });
     }
     j["games"] = games;
@@ -416,7 +449,7 @@ void ScanWorker(std::vector<LibraryFolder> folders,
         }
         std::string ext = Lower(de.path().extension().u8string());
         if ((ext == ".iso" || ext == ".xiso") &&
-            seen.insert(de.path().u8string()).second) {
+            seen.insert(PathKey(de.path())).second) {
             files.push_back(de.path());
         }
     };
@@ -449,6 +482,7 @@ void ScanWorker(std::vector<LibraryFolder> folders,
 
     fs::create_directories(IconCacheDir(), ec);
     std::set<std::string> found;
+    std::set<std::string> discs; // identical copies of a disc are listed once
     for (auto &p : files) {
         if (g_scan_cancel) {
             break;
@@ -471,6 +505,8 @@ void ScanWorker(std::vector<LibraryFolder> folders,
                 e.title_id = info.title_id;
                 e.title = info.title_name;
                 e.region = info.region;
+                e.version = info.version;
+                e.disc_number = info.disc_number;
                 if (!info.icon_rgba.empty()) {
                     std::vector<uint8_t> png;
                     if (fpng::fpng_encode_image_to_memory(
@@ -483,6 +519,16 @@ void ScanWorker(std::vector<LibraryFolder> folders,
                         e.has_icon = (bool)f;
                     }
                 }
+            }
+        }
+        if (e.valid) {
+            std::string disc_key = string_format(
+                "%08X/%08X/%08X/%u/%llu", e.title_id, e.region, e.version,
+                e.disc_number, (unsigned long long)e.file_size);
+            if (!discs.insert(disc_key).second) {
+                found.erase(e.path); // duplicate of a disc already listed
+                g_scan_done++;
+                continue;
             }
         }
         {
@@ -1156,8 +1202,12 @@ void AddGameFolder()
             xemu_settings_set_string(&g_config.general.games_dir, path);
             xemu_settings_save(); // remember the folder right away
         } else {
+            std::string key = PathKey(fs::u8path(path));
             for (auto &f : AllFolders()) {
-                if (f.path == path) {
+                std::string fkey = PathKey(fs::u8path(f.path));
+                if (key == fkey || (f.recursive && PathWithin(key, fkey))) {
+                    xemu_queue_notification(
+                        "That folder is already in your game library");
                     return;
                 }
             }
@@ -1356,6 +1406,12 @@ void GameLibraryWindow::Open()
     g_focus_requested = true;
 }
 
+void GameLibraryWindow::OpenFolderManager()
+{
+    Open();
+    g_open_folders_popup = true;
+}
+
 void GameLibraryWindow::ToggleOpen()
 {
     is_open = !is_open;
@@ -1431,6 +1487,9 @@ void GameLibraryWindow::Update()
     const char *dvd = g_config.sys.files.dvd_path;
     std::string cur = dvd ? dvd : "";
     if (cur != g_last_dvd_path) {
+        if (cur.empty() && !g_last_dvd_path.empty()) {
+            Open(); // disc ejected: back to the library to pick the next game
+        }
         g_last_dvd_path = cur;
         if (!cur.empty()) {
             g_stats[cur].last_played = (int64_t)time(NULL);
@@ -1475,7 +1534,8 @@ void GameLibraryWindow::Draw()
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20 * s, 14 * s));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6 * s);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.07f, 0.08f, 1.0f));
+    // Slightly see-through so the boot animation or game shows behind it
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.06f, 0.06f, 0.07f, 0.80f));
     bool visible = ImGui::Begin(
         "###Game Library", NULL,
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
@@ -1592,11 +1652,11 @@ void GameLibraryWindow::Draw()
                           folders.size() == 1 ? "" : "s");
     ImGui::SameLine(0, 2 * s);
     ImGui::BeginDisabled(g_scan_running);
-    if (ImGui::Button(ICON_FA_ARROWS_ROTATE)) {
+    if (ImGui::Button(ICON_FA_ARROWS_ROTATE "  Scan folders")) {
         game_library_window.Rescan();
     }
     ImGui::EndDisabled();
-    ImGui::SetItemTooltip("Rescan folders and covers");
+    ImGui::SetItemTooltip("Look for new or removed games and covers");
     ImGui::Dummy(ImVec2(0, 4 * s));
 
     std::vector<LibraryEntry *> items;
@@ -1613,9 +1673,11 @@ void GameLibraryWindow::Draw()
     float panel_w = std::min(340 * s, avail_w * 0.3f);
     float gap = 16 * s;
 
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
     ImGui::BeginChild("##content",
                       ImVec2(show_panel ? avail_w - panel_w - gap : 0, 0),
                       ImGuiChildFlags_NavFlattened);
+    ImGui::PopStyleColor();
     if (items.empty()) {
         ImGui::Dummy(ImVec2(0, 20 * s));
         ImGui::TextDisabled(g_entries.empty() && !g_scan_running
@@ -1634,7 +1696,7 @@ void GameLibraryWindow::Draw()
 
     if (show_panel) {
         ImGui::SameLine(0, gap);
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.11f, 0.11f, 0.12f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.11f, 0.11f, 0.12f, 0.88f));
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10 * s);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14 * s, 14 * s));
         ImGui::BeginChild("##details", ImVec2(0, 0),

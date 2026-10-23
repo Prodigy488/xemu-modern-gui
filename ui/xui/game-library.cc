@@ -10,6 +10,8 @@
 // layer #defines close(), which would otherwise break std::filebuf.
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
+#include <deque>
 #include <cctype>
 #include <cmath>
 #include <ctime>
@@ -240,6 +242,20 @@ std::string Lower(std::string s)
     std::transform(s.begin(), s.end(), s.begin(),
                    [](unsigned char c) { return (char)tolower(c); });
     return s;
+}
+
+std::string PathKey(const fs::path &p);
+
+// PathKey() asks the filesystem; memoize it for paths checked every frame
+std::map<std::string, std::string> g_pathkey_cache;
+
+std::string PathKeyCached(const std::string &path)
+{
+    auto it = g_pathkey_cache.find(path);
+    if (it == g_pathkey_cache.end()) {
+        it = g_pathkey_cache.emplace(path, PathKey(fs::u8path(path))).first;
+    }
+    return it->second;
 }
 
 // Normalized form of a path for duplicate checks: resolves "..", links and
@@ -785,34 +801,159 @@ std::vector<fs::path> ArtworkCandidates(const LibraryEntry &e)
     return out;
 }
 
-void EnsureTexture(LibraryEntry &e, int &budget)
+// Artwork is decoded on a background thread: the library is drawn while
+// xemu holds its main loop lock, so decoding large covers there would stall
+// emulation (visible as a slow boot animation). The main thread only
+// uploads finished, already-downscaled images, a couple per frame.
+struct ImageJob {
+    std::string key; // entry path
+    std::vector<fs::path> candidates;
+};
+struct ImageResult {
+    std::string key;
+    std::vector<uint8_t> rgba;
+    int w = 0, h = 0;
+};
+std::thread g_img_thread;
+std::mutex g_img_mutex;
+std::condition_variable g_img_cv;
+std::deque<ImageJob> g_img_jobs;
+std::vector<ImageResult> g_img_results;
+bool g_img_quit = false;
+
+// Box-filter downscale so covers stay small in memory and quick to upload
+void Downscale(std::vector<uint8_t> &rgba, int &w, int &h, int max_h)
 {
-    if (e.tex_attempted || budget <= 0) {
+    if (h <= max_h) {
         return;
     }
-    budget--;
-    e.tex_attempted = true;
-    std::error_code ec;
-    for (auto &p : ArtworkCandidates(e)) {
-        if (!fs::is_regular_file(p, ec)) {
-            continue;
+    int nh = max_h, nw = std::max(1, (int)((int64_t)w * max_h / h));
+    std::vector<uint8_t> out((size_t)nw * nh * 4);
+    for (int y = 0; y < nh; y++) {
+        int y0 = (int)((int64_t)y * h / nh), y1 = std::max(y0 + 1, (int)((int64_t)(y + 1) * h / nh));
+        for (int x = 0; x < nw; x++) {
+            int x0 = (int)((int64_t)x * w / nw), x1 = std::max(x0 + 1, (int)((int64_t)(x + 1) * w / nw));
+            uint32_t acc[4] = { 0, 0, 0, 0 }, n = 0;
+            for (int yy = y0; yy < y1; yy++) {
+                const uint8_t *row = &rgba[((size_t)yy * w + x0) * 4];
+                for (int xx = x0; xx < x1; xx++, row += 4) {
+                    acc[0] += row[0];
+                    acc[1] += row[1];
+                    acc[2] += row[2];
+                    acc[3] += row[3];
+                    n++;
+                }
+            }
+            uint8_t *d = &out[((size_t)y * nw + x) * 4];
+            for (int c = 0; c < 4; c++) {
+                d[c] = (uint8_t)(acc[c] / n);
+            }
         }
-        std::vector<uint8_t> data;
-        if (!ReadWholeFile(p, data)) {
-            continue;
+    }
+    rgba.swap(out);
+    w = nw;
+    h = nh;
+}
+
+void ImageWorker()
+{
+    stbi_set_flip_vertically_on_load_thread(0);
+    for (;;) {
+        ImageJob job;
+        {
+            std::unique_lock<std::mutex> lock(g_img_mutex);
+            g_img_cv.wait(lock, [] { return g_img_quit || !g_img_jobs.empty(); });
+            if (g_img_quit) {
+                return;
+            }
+            job = std::move(g_img_jobs.front());
+            g_img_jobs.pop_front();
         }
-        int w, h, n;
-        stbi_set_flip_vertically_on_load(false);
-        uint8_t *rgba = stbi_load_from_memory(data.data(), (int)data.size(),
-                                              &w, &h, &n, 4);
-        if (!rgba) {
-            continue;
+        ImageResult res;
+        res.key = job.key;
+        std::error_code ec;
+        for (auto &p : job.candidates) {
+            if (!fs::is_regular_file(p, ec)) {
+                continue;
+            }
+            std::vector<uint8_t> data;
+            if (!ReadWholeFile(p, data)) {
+                continue;
+            }
+            int w, h, n;
+            uint8_t *rgba = stbi_load_from_memory(data.data(), (int)data.size(),
+                                                  &w, &h, &n, 4);
+            if (!rgba) {
+                continue;
+            }
+            res.rgba.assign(rgba, rgba + (size_t)w * h * 4);
+            stbi_image_free(rgba);
+            res.w = w;
+            res.h = h;
+            Downscale(res.rgba, res.w, res.h, 600);
+            break;
         }
-        e.tex = UploadTexture(rgba, w, h);
-        e.tex_w = w;
-        e.tex_h = h;
-        stbi_image_free(rgba);
+        std::lock_guard<std::mutex> lock(g_img_mutex);
+        g_img_results.push_back(std::move(res));
+    }
+}
+
+void StopImageWorker()
+{
+    {
+        std::lock_guard<std::mutex> lock(g_img_mutex);
+        g_img_quit = true;
+        g_img_jobs.clear();
+    }
+    g_img_cv.notify_all();
+    if (g_img_thread.joinable()) {
+        g_img_thread.join();
+    }
+}
+
+void EnsureTexture(LibraryEntry &e, int &budget)
+{
+    (void)budget;
+    if (e.tex_attempted) {
         return;
+    }
+    e.tex_attempted = true;
+    ImageJob job{ e.path, ArtworkCandidates(e) };
+    {
+        std::lock_guard<std::mutex> lock(g_img_mutex);
+        if (g_img_quit) {
+            return;
+        }
+        g_img_jobs.push_back(std::move(job));
+    }
+    if (!g_img_thread.joinable()) {
+        g_img_thread = std::thread(ImageWorker);
+    }
+    g_img_cv.notify_one();
+}
+
+// Main thread: upload up to `max_uploads` finished images
+void UploadDecodedImages(int max_uploads)
+{
+    std::vector<ImageResult> ready;
+    {
+        std::lock_guard<std::mutex> lock(g_img_mutex);
+        int n = std::min<int>(max_uploads, (int)g_img_results.size());
+        ready.assign(std::make_move_iterator(g_img_results.begin()),
+                     std::make_move_iterator(g_img_results.begin() + n));
+        g_img_results.erase(g_img_results.begin(), g_img_results.begin() + n);
+    }
+    for (auto &r : ready) {
+        LibraryEntry *e = FindEntry(r.key);
+        if (!e || r.rgba.empty() || !e->tex_attempted) {
+            continue; // removed, nothing found, or reset since requested
+        }
+        if (e->tex) {
+            glDeleteTextures(1, &e->tex);
+        }
+        e->tex = UploadTexture(r.rgba.data(), r.w, r.h);
+        e->tex_w = r.w;
+        e->tex_h = r.h;
     }
 }
 
@@ -2074,8 +2215,22 @@ std::string FindPreview(const LibraryEntry &e)
     return "";
 }
 
+// FindPreview touches the disk, so remember the answer per game; cleared
+// when previews are added or removed and on rescan.
+std::map<std::string, std::string> g_preview_cache;
+
+std::string FindPreviewCached(const LibraryEntry &e)
+{
+    auto it = g_preview_cache.find(e.path);
+    if (it == g_preview_cache.end()) {
+        it = g_preview_cache.emplace(e.path, FindPreview(e)).first;
+    }
+    return it->second;
+}
+
 void RemoveImportedPreview(uint32_t title_id)
 {
+    g_preview_cache.clear();
     std::error_code ec;
     for (int i = 0; kPreviewExtensions[i]; i++) {
         fs::remove(PreviewDir() / (TitleIdHex(title_id) + kPreviewExtensions[i]), ec);
@@ -2111,6 +2266,7 @@ void ImportPreview(const LibraryEntry &e)
             xemu_queue_error_message("Could not copy the video.");
             return;
         }
+        g_preview_cache.clear();
         g_selected_path = game_path;
         g_preview->Open(dst.u8string());
         xemu_queue_notification("Preview video added");
@@ -2123,14 +2279,14 @@ void DrawSaveStates(LibraryEntry &e, float w)
     const float s = g_viewport_mgr.m_scale;
     g_snapshot_mgr.Refresh(); // cached by xemu; cheap unless snapshots changed
 
-    std::string key = PathKey(fs::u8path(e.path));
+    std::string key = PathKeyCached(e.path);
     std::string title = Lower(e.title);
     std::vector<int> mine;
     for (int i = 0; i < g_snapshot_mgr.m_snapshots_len; i++) {
         const XemuSnapshotData &d = g_snapshot_mgr.m_extra_data[i];
         bool same_disc =
             d.disc_path && d.disc_path[0] &&
-            PathKey(fs::u8path(OriginalDiscPath(d.disc_path))) == key;
+            PathKeyCached(OriginalDiscPath(d.disc_path)) == key;
         bool same_title = !title.empty() && d.xbe_title_name &&
                           Lower(d.xbe_title_name) == title;
         if (same_disc || same_title) {
@@ -2205,7 +2361,7 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
     float w = ImGui::GetContentRegionAvail().x;
     EnsureTexture(e, tex_budget);
 
-    std::string preview = FindPreview(e);
+    std::string preview = FindPreviewCached(e);
     bool playing = g_preview->IsOpen() && !preview.empty() &&
                    g_preview->Path() == preview;
     if (g_preview->IsOpen() && !playing) {
@@ -2325,6 +2481,7 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
 // ---------------------------------------------------------------------------
 
 static void GameLibraryShutdown(void);
+static std::vector<RecentGame> GetRecentGamesUncached(int max_count);
 
 void GameLibraryWindow::Open()
 {
@@ -2364,6 +2521,8 @@ void GameLibraryWindow::Rescan()
     for (auto &e : g_entries) {
         FreeTexture(e);
     }
+    g_preview_cache.clear();
+    g_pathkey_cache.clear();
     StartScan();
 }
 
@@ -2402,6 +2561,23 @@ void GameLibraryWindow::Launch(const std::string &path)
 }
 
 std::vector<RecentGame> GameLibraryWindow::GetRecentGames(int max_count)
+{
+    // Called every frame by the library and the menu; checking that each
+    // file still exists touches the disk, so refresh at most every 2 s.
+    static std::vector<RecentGame> cached;
+    static int cached_count = -1;
+    static uint64_t cached_at = 0;
+    uint64_t now = SDL_GetTicks();
+    if (cached_count == max_count && now - cached_at < 2000) {
+        return cached;
+    }
+    cached_count = max_count;
+    cached_at = now;
+    cached = GetRecentGamesUncached(max_count);
+    return cached;
+}
+
+static std::vector<RecentGame> GetRecentGamesUncached(int max_count)
 {
     std::vector<std::pair<int64_t, std::string>> order;
     for (auto &[path, st] : g_stats) {
@@ -2442,6 +2618,7 @@ void GameLibraryWindow::Update()
     }
     MergeScanResults();
     MergeCoverResults();
+    UploadDecodedImages(2);
 
     // Track disc changes: last played + per-game settings
     const char *dvd = g_config.sys.files.dvd_path;
@@ -2741,6 +2918,7 @@ static void GameLibraryShutdown(void)
         g_cover_thread.join();
     }
     g_preview->Close(false);
+    StopImageWorker();
     if (g_loaded) {
         SaveLibrary();
     }

@@ -63,6 +63,7 @@ void ActionLoadDiscFile(const char *file_path)
         if (!games_dir || !games_dir[0]) {
             std::string dir = std::filesystem::path(file_path).parent_path().string();
             xemu_settings_set_string(&g_config.general.games_dir, dir.c_str());
+            xemu_settings_save();
         }
     }
 }

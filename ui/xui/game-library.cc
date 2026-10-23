@@ -29,11 +29,14 @@
 #include "actions.hh"
 #include "misc.hh"
 #include "viewport-manager.hh"
+#include "font-manager.hh"
 #include "IconsFontAwesome6.h"
 #include "../xemu-notifications.h"
 #include "../xemu-settings.h"
 
 namespace fs = std::filesystem;
+
+extern float g_main_menu_height;
 using json = nlohmann::json;
 
 GameLibraryWindow game_library_window;
@@ -86,7 +89,44 @@ std::map<uint32_t, GameOverrides> g_overrides;   // by title ID
 bool g_loaded = false;
 bool g_dirty = false;
 uint64_t g_last_save_tick = 0;
-std::string g_scanned_dir;
+std::string g_scanned_dir; // signature of the folders last scanned
+
+// Game folders: the primary one is general.games_dir in xemu.toml, extra
+// folders live in library.json. Each can include its subfolders.
+struct LibraryFolder {
+    std::string path;
+    bool recursive = true;
+};
+std::vector<LibraryFolder> g_extra_folders;
+bool g_primary_recursive = true;
+
+std::vector<LibraryFolder> AllFolders()
+{
+    std::vector<LibraryFolder> out;
+    const char *dir = g_config.general.games_dir;
+    if (dir && dir[0]) {
+        out.push_back({ dir, g_primary_recursive });
+    }
+    for (auto &f : g_extra_folders) {
+        bool dup = f.path.empty();
+        for (auto &o : out) {
+            dup |= (o.path == f.path);
+        }
+        if (!dup) {
+            out.push_back(f);
+        }
+    }
+    return out;
+}
+
+std::string FolderSignature()
+{
+    std::string sig;
+    for (auto &f : AllFolders()) {
+        sig += f.path + (f.recursive ? "|r\n" : "|n\n");
+    }
+    return sig;
+}
 
 // Background scan
 std::mutex g_scan_mutex;
@@ -246,6 +286,15 @@ void LoadLibrary()
         json games = j.value("games", json::array());
         json stats = j.value("stats", json::object());
         json overrides = j.value("overrides", json::object());
+        g_primary_recursive = j.value("primary_recursive", true);
+        for (auto &f : j.value("folders", json::array())) {
+            LibraryFolder lf;
+            lf.path = f.value("path", "");
+            lf.recursive = f.value("recursive", true);
+            if (!lf.path.empty()) {
+                g_extra_folders.push_back(lf);
+            }
+        }
         for (auto &g : games) {
             LibraryEntry e;
             e.path = g.value("path", "");
@@ -317,6 +366,12 @@ void SaveLibrary()
                                 { "fsr_sharpness", o.fsr_sharpness } };
     }
     j["overrides"] = ovs;
+    j["primary_recursive"] = g_primary_recursive;
+    json folders = json::array();
+    for (auto &f : g_extra_folders) {
+        folders.push_back({ { "path", f.path }, { "recursive", f.recursive } });
+    }
+    j["folders"] = folders;
 
     std::error_code ec;
     fs::create_directories(BasePath(), ec);
@@ -349,29 +404,46 @@ int64_t FileMtime(const fs::path &p)
     return ec ? 0 : (int64_t)t.time_since_epoch().count();
 }
 
-void ScanWorker(std::string games_dir, std::map<std::string, LibraryEntry> cache)
+void ScanWorker(std::vector<LibraryFolder> folders,
+                std::map<std::string, LibraryEntry> cache)
 {
     std::vector<fs::path> files;
-    std::error_code ec;
-    fs::recursive_directory_iterator it(
-        fs::u8path(games_dir), fs::directory_options::skip_permission_denied,
-        ec);
-    for (; !ec && it != fs::recursive_directory_iterator();
-         it.increment(ec)) {
-        if (g_scan_cancel) {
-            break;
-        }
-        if (it.depth() >= 4) {
-            it.disable_recursion_pending();
-        }
+    std::set<std::string> seen;
+    auto consider = [&](const fs::directory_entry &de) {
         std::error_code fec;
-        if (!it->is_regular_file(fec)) {
-            continue;
+        if (!de.is_regular_file(fec)) {
+            return;
         }
-        std::string ext = Lower(it->path().extension().u8string());
-        if (ext == ".iso" || ext == ".xiso") {
-            files.push_back(it->path());
+        std::string ext = Lower(de.path().extension().u8string());
+        if ((ext == ".iso" || ext == ".xiso") &&
+            seen.insert(de.path().u8string()).second) {
+            files.push_back(de.path());
         }
+    };
+    std::error_code ec;
+    for (auto &folder : folders) {
+        fs::path root = fs::u8path(folder.path);
+        if (folder.recursive) {
+            fs::recursive_directory_iterator it(
+                root, fs::directory_options::skip_permission_denied, ec);
+            for (; !ec && it != fs::recursive_directory_iterator();
+                 it.increment(ec)) {
+                if (g_scan_cancel) {
+                    break;
+                }
+                if (it.depth() >= 32) {
+                    it.disable_recursion_pending(); // guard against loops
+                }
+                consider(*it);
+            }
+        } else {
+            fs::directory_iterator it(
+                root, fs::directory_options::skip_permission_denied, ec);
+            for (; !ec && it != fs::directory_iterator(); it.increment(ec)) {
+                consider(*it);
+            }
+        }
+        ec.clear();
     }
     g_scan_total = (int)files.size();
 
@@ -436,9 +508,14 @@ void StartScan()
     if (g_scan_thread.joinable()) {
         g_scan_thread.join();
     }
-    const char *dir = g_config.general.games_dir;
-    g_scanned_dir = dir ? dir : "";
-    if (g_scanned_dir.empty()) {
+    std::vector<LibraryFolder> folders = AllFolders();
+    g_scanned_dir = FolderSignature();
+    if (folders.empty()) {
+        for (auto &e : g_entries) {
+            FreeTexture(e);
+        }
+        g_entries.clear();
+        SaveLibrary();
         return;
     }
     std::map<std::string, LibraryEntry> cache;
@@ -451,7 +528,7 @@ void StartScan()
     g_scan_done = 0;
     g_scan_total = 0;
     g_scan_running = true;
-    g_scan_thread = std::thread(ScanWorker, g_scanned_dir, std::move(cache));
+    g_scan_thread = std::thread(ScanWorker, std::move(folders), std::move(cache));
 }
 
 void MergeScanResults()
@@ -535,14 +612,18 @@ std::vector<fs::path> ArtworkCandidates(const LibraryEntry &e)
 {
     std::vector<fs::path> out;
     const char *exts[] = { ".png", ".jpg", ".jpeg" };
-    fs::path covers = fs::u8path(g_scanned_dir) / "covers";
     fs::path img = fs::u8path(e.path);
-    for (const char *ext : exts) {
-        if (e.valid) {
-            out.push_back(covers / (TitleIdHex(e.title_id) + ext));
-            out.push_back(covers / (FormatTitleId(e.title_id) + ext));
+    for (auto &folder : AllFolders()) {
+        fs::path covers = fs::u8path(folder.path) / "covers";
+        for (const char *ext : exts) {
+            if (e.valid) {
+                out.push_back(covers / (TitleIdHex(e.title_id) + ext));
+                out.push_back(covers / (FormatTitleId(e.title_id) + ext));
+            }
+            out.push_back(covers / (img.stem().u8string() + ext));
         }
-        out.push_back(covers / (img.stem().u8string() + ext));
+    }
+    for (const char *ext : exts) {
         out.push_back(img.parent_path() / (img.stem().u8string() + ext));
     }
     if (e.has_icon) {
@@ -1033,11 +1114,12 @@ void DrawSettingsPopup()
     int filter = g_settings_edit.filtering + 1;
     if (ImGui::Combo("Upscaling filter", &filter,
                      "Use global\0" "Linear\0" "Nearest\0"
-                     "AMD FidelityFX FSR 1.0\0")) {
+                     "AMD FidelityFX FSR 1.0\0" "Bicubic (Catmull-Rom)\0"
+                     "Lanczos\0" "Snapdragon GSR 1\0")) {
         g_settings_edit.filtering = filter - 1;
     }
     bool custom_sharp = g_settings_edit.fsr_sharpness >= 0;
-    if (ImGui::Checkbox("Custom FSR sharpness", &custom_sharp)) {
+    if (ImGui::Checkbox("Custom sharpening", &custom_sharp)) {
         g_settings_edit.fsr_sharpness =
             custom_sharp ? g_config.display.fsr_sharpness : -1.0f;
     }
@@ -1066,12 +1148,198 @@ void DrawSettingsPopup()
     ImGui::EndPopup();
 }
 
-void ChooseGamesFolder()
+void AddGameFolder()
 {
     ShowOpenFolderDialog(g_config.general.games_dir, [](const char *path) {
-        xemu_settings_set_string(&g_config.general.games_dir, path);
-        game_library_window.Rescan();
+        const char *primary = g_config.general.games_dir;
+        if (!primary || !primary[0]) {
+            xemu_settings_set_string(&g_config.general.games_dir, path);
+            xemu_settings_save(); // remember the folder right away
+        } else {
+            for (auto &f : AllFolders()) {
+                if (f.path == path) {
+                    return;
+                }
+            }
+            g_extra_folders.push_back({ path, true });
+        }
+        SaveLibrary();
     });
+}
+
+void RemoveGameFolder(const std::string &path)
+{
+    const char *primary = g_config.general.games_dir;
+    if (primary && path == primary) {
+        // Promote the next folder so xemu's own games directory stays set
+        std::string next;
+        bool next_recursive = true;
+        if (!g_extra_folders.empty()) {
+            next = g_extra_folders.front().path;
+            next_recursive = g_extra_folders.front().recursive;
+            g_extra_folders.erase(g_extra_folders.begin());
+        }
+        xemu_settings_set_string(&g_config.general.games_dir, next.c_str());
+        g_primary_recursive = next_recursive;
+        xemu_settings_save();
+    } else {
+        g_extra_folders.erase(
+            std::remove_if(g_extra_folders.begin(), g_extra_folders.end(),
+                           [&](const LibraryFolder &f) { return f.path == path; }),
+            g_extra_folders.end());
+    }
+    SaveLibrary();
+}
+
+bool g_open_folders_popup = false;
+
+void DrawFoldersPopup()
+{
+    if (g_open_folders_popup) {
+        ImGui::OpenPopup("Game Folders");
+        g_open_folders_popup = false;
+    }
+    const float s = g_viewport_mgr.m_scale;
+    ImGui::SetNextWindowSize(ImVec2(640 * s, 0), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal("Game Folders", NULL,
+                                ImGuiWindowFlags_AlwaysAutoResize)) {
+        return;
+    }
+    ImGui::TextDisabled("Every .iso / .xiso in these folders appears in your library.");
+    ImGui::Dummy(ImVec2(0, 4 * s));
+    auto folders = AllFolders();
+    std::string remove;
+    if (folders.empty()) {
+        ImGui::TextUnformatted("No folders yet.");
+    } else if (ImGui::BeginTable("##folders", 3,
+                                 ImGuiTableFlags_RowBg |
+                                     ImGuiTableFlags_BordersInnerH |
+                                     ImGuiTableFlags_SizingStretchProp,
+                                 ImVec2(600 * s, 0))) {
+        ImGui::TableSetupColumn("Folder", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Include subfolders", ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableHeadersRow();
+        const char *primary = g_config.general.games_dir;
+        for (auto &f : folders) {
+            ImGui::PushID(f.path.c_str());
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(f.path.c_str());
+            ImGui::TableNextColumn();
+            bool rec = f.recursive;
+            if (ImGui::Checkbox("##rec", &rec)) {
+                if (primary && f.path == primary) {
+                    g_primary_recursive = rec;
+                } else {
+                    for (auto &e : g_extra_folders) {
+                        if (e.path == f.path) {
+                            e.recursive = rec;
+                        }
+                    }
+                }
+                SaveLibrary();
+            }
+            ImGui::TableNextColumn();
+            if (ImGui::SmallButton(ICON_FA_XMARK " Remove")) {
+                remove = f.path;
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    if (!remove.empty()) {
+        RemoveGameFolder(remove);
+    }
+    ImGui::Dummy(ImVec2(0, 4 * s));
+    if (ImGui::Button(ICON_FA_FOLDER_OPEN "  Add folder...")) {
+        AddGameFolder();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Done", ImVec2(100 * s, 0)) ||
+        ImGui::IsKeyPressed(ImGuiKey_Escape) ||
+        ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight)) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
+// Right-hand panel with the selected game's art and details
+void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
+{
+    const float s = g_viewport_mgr.m_scale;
+    GameStats &st = g_stats[e.path];
+    float w = ImGui::GetContentRegionAvail().x;
+    EnsureTexture(e, tex_budget);
+
+    ImVec2 a = ImGui::GetCursorScreenPos();
+    float art = w;
+    if (e.tex && e.tex_w > 0) {
+        art = std::min(w * e.tex_h / (float)e.tex_w, w * 1.5f);
+    }
+    DrawArtwork(ImGui::GetWindowDrawList(), a, ImVec2(a.x + w, a.y + art), e,
+                8 * s);
+    ImGui::Dummy(ImVec2(w, art));
+    ImGui::Dummy(ImVec2(0, 6 * s));
+
+    ImGui::PushFont(g_font_mgr.m_menu_font_small);
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
+    ImGui::TextUnformatted(e.DisplayName().c_str());
+    ImGui::PopTextWrapPos();
+    ImGui::PopFont();
+    if (e.valid) {
+        ImGui::TextDisabled("%s  -  %s", FormatTitleId(e.title_id).c_str(),
+                            FormatRegion(e.region).c_str());
+    } else {
+        ImGui::TextDisabled("Unrecognized disc image");
+    }
+    ImGui::Dummy(ImVec2(0, 8 * s));
+
+    ImGui::PushStyleColor(ImGuiCol_Button, ImGui::ColorConvertU32ToFloat4(kAccent));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.45f, 0.86f, 0.16f, 1));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.32f, 0.70f, 0.06f, 1));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0, 0, 0, 1));
+    if (ImGui::Button(IsCurrentDisc(e) ? ICON_FA_PLAY "  Playing - restart"
+                                       : ICON_FA_PLAY "  Play",
+                      ImVec2(w, 40 * s))) {
+        game_library_window.Launch(e.path);
+    }
+    ImGui::PopStyleColor(4);
+    float half = (w - ImGui::GetStyle().ItemSpacing.x) / 2;
+    if (ImGui::Button(st.favorite ? ICON_FA_STAR "  Favorited" : ICON_FA_STAR "  Favorite",
+                      ImVec2(half, 0))) {
+        st.favorite = !st.favorite;
+        g_dirty = true;
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!e.valid);
+    if (ImGui::Button(ICON_FA_GEAR "  Settings", ImVec2(half, 0))) {
+        OpenSettingsFor(e);
+    }
+    ImGui::EndDisabled();
+    ImGui::Dummy(ImVec2(0, 8 * s));
+
+    auto row = [&](const char *label, const std::string &value) {
+        ImGui::TextDisabled("%s", label);
+        ImGui::SameLine(w * 0.42f);
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w * 0.58f);
+        ImGui::TextUnformatted(value.c_str());
+        ImGui::PopTextWrapPos();
+    };
+    row("Play time", FormatPlayTime(st.play_seconds));
+    row("Last played", IsCurrentDisc(e) ? "Playing now" : FormatLastPlayed(st.last_played));
+    if (e.valid && g_overrides.count(e.title_id) && g_overrides[e.title_id].enabled) {
+        row("Settings", "Custom for this game");
+    }
+    row("File", fs::u8path(e.path).filename().u8string());
+    row("Size", string_format("%.2f GB", e.file_size / 1e9));
+    ImGui::Dummy(ImVec2(0, 4 * s));
+    if (ImGui::SmallButton(ICON_FA_FOLDER_OPEN "  Show file location")) {
+        std::string url =
+            "file:///" + fs::u8path(e.path).parent_path().generic_u8string();
+        SDL_OpenURL(url.c_str());
+    }
 }
 
 } // namespace
@@ -1079,6 +1347,8 @@ void ChooseGamesFolder()
 // ---------------------------------------------------------------------------
 // Public interface
 // ---------------------------------------------------------------------------
+
+static void GameLibraryShutdown(void);
 
 void GameLibraryWindow::Open()
 {
@@ -1145,15 +1415,14 @@ void GameLibraryWindow::Update()
 {
     if (!g_loaded) {
         g_loaded = true;
+        atexit(GameLibraryShutdown);
         LoadLibrary();
         g_last_tick = SDL_GetTicks();
         g_last_save_tick = g_last_tick;
     }
 
-    // Rescan when the games directory changes (or on first use)
-    const char *dir = g_config.general.games_dir;
-    std::string cur_dir = dir ? dir : "";
-    if (!g_scan_running && cur_dir != g_scanned_dir) {
+    // Rescan when the set of game folders changes (or on first use)
+    if (!g_scan_running && FolderSignature() != g_scanned_dir) {
         StartScan();
     }
     MergeScanResults();
@@ -1192,66 +1461,99 @@ void GameLibraryWindow::Draw()
         return;
     }
     const float s = g_viewport_mgr.m_scale;
+
+    // Full-window home screen below the menu bar, like modern emulators
     ImGuiViewport *vp = ImGui::GetMainViewport();
-    ImVec2 size(std::min(vp->WorkSize.x * 0.85f, 1400 * s),
-                std::min(vp->WorkSize.y * 0.85f, 900 * s));
-    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x / 2,
-                                   vp->WorkPos.y + vp->WorkSize.y / 2),
-                            ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(size, ImGuiCond_Appearing);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(420 * s, 320 * s),
-                                        ImVec2(FLT_MAX, FLT_MAX));
+    float top = g_main_menu_height;
+    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x, vp->Pos.y + top));
+    ImGui::SetNextWindowSize(ImVec2(vp->Size.x, vp->Size.y - top));
     if (g_focus_requested) {
         ImGui::SetNextWindowFocus();
         g_focus_requested = false;
     }
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10 * s);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16 * s, 14 * s));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20 * s, 14 * s));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6 * s);
-    bool visible = ImGui::Begin(ICON_FA_GAMEPAD "  Game Library###Game Library",
-                                &is_open, ImGuiWindowFlags_NoCollapse);
-    ImGui::PopStyleVar(2);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.07f, 0.07f, 0.08f, 1.0f));
+    bool visible = ImGui::Begin(
+        "###Game Library", NULL,
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoBringToFrontOnFocus);
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(3);
     if (!visible) {
         ImGui::End();
         ImGui::PopStyleVar();
         return;
     }
 
-    const char *dir = g_config.general.games_dir;
-    if (!dir || !dir[0]) {
+    // Header: title, game count, close
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kAccent), ICON_FA_GAMEPAD);
+    ImGui::SameLine();
+    ImGui::PushFont(g_font_mgr.m_menu_font_medium);
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 5 * s);
+    ImGui::TextUnformatted("Game Library");
+    ImGui::PopFont();
+    ImGui::SameLine();
+    if (g_scan_running) {
+        ImGui::TextDisabled("Scanning... %d / %d", (int)g_scan_done,
+                            (int)g_scan_total);
+    } else {
+        ImGui::TextDisabled("%d games", (int)g_entries.size());
+    }
+    const char *dvd = g_config.sys.files.dvd_path;
+    const char *close_label = (dvd && dvd[0]) ? ICON_FA_XMARK "  Back to game"
+                                              : ICON_FA_XMARK "  Close";
+    float close_w = ImGui::CalcTextSize(close_label).x +
+                    ImGui::GetStyle().FramePadding.x * 2;
+    ImGui::SameLine(ImGui::GetContentRegionMax().x - close_w);
+    if (ImGui::Button(close_label)) {
+        is_open = false;
+    }
+    ImGui::SetItemTooltip("Esc or B");
+    ImGui::Dummy(ImVec2(0, 2 * s));
+
+    auto folders = AllFolders();
+    if (folders.empty()) {
         ImVec2 avail = ImGui::GetContentRegionAvail();
-        const char *msg = "Choose the folder where you keep your Xbox disc "
-                          "images (.iso / .xiso) to build your library.";
-        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + avail.y * 0.35f);
-        float w = std::min(avail.x, 420 * s);
-        ImGui::SetCursorPosX((avail.x - w) / 2 + ImGui::GetStyle().WindowPadding.x);
-        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + avail.y * 0.3f);
+        const char *msg = "Add the folders where you keep your Xbox disc "
+                          "images (.iso / .xiso). Subfolders are included.";
+        float w = std::min(avail.x, 440 * s);
+        float x0 = ImGui::GetCursorPosX() + (avail.x - w) / 2;
+        ImGui::SetCursorPosX(x0);
+        ImGui::PushTextWrapPos(x0 + w);
         ImGui::TextWrapped("%s", msg);
         ImGui::PopTextWrapPos();
         ImGui::Dummy(ImVec2(0, 10 * s));
-        ImGui::SetCursorPosX((avail.x - 220 * s) / 2 + ImGui::GetStyle().WindowPadding.x);
-        if (ImGui::Button(ICON_FA_FOLDER_OPEN "  Choose games folder",
-                          ImVec2(220 * s, 0))) {
-            ChooseGamesFolder();
+        ImGui::SetCursorPosX(x0 + (w - 240 * s) / 2);
+        if (ImGui::Button(ICON_FA_FOLDER_OPEN "  Add a games folder",
+                          ImVec2(240 * s, 36 * s))) {
+            AddGameFolder();
         }
+        DrawFoldersPopup();
         ImGui::End();
         ImGui::PopStyleVar();
         return;
     }
 
     // Toolbar
-    float search_w = std::max(160 * s, ImGui::GetContentRegionAvail().x * 0.32f);
+    float search_w = std::max(180 * s, ImGui::GetContentRegionAvail().x * 0.28f);
     ImGui::SetNextItemWidth(search_w);
     if (ImGui::IsWindowAppearing()) {
         ImGui::SetKeyboardFocusHere();
     }
-    ImGui::InputTextWithHint("##search", ICON_FA_MAGNIFYING_GLASS "  Search games",
+    ImGui::InputTextWithHint("##search", ICON_FA_MAGNIFYING_GLASS "  Search by name or title ID",
                              &g_search);
     ImGui::SameLine();
     bool grid = g_config.general.library.view == CONFIG_GENERAL_LIBRARY_VIEW_GRID;
     auto toggle = [&](const char *label, bool active, const char *tip) {
         if (active) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                                  ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
         }
         bool pressed = ImGui::Button(label);
         if (active) {
@@ -1272,64 +1574,80 @@ void GameLibraryWindow::Draw()
         g_favorites_only = !g_favorites_only;
     }
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(130 * s);
+    ImGui::SetNextItemWidth(150 * s);
     ImGui::Combo("##sort", &g_config.general.library.sort,
                  "Sort: Title\0Sort: Last played\0Sort: Play time\0");
     if (grid) {
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(100 * s);
+        ImGui::SetNextItemWidth(110 * s);
         ImGui::SliderFloat("##size", &g_config.general.library.tile_size, 0.0f,
                            1.0f, "");
         ImGui::SetItemTooltip("Tile size");
     }
     ImGui::SameLine();
+    if (ImGui::Button(ICON_FA_FOLDER_OPEN "  Folders")) {
+        g_open_folders_popup = true;
+    }
+    ImGui::SetItemTooltip("%d game folder%s", (int)folders.size(),
+                          folders.size() == 1 ? "" : "s");
+    ImGui::SameLine(0, 2 * s);
     ImGui::BeginDisabled(g_scan_running);
     if (ImGui::Button(ICON_FA_ARROWS_ROTATE)) {
         game_library_window.Rescan();
     }
     ImGui::EndDisabled();
-    ImGui::SetItemTooltip("Rescan games folder");
-    ImGui::SameLine(0, 2 * s);
-    if (ImGui::Button(ICON_FA_FOLDER_OPEN)) {
-        ChooseGamesFolder();
-    }
-    ImGui::SetItemTooltip("Games folder: %s", dir);
+    ImGui::SetItemTooltip("Rescan folders and covers");
+    ImGui::Dummy(ImVec2(0, 4 * s));
 
     std::vector<LibraryEntry *> items;
     SortedFiltered(items);
-
-    // Status line
-    if (g_scan_running) {
-        ImGui::TextDisabled("Scanning... %d / %d", (int)g_scan_done,
-                            (int)g_scan_total);
-    } else {
-        int favs = 0;
-        for (auto &e : g_entries) {
-            favs += g_stats[e.path].favorite ? 1 : 0;
-        }
-        ImGui::TextDisabled("%d games  -  %d favorites  -  Double-click or press A to play, right-click for options",
-                            (int)g_entries.size(), favs);
+    LibraryEntry *selected = FindEntry(g_selected_path);
+    if (!selected && !items.empty()) {
+        selected = items[0];
+        g_selected_path = selected->path;
     }
-    ImGui::Separator();
 
     int tex_budget = 6; // decode at most a few images per frame
+    float avail_w = ImGui::GetContentRegionAvail().x;
+    bool show_panel = selected && avail_w > 720 * s;
+    float panel_w = std::min(340 * s, avail_w * 0.3f);
+    float gap = 16 * s;
+
+    ImGui::BeginChild("##content",
+                      ImVec2(show_panel ? avail_w - panel_w - gap : 0, 0),
+                      ImGuiChildFlags_NavFlattened);
+    if (items.empty()) {
+        ImGui::Dummy(ImVec2(0, 20 * s));
+        ImGui::TextDisabled(g_entries.empty() && !g_scan_running
+                                ? "No disc images found in your game folders."
+                                : "No games match.");
+    }
     if (grid) {
-        ImGui::BeginChild("##scroll", ImVec2(0, 0), ImGuiChildFlags_NavFlattened);
         if (g_search.empty() && !g_favorites_only) {
             DrawRecentRow(tex_budget);
         }
-        if (items.empty()) {
-            ImGui::TextDisabled(g_entries.empty() && !g_scan_running
-                                    ? "No disc images found in this folder."
-                                    : "No games match.");
-        }
         DrawGrid(items, tex_budget);
-        ImGui::EndChild();
-    } else {
+    } else if (!items.empty()) {
         DrawList(items, tex_budget);
+    }
+    ImGui::EndChild();
+
+    if (show_panel) {
+        ImGui::SameLine(0, gap);
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.11f, 0.11f, 0.12f, 1.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10 * s);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14 * s, 14 * s));
+        ImGui::BeginChild("##details", ImVec2(0, 0),
+                          ImGuiChildFlags_AlwaysUseWindowPadding |
+                              ImGuiChildFlags_NavFlattened);
+        DrawDetailsPanel(*selected, tex_budget);
+        ImGui::EndChild();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor();
     }
 
     DrawSettingsPopup();
+    DrawFoldersPopup();
 
     // Esc / B closes the library when nothing else wants the key
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
@@ -1363,6 +1681,11 @@ void GameLibraryBeforeSettingsSave(void)
             g_config.display.fsr_sharpness = g_applied.base_fsr;
         }
     }
+}
+
+// Runs at exit (registered after the settings-save handler, so it runs first)
+static void GameLibraryShutdown(void)
+{
     g_scan_cancel = true;
     if (g_scan_thread.joinable()) {
         g_scan_thread.join();

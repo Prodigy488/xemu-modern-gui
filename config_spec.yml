@@ -34,6 +34,10 @@ general:
       type: enum
       values: [neon, green]
       default: neon
+    home_covers:
+      type: enum
+      values: [box3d, flat]
+      default: box3d
   skip_boot_anim: bool
   discord_presence:
     type: bool

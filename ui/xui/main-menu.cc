@@ -89,6 +89,9 @@ void MainMenuGeneralView::Draw()
     ChevronCombo("Dashboard theme", &g_config.general.library.theme,
                  "Neon\0Green\0",
                  "Dark with cyan and magenta, or xemu green");
+    ChevronCombo("Home screen covers", &g_config.general.library.home_covers,
+                 "3D cases\0Flat\0",
+                 "Show covers on the Home screen as 3D game cases");
     FilePicker("Screenshot output directory", g_config.general.screenshot_dir,
                nullptr, 0, true, [](const char *path) {
                    xemu_settings_set_string(&g_config.general.screenshot_dir, path);

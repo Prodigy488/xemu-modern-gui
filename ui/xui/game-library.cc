@@ -1139,6 +1139,66 @@ void RequestScreenshotThumb(const std::string &path)
 }
 
 // Main thread: upload up to `max_uploads` finished images
+// Optional 3D box art (e.g. covers\MS-004-3d.png, transparent PNGs as used by
+// other frontends), by entry path. Loaded separately from the flat cover so
+// the Library keeps flat covers.
+struct Box3DArt {
+    GLuint tex = 0;
+    int w = 0, h = 0;
+    bool requested = false;
+};
+std::map<std::string, Box3DArt> g_box3d;
+
+std::vector<fs::path> Box3DCandidates(const LibraryEntry &e)
+{
+    std::vector<fs::path> out;
+    fs::path img = fs::u8path(e.path);
+    std::vector<std::string> names;
+    if (e.valid) {
+        names.push_back(TitleIdHex(e.title_id));
+        names.push_back(FormatTitleId(e.title_id));
+    }
+    names.push_back(img.stem().u8string());
+    for (auto &folder : AllFolders()) {
+        fs::path covers = fs::u8path(folder.path) / "covers";
+        for (auto &n : names) {
+            out.push_back(covers / (n + "-3d.png"));
+            out.push_back(covers / "3d" / (n + ".png"));
+        }
+    }
+    out.push_back(img.parent_path() / (img.stem().u8string() + "-3d.png"));
+    return out;
+}
+
+const Box3DArt *Get3DArt(const LibraryEntry &e)
+{
+    Box3DArt &b = g_box3d[e.path];
+    if (!b.requested) {
+        b.requested = true;
+        ImageJob job{ "box3d:" + e.path, Box3DCandidates(e), 700 };
+        {
+            std::lock_guard<std::mutex> lock(g_img_mutex);
+            if (g_img_quit) {
+                return &b;
+            }
+            g_img_jobs.push_back(std::move(job));
+        }
+        if (!g_img_thread.joinable()) {
+            g_img_thread = std::thread(ImageWorker);
+        }
+        g_img_cv.notify_one();
+    }
+    return &b;
+}
+
+void FreeBox3DArt()
+{
+    for (auto &kv : g_box3d) {
+        DeleteTextureLater(kv.second.tex);
+    }
+    g_box3d.clear();
+}
+
 void UploadDecodedImages(int max_uploads)
 {
     std::vector<ImageResult> ready;
@@ -1152,6 +1212,16 @@ void UploadDecodedImages(int max_uploads)
     for (auto &r : ready) {
         if (r.key.compare(0, 5, "shot:") == 0) {
             StoreScreenshotThumb(r.key.substr(5), r);
+            continue;
+        }
+        if (r.key.compare(0, 6, "box3d:") == 0) {
+            auto it = g_box3d.find(r.key.substr(6));
+            if (it != g_box3d.end() && !r.rgba.empty()) {
+                DeleteTextureLater(it->second.tex);
+                it->second.tex = UploadTexture(r.rgba.data(), r.w, r.h);
+                it->second.w = r.w;
+                it->second.h = r.h;
+            }
             continue;
         }
         LibraryEntry *e = FindEntry(r.key);
@@ -1530,9 +1600,9 @@ const LibTheme kThemeNeon = {
     IM_COL32(14, 13, 26, 165),
     IM_COL32(0, 229, 255, 46),
     IM_COL32(255, 46, 136, 255),
-    IM_COL32(0, 229, 255, 255),
-    IM_COL32(247, 214, 30, 255),
-    IM_COL32(255, 60, 100, 255),
+    IM_COL32(57, 255, 136, 255),  // status OK: neon green, never the accent
+    IM_COL32(255, 196, 0, 255),
+    IM_COL32(255, 59, 59, 255),
     ImVec4(0.0f, 0.898f, 1.0f, 1),
     ImVec4(0.02f, 0.02f, 0.05f, 1),
     ImVec4(1.0f, 0.18f, 0.53f, 0.10f), // Resume: outlined magenta
@@ -2628,9 +2698,17 @@ void DrawPlaceholder(ImDrawList *dl, ImVec2 a, ImVec2 b, const LibraryEntry &e,
                 IM_COL32(255, 255, 255, 140), icon);
 }
 
+void DrawCover3D(ImDrawList *dl, ImVec2 a, ImVec2 b, const LibraryEntry &e,
+                 float angle_deg);
+extern bool g_draw_3d;
+
 void DrawArtwork(ImDrawList *dl, ImVec2 a, ImVec2 b, const LibraryEntry &e,
                  float rounding)
 {
+    if (g_draw_3d) {
+        DrawCover3D(dl, a, b, e, 24.0f);
+        return;
+    }
     if (!e.tex) {
         DrawPlaceholder(dl, a, b, e, rounding);
         return;
@@ -2644,6 +2722,147 @@ void DrawArtwork(ImDrawList *dl, ImVec2 a, ImVec2 b, const LibraryEntry &e,
     ImVec2 ia((a.x + b.x - w) / 2, (a.y + b.y - h) / 2);
     ShapeImage(dl, (ImTextureID)(intptr_t)e.tex, ia, ImVec2(ia.x + w, ia.y + h),
                ImVec2(0, 0), ImVec2(1, 1), IM_COL32_WHITE, rounding);
+}
+
+// A textured quad with a color per corner (for fades and shading)
+void TexQuad(ImDrawList *dl, ImTextureID tex, const ImVec2 p[4], const ImVec2 uv[4],
+             const ImU32 col[4])
+{
+    dl->PushTextureID(tex);
+    dl->PrimReserve(6, 4);
+    ImDrawIdx base = (ImDrawIdx)dl->_VtxCurrentIdx;
+    for (int i = 0; i < 4; i++) {
+        dl->PrimWriteVtx(p[i], uv[i], col[i]);
+    }
+    const ImDrawIdx q[6] = { base, (ImDrawIdx)(base + 1), (ImDrawIdx)(base + 2),
+                             base, (ImDrawIdx)(base + 2), (ImDrawIdx)(base + 3) };
+    for (ImDrawIdx v : q) {
+        dl->PrimWriteIdx(v);
+    }
+    dl->PopTextureID();
+}
+
+bool g_draw_3d = false; // Home: draw covers as 3D boxes
+
+bool Home3DCovers()
+{
+    return g_config.general.library.home_covers == CONFIG_GENERAL_LIBRARY_HOME_COVERS_BOX3D;
+}
+
+// A cover as a 3D game case standing on a glossy floor: the flat cover is
+// projected onto the front of a box turned slightly, with a spine on the
+// left and a fading reflection below. A user's own 3D box image is shown
+// as-is (with its reflection) instead. Fits inside [a, b].
+void DrawCover3D(ImDrawList *dl, ImVec2 a, ImVec2 b, const LibraryEntry &e, float angle_deg)
+{
+    const float s = g_viewport_mgr.m_scale;
+    float W = b.x - a.x, H = b.y - a.y;
+    float floor_h = H * 0.16f;            // room for the reflection
+    float stand_y = b.y - floor_h;        // where the box stands
+    dl->PushClipRect(a, b, true);
+
+    // Soft shadow on the floor
+    dl->AddRectFilledMultiColor(ImVec2(a.x + W * 0.12f, stand_y - 2 * s),
+                                ImVec2(b.x - W * 0.12f, stand_y + floor_h * 0.35f),
+                                IM_COL32(0, 0, 0, 90), IM_COL32(0, 0, 0, 90),
+                                IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0));
+
+    const Box3DArt *art = Get3DArt(e);
+    if (art->tex && art->w > 0) {
+        // User's 3D image: fit, stand it on the floor, reflect it
+        float sc_ = std::min(W / art->w, (H - floor_h) / art->h);
+        float w = art->w * sc_, h = art->h * sc_;
+        ImVec2 p0((a.x + b.x - w) / 2, stand_y - h);
+        ImTextureID tex = (ImTextureID)(intptr_t)art->tex;
+        dl->AddImage(tex, p0, ImVec2(p0.x + w, stand_y));
+        float rh = std::min(floor_h, h * 0.35f);
+        ImVec2 rp[4] = { ImVec2(p0.x, stand_y), ImVec2(p0.x + w, stand_y),
+                         ImVec2(p0.x + w, stand_y + rh), ImVec2(p0.x, stand_y + rh) };
+        ImVec2 ruv[4] = { ImVec2(0, 1), ImVec2(1, 1), ImVec2(1, 1 - rh / h),
+                          ImVec2(0, 1 - rh / h) };
+        ImU32 rc[4] = { IM_COL32(255, 255, 255, 70), IM_COL32(255, 255, 255, 70),
+                        IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 0) };
+        TexQuad(dl, tex, rp, ruv, rc);
+        dl->PopClipRect();
+        return;
+    }
+    if (!e.tex || e.tex_w <= 0) {
+        float bh = H - floor_h, bw = std::min(W * 0.8f, bh * 0.7f);
+        DrawPlaceholder(dl, ImVec2((a.x + b.x - bw) / 2, stand_y - bh),
+                        ImVec2((a.x + b.x + bw) / 2, stand_y), e, 4 * s);
+        dl->PopClipRect();
+        return;
+    }
+
+    // Box in 3D: front face at z = 0, depth going back; turned around Y
+    float aspect = (float)e.tex_w / e.tex_h;
+    float bh = 1.0f, bw = aspect, bd = bw * 0.13f;
+    // Negative: the left (spine) edge turns toward the viewer
+    float th = -angle_deg * 3.14159265f / 180.0f;
+    float cam = 4.2f;
+    auto proj = [&](float x, float y, float z) {
+        float X = x * cosf(th) + z * sinf(th);
+        float Z = -x * sinf(th) + z * cosf(th);
+        float k = cam / (cam + Z);
+        return ImVec2(X * k, y * k);
+    };
+    // Corners (y down): front face and the back of the left (spine) side
+    ImVec2 fl_t = proj(-bw / 2, -bh / 2, 0), fr_t = proj(bw / 2, -bh / 2, 0);
+    ImVec2 fl_b = proj(-bw / 2, bh / 2, 0), fr_b = proj(bw / 2, bh / 2, 0);
+    ImVec2 bl_t = proj(-bw / 2, -bh / 2, bd), bl_b = proj(-bw / 2, bh / 2, bd);
+    float minx = std::min({ fl_t.x, fl_b.x, bl_t.x, bl_b.x });
+    float maxx = std::max(fr_t.x, fr_b.x);
+    float miny = std::min({ fl_t.y, fr_t.y, bl_t.y });
+    float maxy = std::max({ fl_b.y, fr_b.y, bl_b.y });
+    float k = std::min(W * 0.92f / (maxx - minx), (H - floor_h) * 0.98f / (maxy - miny));
+    float ox = (a.x + b.x) / 2 - (minx + maxx) / 2 * k;
+    float oy = stand_y - maxy * k;
+    auto S = [&](ImVec2 p) { return ImVec2(ox + p.x * k, oy + p.y * k); };
+    ImTextureID tex = (ImTextureID)(intptr_t)e.tex;
+
+    // Spine (left side): the cover's left edge, darkened
+    bool spine = bl_t.x < fl_t.x;
+    if (spine) {
+        ImVec2 p[4] = { S(bl_t), S(fl_t), S(fl_b), S(bl_b) };
+        ImVec2 uv[4] = { ImVec2(0.0f, 0), ImVec2(0.035f, 0), ImVec2(0.035f, 1),
+                         ImVec2(0.0f, 1) };
+        ImU32 c[4] = { IM_COL32(90, 90, 100, 255), IM_COL32(140, 140, 150, 255),
+                       IM_COL32(140, 140, 150, 255), IM_COL32(90, 90, 100, 255) };
+        TexQuad(dl, tex, p, uv, c);
+    }
+    // Front face in strips (keeps the texture straight under perspective)
+    const int n = 14;
+    for (int i = 0; i < n; i++) {
+        float u0 = (float)i / n, u1 = (float)(i + 1) / n;
+        float x0 = -bw / 2 + bw * u0, x1 = -bw / 2 + bw * u1;
+        ImVec2 p[4] = { S(proj(x0, -bh / 2, 0)), S(proj(x1, -bh / 2, 0)),
+                        S(proj(x1, bh / 2, 0)), S(proj(x0, bh / 2, 0)) };
+        ImVec2 uv[4] = { ImVec2(u0, 0), ImVec2(u1, 0), ImVec2(u1, 1), ImVec2(u0, 1) };
+        // Light falls off slightly toward the far edge
+        int sh0 = 255 - (int)(40 * u0), sh1 = 255 - (int)(40 * u1);
+        ImU32 col[4] = { IM_COL32(sh0, sh0, sh0, 255), IM_COL32(sh1, sh1, sh1, 255),
+                         IM_COL32(sh1, sh1, sh1, 255), IM_COL32(sh0, sh0, sh0, 255) };
+        TexQuad(dl, tex, p, uv, col);
+        // Reflection: the bottom of the cover, flipped and fading out
+        float rv = 0.28f;
+        ImVec2 r0 = S(proj(x0, bh / 2, 0)), r1 = S(proj(x1, bh / 2, 0));
+        float rh = std::min(floor_h, (S(fl_b).y - S(fl_t).y) * rv);
+        ImVec2 rp[4] = { r0, r1, ImVec2(r1.x, r1.y + rh), ImVec2(r0.x, r0.y + rh) };
+        ImVec2 ruv[4] = { ImVec2(u0, 1), ImVec2(u1, 1), ImVec2(u1, 1 - rv),
+                          ImVec2(u0, 1 - rv) };
+        ImU32 rc[4] = { IM_COL32(255, 255, 255, 60), IM_COL32(255, 255, 255, 60),
+                        IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 0) };
+        TexQuad(dl, tex, rp, ruv, rc);
+    }
+    // Case edges: a highlight down the front-left edge, a dark outline
+    ImVec2 fq[4] = { S(fl_t), S(fr_t), S(fr_b), S(fl_b) };
+    dl->AddPolyline(fq, 4, IM_COL32(0, 0, 0, 120), ImDrawFlags_Closed, 1.0f * s);
+    dl->AddLine(S(fl_t), S(fl_b), IM_COL32(255, 255, 255, 90), 1.5f * s);
+    // Sheen across the case
+    ImVec2 gl[4] = { S(fl_t), S(proj(-bw / 2 + bw * 0.45f, -bh / 2, 0)),
+                     S(proj(-bw / 2 + bw * 0.15f, bh / 2, 0)), S(fl_b) };
+    dl->AddConvexPolyFilled(gl, 4, IM_COL32(255, 255, 255, 14));
+    dl->PopClipRect();
 }
 
 bool ActivatedByNav()
@@ -2712,7 +2931,22 @@ void DrawTile(LibraryEntry &e, float tile_w, int &tex_budget)
         DrawArtwork(dl, a, art_b, e, rounding);
 
         bool focused = ImGui::IsItemFocused() && ImGui::GetIO().NavVisible;
-        if (hovered || selected || focused) {
+        if (g_draw_3d) {
+            if (hovered || selected || focused) {
+                bool on = selected || focused;
+                float pulse = Animations() && on
+                                  ? 0.5f + 0.5f * sinf((float)ImGui::GetTime() * 3.2f)
+                                  : 0.5f;
+                ImU32 col = on ? T().accent : IM_COL32(255, 255, 255, 90);
+                float fy = art_b.y - art_h * 0.16f;
+                dl->AddRectFilledMultiColor(ImVec2(a.x, fy), ImVec2(art_b.x, art_b.y),
+                                            Alpha(col, (int)(30 + 40 * pulse)),
+                                            Alpha(col, (int)(30 + 40 * pulse)),
+                                            Alpha(col, 0), Alpha(col, 0));
+                dl->AddLine(ImVec2(a.x + tile_w * 0.1f, fy), ImVec2(art_b.x - tile_w * 0.1f, fy),
+                            col, 2.0f * s);
+            }
+        } else if (hovered || selected || focused) {
             ImU32 col = (selected || focused) ? T().accent : IM_COL32(255, 255, 255, 90);
             if (T().neon && (selected || focused)) {
                 // Soft glow that breathes while selected
@@ -4580,7 +4814,7 @@ void DrawDashTopBar()
         return hud->CalcTextSizeA(hsz, FLT_MAX, 0, t.c_str()).x;
     };
     float gap = 22 * s;
-    float ins_w = text_w(ins) + 18 * s;
+    float ins_w = text_w(ins) + 26 * s; // light + text + padding
     float clock_w = text_w(clock);
     float scan_w = scan.empty() ? 0 : ImGui::CalcTextSize(scan.c_str()).x + gap;
     float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
@@ -4592,16 +4826,26 @@ void DrawDashTopBar()
             dl->AddText(ImVec2(x, y_mid - ImGui::GetFontSize() / 2), th.dim, scan.c_str());
             x += scan_w;
         }
+        // Status in a box tinted with its color, with a glowing light
+        ImVec2 ba(x - 8 * s, y_mid - hsz / 2 - 6 * s);
+        ImVec2 bb(x + ins_w - 2 * s, y_mid + hsz / 2 + 6 * s);
+        float glow = Animations() && g_insignia_status == (int)InsigniaStatus::Up
+                         ? 0.6f + 0.4f * sinf((float)ImGui::GetTime() * 2.4f)
+                         : 1.0f;
+        ShapeFill(dl, ba, bb, Alpha(ins_col, 30), 6 * s);
+        ShapeStroke(dl, ba, bb, Alpha(ins_col, 150), 6 * s, 1.0f * s);
+        ImVec2 lc(x + 5 * s, y_mid);
+        dl->AddCircleFilled(lc, 9 * s, Alpha(ins_col, (int)(45 * glow)), 20);
         if (th.neon) {
-            dl->AddRectFilled(ImVec2(x + 1 * s, y_mid - 4 * s),
-                              ImVec2(x + 9 * s, y_mid + 4 * s), ins_col);
+            dl->AddRectFilled(ImVec2(lc.x - 4 * s, lc.y - 4 * s),
+                              ImVec2(lc.x + 4 * s, lc.y + 4 * s), ins_col);
         } else {
-            dl->AddCircleFilled(ImVec2(x + 5 * s, y_mid), 5 * s, ins_col, 16);
+            dl->AddCircleFilled(lc, 5 * s, ins_col, 16);
         }
-        ImU32 tcol = th.neon ? th.text : IM_COL32(183, 196, 180, 255);
-        dl->AddText(hud, hsz, ImVec2(x + 18 * s, ty), tcol, ins.c_str());
+        dl->AddText(hud, hsz, ImVec2(x + 18 * s, ty), ins_col, ins.c_str());
         x += ins_w + gap;
-        dl->AddText(hud, hsz, ImVec2(x, ty), th.neon ? th.accent : tcol, clock);
+        dl->AddText(hud, hsz, ImVec2(x, ty),
+                    th.neon ? th.accent : IM_COL32(183, 196, 180, 255), clock);
     }
     ImGui::SetCursorScreenPos(ImVec2(right - close_w, y_mid - 16 * s));
     if (DashButton(close_label, th.glass, th.white, ImVec2(close_w, 32 * s))) {
@@ -4731,11 +4975,21 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
     // Box art on the right
     float pad = 30 * s;
     float art_h = size.y - pad * 2;
-    float art_w = std::min(art_h * 0.72f, size.x * 0.3f);
-    art_h = std::min(art_h, art_w / 0.72f);
+    bool box3d = Home3DCovers();
+    float art_ratio = box3d ? 0.86f : 0.72f; // 3D: room for the spine and floor
+    float art_w = std::min(art_h * art_ratio, size.x * 0.3f);
+    art_h = std::min(art_h, art_w / art_ratio);
     ImVec2 art_a(b.x - pad - art_w + (1 - show) * 28 * s, a.y + (size.y - art_h) / 2);
     bool show_art = size.x > 620 * s;
-    if (show_art) {
+    if (show_art && box3d) {
+        // Floor glow under the case
+        ImVec2 fc(art_a.x + art_w / 2, art_a.y + art_h * 0.84f);
+        dl->AddEllipseFilled(fc, ImVec2(art_w * 0.44f, art_h * 0.05f),
+                             neon ? Alpha(T().accent, 26) : IM_COL32(120, 200, 120, 22), 0, 40);
+        g_draw_3d = true;
+        DrawArtwork(dl, art_a, ImVec2(art_a.x + art_w, art_a.y + art_h), e, 12 * s);
+        g_draw_3d = false;
+    } else if (show_art) {
         ShapeFill(dl, ImVec2(art_a.x + 6 * s, art_a.y + 10 * s),
                   ImVec2(art_a.x + art_w + 6 * s, art_a.y + art_h + 10 * s),
                   neon ? Alpha(T().accent2, 50) : IM_COL32(0, 0, 0, 90), 12 * s);
@@ -5035,6 +5289,7 @@ void DrawHomeShelf(int &tex_budget)
     ImGui::BeginChild("##shelf", ImVec2(0, 0), ImGuiChildFlags_NavFlattened,
                       ImGuiWindowFlags_HorizontalScrollbar);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(18 * s, 0));
+    g_draw_3d = Home3DCovers();
     for (size_t i = 0; i < order.size(); i++) {
         if (i) {
             ImGui::SameLine();
@@ -5044,6 +5299,7 @@ void DrawHomeShelf(int &tex_budget)
             g_home_path = order[i]->path; // the hero follows controller focus
         }
     }
+    g_draw_3d = false;
     ImGui::PopStyleVar();
     // Mouse wheel scrolls the shelf sideways
     if (ImGui::IsWindowHovered() && ImGui::GetIO().MouseWheel != 0 &&
@@ -5605,6 +5861,10 @@ void DrawDashSettingsTab()
         label("Dashboard theme");
         ImGui::Combo("##theme", &g_config.general.library.theme,
                      "Neon (dark, cyan and magenta)\0Green (xemu)\0");
+        label("Home screen covers");
+        ImGui::Combo("##covers", &g_config.general.library.home_covers,
+                     "3D game cases\0Flat\0");
+        ImGui::TextDisabled("Your own 3D art: covers\\<title ID>-3d.png");
         ImGui::Dummy(ImVec2(0, 10 * s));
         if (DashButton(ICON_FA_FOLDER_OPEN "  Game folders...", T().glass, T().white,
                        ImVec2(0, 36 * s))) {
@@ -5913,6 +6173,7 @@ void GameLibraryWindow::Rescan()
     g_preview_cache.clear();
     g_pathkey_cache.clear();
     FreeScreenshotThumbs();
+    FreeBox3DArt();
     StartScan();
 }
 

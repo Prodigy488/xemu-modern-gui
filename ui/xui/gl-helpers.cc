@@ -29,6 +29,7 @@
 #include "stb_image.h"
 #include <fpng.h>
 #include <math.h>
+#include <string.h>
 #include <stdio.h>
 #include <vector>
 
@@ -47,6 +48,7 @@ enum class ShaderType {
     Sgsr,    // Snapdragon Game Super Resolution 1
     Lanczos, // Lanczos-3 with anti-ringing
     Bicubic, // Catmull-Rom bicubic
+    Nis,     // NVIDIA Image Scaling (NVScaler)
 };
 
 typedef struct DecalShader_
@@ -68,6 +70,8 @@ typedef struct DecalShader_
     GLint out_size_loc;
     GLint sharpness_loc;
     GLint viewport_info_loc;
+    GLint coef_loc;
+    GLint nis_loc[3];
     GLint palette_loc[256];
 } DecalShader;
 
@@ -78,7 +82,12 @@ static DecalShader *g_decal_shader,
                    *g_fsr_rcas_shader,
                    *g_sgsr_shader,
                    *g_lanczos_shader,
-                   *g_bicubic_shader;
+                   *g_bicubic_shader,
+                   *g_nis_shader;
+
+// NVIDIA Image Scaling filter banks (6 taps x 64 phases), loaded once
+static GLuint g_nis_coef_tex;
+static GLuint CreateNisCoefTexture(void);
 
 // Intermediate targets for the FSR path, (re)allocated when sizes change
 static Fbo *g_fsr_gamma_fbo, *g_fsr_easu_fbo;
@@ -698,6 +707,254 @@ void main()
 }
 )";
 
+
+    // NVIDIA Image Scaling (NVScaler) v1.0.3, ported from NIS_Scaler.h
+    // (Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES, MIT license) to a
+    // per-pixel fragment shader: the same 6-tap polyphase scaler, 4
+    // directional filters, edge detection and luma-adaptive sharpening,
+    // without the compute shader's shared-memory tiling.
+    const char *nis_frag_src = R"(
+#version 400 core
+uniform sampler2D tex;
+uniform sampler2D coef;   // 4x64: scaler taps 0-3, 4-5 | USM taps 0-3, 4-5
+uniform vec2 in_InSize;
+uniform vec2 in_OutSize;
+uniform vec4 in_Nis0;     // detect ratio, detect threshold, min contrast ratio, ratio norm
+uniform vec4 in_Nis1;     // sharp start Y, sharp scale Y, strength min, strength scale
+uniform vec4 in_Nis2;     // limit min, limit scale, contrast boost, eps
+in  vec2 Texcoord;
+out vec4 out_Color;
+
+#define kDetectRatio in_Nis0.x
+#define kDetectThres in_Nis0.y
+#define kMinContrastRatio in_Nis0.z
+#define kRatioNorm in_Nis0.w
+#define kSharpStartY in_Nis1.x
+#define kSharpScaleY in_Nis1.y
+#define kSharpStrengthMin in_Nis1.z
+#define kSharpStrengthScale in_Nis1.w
+#define kSharpLimitMin in_Nis2.x
+#define kSharpLimitScale in_Nis2.y
+#define kContrastBoost in_Nis2.z
+#define kEps in_Nis2.w
+#define kPhaseCount 64
+
+float p[36];
+#define P(r, c) p[(r) * 6 + (c)]
+
+float GetY(vec3 c)
+{
+    return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+}
+
+float LoadY(ivec2 q)
+{
+    return GetY(texelFetch(tex, clamp(q, ivec2(0), ivec2(in_InSize) - 1), 0).rgb);
+}
+
+void Scaler(int phase, out float c[6])
+{
+    vec4 a = texelFetch(coef, ivec2(0, phase), 0);
+    vec4 b = texelFetch(coef, ivec2(1, phase), 0);
+    c[0] = a.x; c[1] = a.y; c[2] = a.z; c[3] = a.w; c[4] = b.x; c[5] = b.y;
+}
+
+void Usm(int phase, out float c[6])
+{
+    vec4 a = texelFetch(coef, ivec2(2, phase), 0);
+    vec4 b = texelFetch(coef, ivec2(3, phase), 0);
+    c[0] = a.x; c[1] = a.y; c[2] = a.z; c[3] = a.w; c[4] = b.x; c[5] = b.y;
+}
+
+// Edge weights from the 3x3 luma window starting at (r, c)
+vec4 GetEdgeMap(int r, int c)
+{
+    float g_0 = abs(P(r, c) + P(r, c + 1) + P(r, c + 2) - P(r + 2, c) - P(r + 2, c + 1) - P(r + 2, c + 2));
+    float g_45 = abs(P(r + 1, c) + P(r, c) + P(r, c + 1) - P(r + 2, c + 1) - P(r + 2, c + 2) - P(r + 1, c + 2));
+    float g_90 = abs(P(r, c) + P(r + 1, c) + P(r + 2, c) - P(r, c + 2) - P(r + 1, c + 2) - P(r + 2, c + 2));
+    float g_135 = abs(P(r + 1, c) + P(r + 2, c) + P(r + 2, c + 1) - P(r, c + 1) - P(r, c + 2) - P(r + 1, c + 2));
+
+    float g_0_90_max = max(g_0, g_90);
+    float g_0_90_min = min(g_0, g_90);
+    float g_45_135_max = max(g_45, g_135);
+    float g_45_135_min = min(g_45, g_135);
+    if (g_0_90_max + g_45_135_max == 0.0) {
+        return vec4(0.0);
+    }
+    float e_0_90 = min(g_0_90_max / (g_0_90_max + g_45_135_max), 1.0);
+    float e_45_135 = 1.0 - e_0_90;
+
+    bool c_0_90 = (g_0_90_max > (g_0_90_min * kDetectRatio)) && (g_0_90_max > kDetectThres) && (g_0_90_max > g_45_135_min);
+    bool c_45_135 = (g_45_135_max > (g_45_135_min * kDetectRatio)) && (g_45_135_max > kDetectThres) && (g_45_135_max > g_0_90_min);
+    bool c_g_0_90 = g_0_90_max == g_0;
+    bool c_g_45_135 = g_45_135_max == g_45;
+
+    float f_e_0_90 = (c_0_90 && c_45_135) ? e_0_90 : 1.0;
+    float f_e_45_135 = (c_0_90 && c_45_135) ? e_45_135 : 1.0;
+
+    float weight_0 = (c_0_90 && c_g_0_90) ? f_e_0_90 : 0.0;
+    float weight_90 = (c_0_90 && !c_g_0_90) ? f_e_0_90 : 0.0;
+    float weight_45 = (c_45_135 && c_g_45_135) ? f_e_45_135 : 0.0;
+    float weight_135 = (c_45_135 && !c_g_45_135) ? f_e_45_135 : 0.0;
+    return vec4(weight_0, weight_90, weight_45, weight_135);
+}
+
+float CalcLTI(float p0, float p1, float p2, float p3, float p4, float p5, int phase_index)
+{
+    bool selector = (phase_index <= kPhaseCount / 2);
+    float sel = selector ? p0 : p3;
+    float a_min = min(min(p1, p2), sel);
+    float a_max = max(max(p1, p2), sel);
+    sel = selector ? p2 : p5;
+    float b_min = min(min(p3, p4), sel);
+    float b_max = max(max(p3, p4), sel);
+    float a_cont = a_max - a_min;
+    float b_cont = b_max - b_min;
+    float cont_ratio = max(a_cont, b_cont) / (min(a_cont, b_cont) + kEps);
+    return (1.0 - clamp((cont_ratio - kMinContrastRatio) * kRatioNorm, 0.0, 1.0)) * kContrastBoost;
+}
+
+float EvalPoly6(float pxl[6], int phase_int)
+{
+    phase_int = clamp(phase_int, 0, kPhaseCount - 1);
+    float cs[6], cu[6];
+    Scaler(phase_int, cs);
+    Usm(phase_int, cu);
+    float y = 0.0, y_usm = 0.0;
+    for (int i = 0; i < 6; ++i) {
+        y += cs[i] * pxl[i];
+        y_usm += cu[i] * pxl[i];
+    }
+    // piece-wise ramp: sharpen and limit as a function of luma
+    float y_scale = 1.0 - clamp((y - kSharpStartY) * kSharpScaleY, 0.0, 1.0);
+    float y_sharpness = y_scale * kSharpStrengthScale + kSharpStrengthMin;
+    y_usm *= y_sharpness;
+    float y_sharpness_limit = (y_scale * kSharpLimitScale + kSharpLimitMin) * y;
+    y_usm = min(y_sharpness_limit, max(-y_sharpness_limit, y_usm));
+    // reduce ringing
+    y_usm *= CalcLTI(pxl[0], pxl[1], pxl[2], pxl[3], pxl[4], pxl[5], phase_int);
+    return y + y_usm;
+}
+
+float FilterNormal(int phase_x, int phase_y)
+{
+    float cx[6], cy[6];
+    Scaler(phase_x, cx);
+    Scaler(phase_y, cy);
+    float h_acc = 0.0;
+    for (int j = 0; j < 6; ++j) {
+        float v_acc = 0.0;
+        for (int i = 0; i < 6; ++i) {
+            v_acc += P(i, j) * cy[i];
+        }
+        h_acc += v_acc * cx[j];
+    }
+    return h_acc;
+}
+
+float AddDirFilters(float fx, float fy, int phase_x, int phase_y, vec4 w)
+{
+    float f = 0.0;
+    float v[6];
+    if (w.x > 0.0) { // 0 deg
+        for (int i = 0; i < 6; ++i) {
+            v[i] = mix(P(i, 2), P(i, 3), fx);
+        }
+        f += EvalPoly6(v, phase_y) * w.x;
+    }
+    if (w.y > 0.0) { // 90 deg
+        for (int i = 0; i < 6; ++i) {
+            v[i] = mix(P(2, i), P(3, i), fy);
+        }
+        f += EvalPoly6(v, phase_x) * w.y;
+    }
+    if (w.z > 0.0) { // 45 deg
+        float b45 = 0.5 + 0.5 * (fx - fy);
+        float t[7];
+        t[1] = mix(P(2, 1), P(1, 2), b45);
+        t[3] = mix(P(3, 2), P(2, 3), b45);
+        t[5] = mix(P(4, 3), P(3, 4), b45);
+        b45 -= 0.5;
+        float a = (b45 >= 0.0) ? P(0, 2) : P(2, 0);
+        float b = (b45 >= 0.0) ? P(1, 3) : P(3, 1);
+        float c = (b45 >= 0.0) ? P(2, 4) : P(4, 2);
+        float d = (b45 >= 0.0) ? P(3, 5) : P(5, 3);
+        t[0] = mix(P(1, 1), a, abs(b45));
+        t[2] = mix(P(2, 2), b, abs(b45));
+        t[4] = mix(P(3, 3), c, abs(b45));
+        t[6] = mix(P(4, 4), d, abs(b45));
+        float p45 = fx + fy;
+        int o = 0;
+        if (p45 >= 1.0) {
+            o = 1;
+            p45 -= 1.0;
+        }
+        for (int i = 0; i < 6; i++) {
+            v[i] = t[i + o];
+        }
+        f += EvalPoly6(v, int(p45 * 64.0)) * w.z;
+    }
+    if (w.w > 0.0) { // 135 deg
+        float b135 = 0.5 * (fx + fy);
+        float t[7];
+        t[1] = mix(P(3, 1), P(4, 2), b135);
+        t[3] = mix(P(2, 2), P(3, 3), b135);
+        t[5] = mix(P(1, 3), P(2, 4), b135);
+        b135 -= 0.5;
+        float a = (b135 >= 0.0) ? P(5, 2) : P(3, 0);
+        float b = (b135 >= 0.0) ? P(4, 3) : P(2, 1);
+        float c = (b135 >= 0.0) ? P(3, 4) : P(1, 2);
+        float d = (b135 >= 0.0) ? P(2, 5) : P(0, 3);
+        t[0] = mix(P(4, 1), a, abs(b135));
+        t[2] = mix(P(3, 2), b, abs(b135));
+        t[4] = mix(P(2, 3), c, abs(b135));
+        t[6] = mix(P(1, 4), d, abs(b135));
+        float p135 = 1.0 + (fx - fy);
+        int o = 0;
+        if (p135 >= 1.0) {
+            o = 1;
+            p135 -= 1.0;
+        }
+        for (int i = 0; i < 6; i++) {
+            v[i] = t[i + o];
+        }
+        f += EvalPoly6(v, int(p135 * 64.0)) * w.w;
+    }
+    return f;
+}
+
+void main()
+{
+    vec2 src = gl_FragCoord.xy * (in_InSize / in_OutSize) - 0.5;
+    vec2 fl = floor(src);
+    float fx = src.x - fl.x, fy = src.y - fl.y;
+    int phase_x = min(int(fx * float(kPhaseCount)), kPhaseCount - 1);
+    int phase_y = min(int(fy * float(kPhaseCount)), kPhaseCount - 1);
+    ivec2 i0 = ivec2(fl) - 2;
+
+    // 6x6 luma support, rows are y
+    for (int r = 0; r < 6; r++) {
+        for (int c = 0; c < 6; c++) {
+            P(r, c) = LoadY(i0 + ivec2(c, r));
+        }
+    }
+    // Edge weights of the 2x2 texels around the sample, interpolated
+    vec4 e00 = GetEdgeMap(1, 1), e01 = GetEdgeMap(1, 2);
+    vec4 e10 = GetEdgeMap(2, 1), e11 = GetEdgeMap(2, 2);
+    vec4 w = mix(mix(e00, e01, fx), mix(e10, e11, fx), fy);
+    float baseWeight = 1.0 - w.x - w.y - w.z - w.w;
+
+    float opY = FilterNormal(phase_x, phase_y) * baseWeight;
+    opY += AddDirFilters(fx, fy, phase_x, phase_y, w);
+
+    // Chroma from a bilinear tap, luma from the scaler
+    vec4 op = textureLod(tex, (src + 0.5) / in_InSize, 0.0);
+    float y = GetY(op.rgb);
+    op.rgb = clamp(op.rgb + (opY - y), 0.0, 1.0);
+    out_Color = op;
+}
+)";
+
     const char *frag_src = NULL;
     switch (type) {
     case ShaderType::Mask: frag_src = mask_frag_src; break;
@@ -709,6 +966,7 @@ void main()
     case ShaderType::Sgsr: frag_src = sgsr_frag_src; break;
     case ShaderType::Lanczos: frag_src = lanczos_frag_src; break;
     case ShaderType::Bicubic: frag_src = bicubic_frag_src; break;
+    case ShaderType::Nis: frag_src = nis_frag_src; break;
     default: assert(0);
     }
     GLuint frag = Shader(GL_FRAGMENT_SHADER, frag_src);
@@ -740,6 +998,10 @@ void main()
     s->out_size_loc = glGetUniformLocation(s->prog, "in_OutSize");
     s->sharpness_loc = glGetUniformLocation(s->prog, "in_Sharpness");
     s->viewport_info_loc = glGetUniformLocation(s->prog, "in_ViewportInfo");
+    s->coef_loc = glGetUniformLocation(s->prog, "coef");
+    s->nis_loc[0] = glGetUniformLocation(s->prog, "in_Nis0");
+    s->nis_loc[1] = glGetUniformLocation(s->prog, "in_Nis1");
+    s->nis_loc[2] = glGetUniformLocation(s->prog, "in_Nis2");
     for (int i = 0; i < 256; i++) {
         char name[64];
         snprintf(name, sizeof(name), "palette[%d]", i);
@@ -893,6 +1155,8 @@ void InitCustomRendering(void)
     g_sgsr_shader = NewDecalShader(ShaderType::Sgsr);
     g_lanczos_shader = NewDecalShader(ShaderType::Lanczos);
     g_bicubic_shader = NewDecalShader(ShaderType::Bicubic);
+    g_nis_shader = NewDecalShader(ShaderType::Nis);
+    g_nis_coef_tex = CreateNisCoefTexture();
 }
 
 static void RenderMeter(DecalShader *s, float x, float y, float width,
@@ -1356,6 +1620,209 @@ static void DrawFullscreenPass(DecalShader *s, GLuint src_tex, float sx,
     glDrawElements(GL_TRIANGLE_FAN, 4, GL_UNSIGNED_INT, NULL);
 }
 
+// NVIDIA Image Scaling filter banks from NIS_Config.h: 6-tap scaler and
+// unsharp-mask coefficients for 64 phases.
+//
+// NVIDIA Image Scaling SDK v1.0.3
+// Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the
+// "Software"), to deal in the Software without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Software, and to permit
+// persons to whom the Software is furnished to do so, subject to the
+// following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+// NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+// USE OR OTHER DEALINGS IN THE SOFTWARE.
+static const float kNisCoefScale[64][6] = {
+    { 0.0f, 0.0f, 1.0000f, 0.0f, 0.0f, 0.0f },
+    { 0.0029f, -0.0127f, 1.0000f, 0.0132f, -0.0034f, 0.0f },
+    { 0.0063f, -0.0249f, 0.9985f, 0.0269f, -0.0068f, 0.0f },
+    { 0.0088f, -0.0361f, 0.9956f, 0.0415f, -0.0103f, 0.0005f },
+    { 0.0117f, -0.0474f, 0.9932f, 0.0562f, -0.0142f, 0.0005f },
+    { 0.0142f, -0.0576f, 0.9897f, 0.0713f, -0.0181f, 0.0005f },
+    { 0.0166f, -0.0674f, 0.9844f, 0.0874f, -0.0220f, 0.0010f },
+    { 0.0186f, -0.0762f, 0.9785f, 0.1040f, -0.0264f, 0.0015f },
+    { 0.0205f, -0.0850f, 0.9727f, 0.1206f, -0.0308f, 0.0020f },
+    { 0.0225f, -0.0928f, 0.9648f, 0.1382f, -0.0352f, 0.0024f },
+    { 0.0239f, -0.1006f, 0.9575f, 0.1558f, -0.0396f, 0.0029f },
+    { 0.0254f, -0.1074f, 0.9487f, 0.1738f, -0.0439f, 0.0034f },
+    { 0.0264f, -0.1138f, 0.9390f, 0.1929f, -0.0488f, 0.0044f },
+    { 0.0278f, -0.1191f, 0.9282f, 0.2119f, -0.0537f, 0.0049f },
+    { 0.0288f, -0.1245f, 0.9170f, 0.2310f, -0.0581f, 0.0059f },
+    { 0.0293f, -0.1294f, 0.9058f, 0.2510f, -0.0630f, 0.0063f },
+    { 0.0303f, -0.1333f, 0.8926f, 0.2710f, -0.0679f, 0.0073f },
+    { 0.0308f, -0.1367f, 0.8789f, 0.2915f, -0.0728f, 0.0083f },
+    { 0.0308f, -0.1401f, 0.8657f, 0.3120f, -0.0776f, 0.0093f },
+    { 0.0313f, -0.1426f, 0.8506f, 0.3330f, -0.0825f, 0.0103f },
+    { 0.0313f, -0.1445f, 0.8354f, 0.3540f, -0.0874f, 0.0112f },
+    { 0.0313f, -0.1460f, 0.8193f, 0.3755f, -0.0923f, 0.0122f },
+    { 0.0313f, -0.1470f, 0.8022f, 0.3965f, -0.0967f, 0.0137f },
+    { 0.0308f, -0.1479f, 0.7856f, 0.4185f, -0.1016f, 0.0146f },
+    { 0.0303f, -0.1479f, 0.7681f, 0.4399f, -0.1060f, 0.0156f },
+    { 0.0298f, -0.1479f, 0.7505f, 0.4614f, -0.1104f, 0.0166f },
+    { 0.0293f, -0.1470f, 0.7314f, 0.4829f, -0.1147f, 0.0181f },
+    { 0.0288f, -0.1460f, 0.7119f, 0.5049f, -0.1187f, 0.0190f },
+    { 0.0278f, -0.1445f, 0.6929f, 0.5264f, -0.1226f, 0.0200f },
+    { 0.0273f, -0.1431f, 0.6724f, 0.5479f, -0.1260f, 0.0215f },
+    { 0.0264f, -0.1411f, 0.6528f, 0.5693f, -0.1299f, 0.0225f },
+    { 0.0254f, -0.1387f, 0.6323f, 0.5903f, -0.1328f, 0.0234f },
+    { 0.0244f, -0.1357f, 0.6113f, 0.6113f, -0.1357f, 0.0244f },
+    { 0.0234f, -0.1328f, 0.5903f, 0.6323f, -0.1387f, 0.0254f },
+    { 0.0225f, -0.1299f, 0.5693f, 0.6528f, -0.1411f, 0.0264f },
+    { 0.0215f, -0.1260f, 0.5479f, 0.6724f, -0.1431f, 0.0273f },
+    { 0.0200f, -0.1226f, 0.5264f, 0.6929f, -0.1445f, 0.0278f },
+    { 0.0190f, -0.1187f, 0.5049f, 0.7119f, -0.1460f, 0.0288f },
+    { 0.0181f, -0.1147f, 0.4829f, 0.7314f, -0.1470f, 0.0293f },
+    { 0.0166f, -0.1104f, 0.4614f, 0.7505f, -0.1479f, 0.0298f },
+    { 0.0156f, -0.1060f, 0.4399f, 0.7681f, -0.1479f, 0.0303f },
+    { 0.0146f, -0.1016f, 0.4185f, 0.7856f, -0.1479f, 0.0308f },
+    { 0.0137f, -0.0967f, 0.3965f, 0.8022f, -0.1470f, 0.0313f },
+    { 0.0122f, -0.0923f, 0.3755f, 0.8193f, -0.1460f, 0.0313f },
+    { 0.0112f, -0.0874f, 0.3540f, 0.8354f, -0.1445f, 0.0313f },
+    { 0.0103f, -0.0825f, 0.3330f, 0.8506f, -0.1426f, 0.0313f },
+    { 0.0093f, -0.0776f, 0.3120f, 0.8657f, -0.1401f, 0.0308f },
+    { 0.0083f, -0.0728f, 0.2915f, 0.8789f, -0.1367f, 0.0308f },
+    { 0.0073f, -0.0679f, 0.2710f, 0.8926f, -0.1333f, 0.0303f },
+    { 0.0063f, -0.0630f, 0.2510f, 0.9058f, -0.1294f, 0.0293f },
+    { 0.0059f, -0.0581f, 0.2310f, 0.9170f, -0.1245f, 0.0288f },
+    { 0.0049f, -0.0537f, 0.2119f, 0.9282f, -0.1191f, 0.0278f },
+    { 0.0044f, -0.0488f, 0.1929f, 0.9390f, -0.1138f, 0.0264f },
+    { 0.0034f, -0.0439f, 0.1738f, 0.9487f, -0.1074f, 0.0254f },
+    { 0.0029f, -0.0396f, 0.1558f, 0.9575f, -0.1006f, 0.0239f },
+    { 0.0024f, -0.0352f, 0.1382f, 0.9648f, -0.0928f, 0.0225f },
+    { 0.0020f, -0.0308f, 0.1206f, 0.9727f, -0.0850f, 0.0205f },
+    { 0.0015f, -0.0264f, 0.1040f, 0.9785f, -0.0762f, 0.0186f },
+    { 0.0010f, -0.0220f, 0.0874f, 0.9844f, -0.0674f, 0.0166f },
+    { 0.0005f, -0.0181f, 0.0713f, 0.9897f, -0.0576f, 0.0142f },
+    { 0.0005f, -0.0142f, 0.0562f, 0.9932f, -0.0474f, 0.0117f },
+    { 0.0005f, -0.0103f, 0.0415f, 0.9956f, -0.0361f, 0.0088f },
+    { 0.0f, -0.0068f, 0.0269f, 0.9985f, -0.0249f, 0.0063f },
+    { 0.0f, -0.0034f, 0.0132f, 1.0000f, -0.0127f, 0.0029f },
+};
+static const float kNisCoefUsm[64][6] = {
+    { 0.0f, -0.6001f, 1.2002f, -0.6001f, 0.0f, 0.0f },
+    { 0.0029f, -0.6084f, 1.1987f, -0.5903f, -0.0029f, 0.0f },
+    { 0.0049f, -0.6147f, 1.1958f, -0.5791f, -0.0068f, 0.0005f },
+    { 0.0073f, -0.6196f, 1.1890f, -0.5659f, -0.0103f, 0.0f },
+    { 0.0093f, -0.6235f, 1.1802f, -0.5513f, -0.0151f, 0.0f },
+    { 0.0112f, -0.6265f, 1.1699f, -0.5352f, -0.0195f, 0.0005f },
+    { 0.0122f, -0.6270f, 1.1582f, -0.5181f, -0.0259f, 0.0005f },
+    { 0.0142f, -0.6284f, 1.1455f, -0.5005f, -0.0317f, 0.0005f },
+    { 0.0156f, -0.6265f, 1.1274f, -0.4790f, -0.0386f, 0.0005f },
+    { 0.0166f, -0.6235f, 1.1089f, -0.4570f, -0.0454f, 0.0010f },
+    { 0.0176f, -0.6187f, 1.0879f, -0.4346f, -0.0532f, 0.0010f },
+    { 0.0181f, -0.6138f, 1.0659f, -0.4102f, -0.0615f, 0.0015f },
+    { 0.0190f, -0.6069f, 1.0405f, -0.3843f, -0.0698f, 0.0015f },
+    { 0.0195f, -0.6006f, 1.0161f, -0.3574f, -0.0796f, 0.0020f },
+    { 0.0200f, -0.5928f, 0.9893f, -0.3286f, -0.0898f, 0.0024f },
+    { 0.0200f, -0.5820f, 0.9580f, -0.2988f, -0.1001f, 0.0029f },
+    { 0.0200f, -0.5728f, 0.9292f, -0.2690f, -0.1104f, 0.0034f },
+    { 0.0200f, -0.5620f, 0.8975f, -0.2368f, -0.1226f, 0.0039f },
+    { 0.0205f, -0.5498f, 0.8643f, -0.2046f, -0.1343f, 0.0044f },
+    { 0.0200f, -0.5371f, 0.8301f, -0.1709f, -0.1465f, 0.0049f },
+    { 0.0195f, -0.5239f, 0.7944f, -0.1367f, -0.1587f, 0.0054f },
+    { 0.0195f, -0.5107f, 0.7598f, -0.1021f, -0.1724f, 0.0059f },
+    { 0.0190f, -0.4966f, 0.7231f, -0.0649f, -0.1865f, 0.0063f },
+    { 0.0186f, -0.4819f, 0.6846f, -0.0288f, -0.1997f, 0.0068f },
+    { 0.0186f, -0.4668f, 0.6460f, 0.0093f, -0.2144f, 0.0073f },
+    { 0.0176f, -0.4507f, 0.6055f, 0.0479f, -0.2290f, 0.0083f },
+    { 0.0171f, -0.4370f, 0.5693f, 0.0859f, -0.2446f, 0.0088f },
+    { 0.0161f, -0.4199f, 0.5283f, 0.1255f, -0.2598f, 0.0098f },
+    { 0.0161f, -0.4048f, 0.4883f, 0.1655f, -0.2754f, 0.0103f },
+    { 0.0151f, -0.3887f, 0.4497f, 0.2041f, -0.2910f, 0.0107f },
+    { 0.0142f, -0.3711f, 0.4072f, 0.2446f, -0.3066f, 0.0117f },
+    { 0.0137f, -0.3555f, 0.3672f, 0.2852f, -0.3228f, 0.0122f },
+    { 0.0132f, -0.3394f, 0.3262f, 0.3262f, -0.3394f, 0.0132f },
+    { 0.0122f, -0.3228f, 0.2852f, 0.3672f, -0.3555f, 0.0137f },
+    { 0.0117f, -0.3066f, 0.2446f, 0.4072f, -0.3711f, 0.0142f },
+    { 0.0107f, -0.2910f, 0.2041f, 0.4497f, -0.3887f, 0.0151f },
+    { 0.0103f, -0.2754f, 0.1655f, 0.4883f, -0.4048f, 0.0161f },
+    { 0.0098f, -0.2598f, 0.1255f, 0.5283f, -0.4199f, 0.0161f },
+    { 0.0088f, -0.2446f, 0.0859f, 0.5693f, -0.4370f, 0.0171f },
+    { 0.0083f, -0.2290f, 0.0479f, 0.6055f, -0.4507f, 0.0176f },
+    { 0.0073f, -0.2144f, 0.0093f, 0.6460f, -0.4668f, 0.0186f },
+    { 0.0068f, -0.1997f, -0.0288f, 0.6846f, -0.4819f, 0.0186f },
+    { 0.0063f, -0.1865f, -0.0649f, 0.7231f, -0.4966f, 0.0190f },
+    { 0.0059f, -0.1724f, -0.1021f, 0.7598f, -0.5107f, 0.0195f },
+    { 0.0054f, -0.1587f, -0.1367f, 0.7944f, -0.5239f, 0.0195f },
+    { 0.0049f, -0.1465f, -0.1709f, 0.8301f, -0.5371f, 0.0200f },
+    { 0.0044f, -0.1343f, -0.2046f, 0.8643f, -0.5498f, 0.0205f },
+    { 0.0039f, -0.1226f, -0.2368f, 0.8975f, -0.5620f, 0.0200f },
+    { 0.0034f, -0.1104f, -0.2690f, 0.9292f, -0.5728f, 0.0200f },
+    { 0.0029f, -0.1001f, -0.2988f, 0.9580f, -0.5820f, 0.0200f },
+    { 0.0024f, -0.0898f, -0.3286f, 0.9893f, -0.5928f, 0.0200f },
+    { 0.0020f, -0.0796f, -0.3574f, 1.0161f, -0.6006f, 0.0195f },
+    { 0.0015f, -0.0698f, -0.3843f, 1.0405f, -0.6069f, 0.0190f },
+    { 0.0015f, -0.0615f, -0.4102f, 1.0659f, -0.6138f, 0.0181f },
+    { 0.0010f, -0.0532f, -0.4346f, 1.0879f, -0.6187f, 0.0176f },
+    { 0.0010f, -0.0454f, -0.4570f, 1.1089f, -0.6235f, 0.0166f },
+    { 0.0005f, -0.0386f, -0.4790f, 1.1274f, -0.6265f, 0.0156f },
+    { 0.0005f, -0.0317f, -0.5005f, 1.1455f, -0.6284f, 0.0142f },
+    { 0.0005f, -0.0259f, -0.5181f, 1.1582f, -0.6270f, 0.0122f },
+    { 0.0005f, -0.0195f, -0.5352f, 1.1699f, -0.6265f, 0.0112f },
+    { 0.0f, -0.0151f, -0.5513f, 1.1802f, -0.6235f, 0.0093f },
+    { 0.0f, -0.0103f, -0.5659f, 1.1890f, -0.6196f, 0.0073f },
+    { 0.0005f, -0.0068f, -0.5791f, 1.1958f, -0.6147f, 0.0049f },
+    { 0.0f, -0.0029f, -0.5903f, 1.1987f, -0.6084f, 0.0029f },
+};
+
+static GLuint CreateNisCoefTexture(void)
+{
+    float texels[64][4][4];
+    for (int ph = 0; ph < 64; ph++) {
+        const float *s = kNisCoefScale[ph], *u = kNisCoefUsm[ph];
+        const float row[4][4] = { { s[0], s[1], s[2], s[3] },
+                                  { s[4], s[5], 0, 0 },
+                                  { u[0], u[1], u[2], u[3] },
+                                  { u[4], u[5], 0, 0 } };
+        memcpy(texels[ph], row, sizeof(row));
+    }
+    GLuint t;
+    glGenTextures(1, &t);
+    glBindTexture(GL_TEXTURE_2D, t);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 4, 64, 0, GL_RGBA, GL_FLOAT, texels);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return t;
+}
+
+// NVScalerUpdateConfig (SDR) from NIS_Config.h: sharpness 0..1
+static void SetNisUniforms(DecalShader *s, float sharpness)
+{
+    sharpness = sharpness < 0.0f ? 0.0f : (sharpness > 1.0f ? 1.0f : sharpness);
+    float slider = sharpness - 0.5f;
+    float max_scale = slider >= 0.0f ? 1.25f : 1.75f;
+    float min_scale = slider >= 0.0f ? 1.25f : 1.0f;
+    float limit_scale = slider >= 0.0f ? 1.25f : 1.0f;
+    float detect_ratio = 2 * 1127.f / 1024.f;
+    float detect_thres = 64.0f / 1024.0f;
+    float min_contrast = 2.0f, max_contrast = 10.0f;
+    float sharp_start_y = 0.45f, sharp_end_y = 0.9f;
+    float strength_min = fmaxf(0.0f, 0.4f + slider * min_scale * 1.2f);
+    float strength_max = 1.6f + slider * max_scale * 1.8f;
+    float limit_min = fmaxf(0.1f, 0.14f + slider * limit_scale * 0.32f);
+    float limit_max = 0.5f + slider * limit_scale * 0.6f;
+    glUniform4f(s->nis_loc[0], detect_ratio, detect_thres, min_contrast,
+                1.0f / (max_contrast - min_contrast));
+    glUniform4f(s->nis_loc[1], sharp_start_y, 1.0f / (sharp_end_y - sharp_start_y),
+                strength_min, strength_max - strength_min);
+    glUniform4f(s->nis_loc[2], limit_min, limit_max - limit_min, 1.0f, 1.0f / 255.0f);
+}
+
 // Advanced upscaling path: gamma (native res) -> scaler (output res) ->
 // RCAS sharpening (to target). The scaler is FSR 1 EASU, SGSR 1, Lanczos-3
 // or Catmull-Rom. Returns false when it does not apply (no upscaling
@@ -1419,7 +1886,19 @@ static bool RenderFramebufferUpscaled(GLint tex, int width, int height,
     glUniform2f(scaler->in_size_loc, tw, th);
     glUniform2f(scaler->out_size_loc, dw, dh);
     glUniform4f(scaler->viewport_info_loc, 1.0f / tw, 1.0f / th, tw, th);
+    bool nis = scaler == g_nis_shader;
+    if (nis) {
+        glUniform1i(scaler->coef_loc, 1);
+        SetNisUniforms(scaler, g_config.display.fsr_sharpness);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, g_nis_coef_tex);
+    }
     DrawFullscreenPass(scaler, g_fsr_gamma_fbo->tex, 1.0, 1.0);
+    if (nis) {
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glActiveTexture(GL_TEXTURE0);
+    }
 
     // Pass 3: RCAS sharpen into the original target with the usual
     // letterboxing
@@ -1435,6 +1914,9 @@ static bool RenderFramebufferUpscaled(GLint tex, int width, int height,
     // Sharpening strength 0..1 (0 = off, 1 = AMD's maximum)
     float sharp = g_config.display.fsr_sharpness;
     sharp = sharp < 0.0f ? 0.0f : (sharp > 1.0f ? 1.0f : sharp);
+    if (nis) {
+        sharp = 0.0f; // NIS has its own sharpening; RCAS just copies
+    }
     glUseProgram(g_fsr_rcas_shader->prog);
     glUniform2f(g_fsr_rcas_shader->in_size_loc, dw, dh);
     glUniform1f(g_fsr_rcas_shader->sharpness_loc, sharp);
@@ -1451,6 +1933,7 @@ void RenderFramebuffer(GLint tex, int width, int height, bool flip, float scale[
     case CONFIG_DISPLAY_FILTERING_SGSR: scaler = g_sgsr_shader; break;
     case CONFIG_DISPLAY_FILTERING_LANCZOS: scaler = g_lanczos_shader; break;
     case CONFIG_DISPLAY_FILTERING_BICUBIC: scaler = g_bicubic_shader; break;
+    case CONFIG_DISPLAY_FILTERING_NIS: scaler = g_nis_shader; break;
     default: break;
     }
     if (scaler && !nv2a_get_screen_off() &&

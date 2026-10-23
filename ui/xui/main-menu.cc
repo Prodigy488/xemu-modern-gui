@@ -798,14 +798,17 @@ void MainMenuDisplayView::Draw()
                  "AMD FidelityFX FSR 1.0\0"
                  "Bicubic (Catmull-Rom)\0"
                  "Lanczos\0"
-                 "Snapdragon GSR 1\0",
-                 "How the image is scaled up to fit the window. FSR and "
+                 "Snapdragon GSR 1\0"
+                 "NVIDIA Image Scaling (NIS)\0",
+                 "How the image is scaled up to fit the window. FSR, NIS and "
                  "Snapdragon GSR sharpen edges, Lanczos and Bicubic are "
                  "classic sharp filters");
     if (g_config.display.filtering >= CONFIG_DISPLAY_FILTERING_FSR) {
         char buf[48];
-        snprintf(buf, sizeof(buf), "Sharpening strength (%d%%, AMD RCAS)",
-                 (int)(g_config.display.fsr_sharpness * 100));
+        snprintf(buf, sizeof(buf), "Sharpening strength (%d%%, %s)",
+                 (int)(g_config.display.fsr_sharpness * 100),
+                 g_config.display.filtering == CONFIG_DISPLAY_FILTERING_NIS
+                     ? "NVIDIA NIS" : "AMD RCAS");
         Slider("Sharpening", &g_config.display.fsr_sharpness, buf);
     }
 

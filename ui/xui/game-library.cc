@@ -3181,7 +3181,8 @@ void DrawSettingsPopup()
     if (ImGui::Combo("Upscaling filter", &filter,
                      "Use global\0" "Linear\0" "Nearest\0"
                      "AMD FidelityFX FSR 1.0\0" "Bicubic (Catmull-Rom)\0"
-                     "Lanczos\0" "Snapdragon GSR 1\0")) {
+                     "Lanczos\0" "Snapdragon GSR 1\0"
+                     "NVIDIA Image Scaling (NIS)\0")) {
         g_settings_edit.filtering = filter - 1;
     }
     bool custom_sharp = g_settings_edit.fsr_sharpness >= 0;
@@ -5798,7 +5799,7 @@ void DrawDashSettingsTab()
         label("Upscaling filter");
         ImGui::Combo("##filter", &g_config.display.filtering,
                      "Linear\0Nearest\0AMD FidelityFX FSR 1.0\0Bicubic (Catmull-Rom)\0"
-                     "Lanczos\0Snapdragon GSR 1\0");
+                     "Lanczos\0Snapdragon GSR 1\0NVIDIA Image Scaling (NIS)\0");
         if (g_config.display.filtering >= 2) {
             label("Sharpening");
             ImGui::SliderFloat("##sharp", &g_config.display.fsr_sharpness, 0.0f, 1.0f,

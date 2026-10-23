@@ -20,6 +20,7 @@ static const char *FilterName(int filtering)
     case CONFIG_DISPLAY_FILTERING_BICUBIC: return "Bicubic";
     case CONFIG_DISPLAY_FILTERING_LANCZOS: return "Lanczos";
     case CONFIG_DISPLAY_FILTERING_SGSR: return "Snapdragon GSR";
+    case CONFIG_DISPLAY_FILTERING_NIS: return "NVIDIA NIS";
     default: return "Linear";
     }
 }

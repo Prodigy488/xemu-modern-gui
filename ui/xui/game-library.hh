@@ -38,6 +38,7 @@ public:
     void OpenFolderManager();
     void AddGame();
     void DownloadCovers();
+    void OpenInsignia();
 };
 
 extern GameLibraryWindow game_library_window;

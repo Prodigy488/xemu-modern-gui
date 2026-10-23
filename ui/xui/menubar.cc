@@ -104,6 +104,9 @@ void ShowMainMenu()
             if (ImGui::MenuItem("Scan Folders")) {
                 game_library_window.Rescan();
             }
+            if (ImGui::MenuItem("Insignia (Play Online)...")) {
+                game_library_window.OpenInsignia();
+            }
             if (ImGui::MenuItem("Download Covers")) {
                 game_library_window.DownloadCovers();
             }

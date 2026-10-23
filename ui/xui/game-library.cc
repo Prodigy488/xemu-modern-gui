@@ -30,6 +30,7 @@
 #include "game-library-scan.hh"
 #include "game-patches.hh"
 #include "game-preview.hh"
+#include "insignia-titles.hh"
 #include "actions.hh"
 #include "misc.hh"
 #include "viewport-manager.hh"
@@ -78,6 +79,17 @@ struct LibraryEntry {
         return title.empty() ? file_stem : title;
     }
 };
+
+bool IsInsigniaTitle(uint32_t title_id)
+{
+    return std::binary_search(std::begin(kInsigniaTitleIds),
+                              std::end(kInsigniaTitleIds), title_id);
+}
+
+bool SupportsOnline(const LibraryEntry &e)
+{
+    return e.valid && IsInsigniaTitle(e.title_id);
+}
 
 struct GameStats {
     bool favorite = false;
@@ -205,6 +217,16 @@ struct SavedConfig {
 // UI state
 std::string g_search;
 bool g_favorites_only = false;
+bool g_online_only = false;
+bool g_open_insignia_popup = false;
+
+// Insignia website status: checked on demand (when its panel is shown), at
+// most once every 5 minutes, so xemu never polls their site in the
+// background. This is the website, not the game servers.
+enum class InsigniaStatus { Unknown, Checking, Up, Maintenance, Down };
+std::atomic<int> g_insignia_status{ (int)InsigniaStatus::Unknown };
+std::atomic<uint64_t> g_insignia_checked_at{ 0 };
+std::thread g_insignia_thread;
 std::string g_selected_path;
 std::string g_settings_path; // game whose settings popup is open
 GameOverrides g_settings_edit;
@@ -1196,6 +1218,9 @@ void SortedFiltered(std::vector<LibraryEntry *> &out)
         if (g_favorites_only && !g_stats[e.path].favorite) {
             continue;
         }
+        if (g_online_only && !SupportsOnline(e)) {
+            continue;
+        }
         if (!needle.empty() &&
             Lower(e.DisplayName()).find(needle) == std::string::npos &&
             Lower(e.file_stem).find(needle) == std::string::npos &&
@@ -1611,6 +1636,16 @@ void DrawTile(LibraryEntry &e, float tile_w, int &tex_budget)
                         (selected || focused) ? kAccent
                                               : IM_COL32(255, 255, 255, 90),
                         rounding, 0, 2.5f * s);
+        }
+        if (SupportsOnline(e)) {
+            const char *badge = "ONLINE";
+            float fs = font_h * 0.75f;
+            ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, 0, badge);
+            ImVec2 p(a.x + 6 * s, a.y + 6 * s);
+            dl->AddRectFilled(ImVec2(p.x - 3 * s, p.y - 2 * s),
+                              ImVec2(p.x + ts.x + 3 * s, p.y + ts.y + 2 * s),
+                              IM_COL32(16, 124, 16, 230), 3 * s);
+            dl->AddText(ImGui::GetFont(), fs, p, IM_COL32(255, 255, 255, 255), badge);
         }
         if (st.favorite) {
             ImVec2 p(art_b.x - font_h - 6 * s, a.y + 6 * s);
@@ -2084,6 +2119,147 @@ void RemoveGameFolder(const std::string &path)
     SaveLibrary();
 }
 
+void CheckInsigniaStatus(bool force)
+{
+    uint64_t now = SDL_GetTicks();
+    int st = g_insignia_status;
+    if (st == (int)InsigniaStatus::Checking ||
+        (!force && st != (int)InsigniaStatus::Unknown &&
+         now - g_insignia_checked_at < 5 * 60 * 1000)) {
+        return;
+    }
+    if (g_insignia_thread.joinable()) {
+        g_insignia_thread.join();
+    }
+    g_insignia_status = (int)InsigniaStatus::Checking;
+    g_insignia_thread = std::thread([] {
+        Error *err = NULL;
+        InsigniaStatus result = InsigniaStatus::Down;
+        if (ensure_libcurl_initialized(&err)) {
+            GByteArray *body = g_byte_array_new();
+            int code = http_get("https://insignia.live/games", body, NULL, NULL);
+            std::string text((const char *)body->data, body->len);
+            g_byte_array_unref(body);
+            if (code >= 200 && code < 400) {
+                result = Lower(text).find("maintenance") != std::string::npos &&
+                                 Lower(text).find("unavailable") != std::string::npos
+                             ? InsigniaStatus::Maintenance
+                             : InsigniaStatus::Up;
+            } else if (code == 503) {
+                result = InsigniaStatus::Maintenance;
+            }
+        } else if (err) {
+            error_free(err);
+        }
+        g_insignia_checked_at = SDL_GetTicks();
+        g_insignia_status = (int)result;
+    });
+}
+
+// Colored dot + label; returns the label
+const char *DrawInsigniaStatusDot()
+{
+    const char *label = "Website status unknown";
+    ImU32 col = IM_COL32(140, 140, 140, 255);
+    switch ((InsigniaStatus)(int)g_insignia_status) {
+    case InsigniaStatus::Checking:
+        label = "Checking website...";
+        break;
+    case InsigniaStatus::Up:
+        label = "Website online";
+        col = IM_COL32(70, 200, 70, 255);
+        break;
+    case InsigniaStatus::Maintenance:
+        label = "Website under maintenance";
+        col = IM_COL32(235, 180, 40, 255);
+        break;
+    case InsigniaStatus::Down:
+        label = "Website unreachable";
+        col = IM_COL32(230, 70, 60, 255);
+        break;
+    default:
+        break;
+    }
+    float h = ImGui::GetFontSize();
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::GetWindowDrawList()->AddCircleFilled(
+        ImVec2(p.x + h * 0.35f, p.y + h * 0.55f), h * 0.3f, col);
+    ImGui::Dummy(ImVec2(h * 0.8f, h));
+    ImGui::SameLine();
+    ImGui::TextUnformatted(label);
+    return label;
+}
+
+void DrawInsigniaPopup()
+{
+    if (g_open_insignia_popup) {
+        ImGui::OpenPopup("Insignia");
+        g_open_insignia_popup = false;
+    }
+    const float s = g_viewport_mgr.m_scale;
+    ImGui::SetNextWindowSize(ImVec2(560 * s, 0), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal("Insignia", NULL,
+                                ImGuiWindowFlags_AlwaysAutoResize)) {
+        return;
+    }
+    int owned = 0;
+    for (auto &e : g_entries) {
+        owned += SupportsOnline(e) ? 1 : 0;
+    }
+    float wrap = ImGui::GetCursorPosX() + 540 * s;
+    ImGui::PushTextWrapPos(wrap);
+    ImGui::TextUnformatted("Insignia is a free, fan-run revival of the original "
+                           "Xbox Live service.");
+    CheckInsigniaStatus(false);
+    DrawInsigniaStatusDot();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(g_insignia_status == (int)InsigniaStatus::Checking);
+    if (ImGui::SmallButton("Check again")) {
+        CheckInsigniaStatus(true);
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("Shows whether insignia.live is reachable. Online play "
+                          "can keep working even while the website is down.");
+    ImGui::TextDisabled("%d of your games support it (Insignia's list from %s, "
+                        "%d games). They're marked ONLINE in the library.",
+                        owned, kInsigniaListDate,
+                        (int)(sizeof(kInsigniaTitleIds) / sizeof(kInsigniaTitleIds[0])));
+    ImGui::Separator();
+    ImGui::TextUnformatted("To play online in xemu:");
+    ImGui::BulletText("In xemu: Settings > Network, turn on Enable and choose "
+                      "the NAT backend.");
+    ImGui::BulletText("Follow Insignia's Connect guide: set the DNS address it "
+                      "gives you in the Xbox dashboard's network settings, then "
+                      "register with the Insignia Setup Assistant and create "
+                      "your account.");
+    ImGui::BulletText("Run the dashboard's network test, then start a "
+                      "supported game and sign in.");
+    ImGui::TextDisabled("Insignia is an independent service, not part of xemu. "
+                        "For setup help, use Insignia's Discord.");
+    ImGui::PopTextWrapPos();
+    ImGui::Separator();
+    if (ImGui::Button("Connect guide")) {
+        SDL_OpenURL("https://insignia.live/connect");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Who's playing")) {
+        SDL_OpenURL("https://insignia.live/games");
+    }
+    ImGui::SetItemTooltip("Insignia's games page: players online and active "
+                          "sessions per game, in your browser");
+    ImGui::SameLine();
+    if (ImGui::Button(g_online_only ? "Show all games" : "Show my online games")) {
+        g_online_only = !g_online_only;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Close", ImVec2(90 * s, 0)) ||
+        ImGui::IsKeyPressed(ImGuiKey_Escape) ||
+        ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight)) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
 bool g_open_folders_popup = false;
 
 void DrawFoldersPopup()
@@ -2471,6 +2647,12 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
     };
     row("Play time", FormatPlayTime(st.play_seconds));
     row("Last played", IsCurrentDisc(e) ? "Playing now" : FormatLastPlayed(st.last_played));
+    if (SupportsOnline(e)) {
+        row("Online", "Supported on Insignia");
+        if (ImGui::SmallButton("How to play online...")) {
+            g_open_insignia_popup = true;
+        }
+    }
     if (e.valid && g_overrides.count(e.title_id) && g_overrides[e.title_id].enabled) {
         row("Settings", "Custom for this game");
     }
@@ -2499,6 +2681,12 @@ void GameLibraryWindow::Open()
 {
     is_open = true;
     g_focus_requested = true;
+}
+
+void GameLibraryWindow::OpenInsignia()
+{
+    Open();
+    g_open_insignia_popup = true;
 }
 
 void GameLibraryWindow::DownloadCovers()
@@ -2789,6 +2977,29 @@ void GameLibraryWindow::Draw()
     if (toggle(ICON_FA_STAR, g_favorites_only, "Show favorites only")) {
         g_favorites_only = !g_favorites_only;
     }
+    ImGui::SameLine(0, 2 * s);
+    if (toggle("Online", g_online_only,
+               "Show only games playable online with Insignia")) {
+        g_online_only = !g_online_only;
+    }
+    ImGui::SameLine(0, 2 * s);
+    if (ImGui::Button("Insignia")) {
+        g_open_insignia_popup = true;
+    }
+    {
+        int st = g_insignia_status;
+        if (st == (int)InsigniaStatus::Up || st == (int)InsigniaStatus::Maintenance ||
+            st == (int)InsigniaStatus::Down) {
+            ImVec2 mx = ImGui::GetItemRectMax(), mn = ImGui::GetItemRectMin();
+            ImU32 col = st == (int)InsigniaStatus::Up ? IM_COL32(70, 200, 70, 255)
+                        : st == (int)InsigniaStatus::Maintenance
+                            ? IM_COL32(235, 180, 40, 255)
+                            : IM_COL32(230, 70, 60, 255);
+            ImGui::GetWindowDrawList()->AddCircleFilled(
+                ImVec2(mx.x - 4 * s, mn.y + 4 * s), 3.5f * s, col);
+        }
+    }
+    ImGui::SetItemTooltip("Play original Xbox Live games online again");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(150 * s);
     ImGui::Combo("##sort", &g_config.general.library.sort,
@@ -2884,6 +3095,7 @@ void GameLibraryWindow::Draw()
     DrawSettingsPopup();
     DrawFoldersPopup();
     DrawPatchesPopup();
+    DrawInsigniaPopup();
 
     // Esc / B closes the library when nothing else wants the key
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
@@ -2931,6 +3143,9 @@ static void GameLibraryShutdown(void)
     }
     g_preview->Close(false);
     StopImageWorker();
+    if (g_insignia_thread.joinable()) {
+        g_insignia_thread.join();
+    }
     if (g_loaded) {
         SaveLibrary();
     }

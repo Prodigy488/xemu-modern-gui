@@ -53,7 +53,9 @@ shared.
   GPU waits, occlusion queries, uploads, or nothing graphical, pointing at
   the emulated CPU) and what was unusual around each glitch. Saved as
   `report.txt`, `frames.csv` and a `trace.json` for
-  [Perfetto](https://ui.perfetto.dev).
+  [Perfetto](https://ui.perfetto.dev). Every finding says how it was worked
+  out. Also new: **Clear shader cache** per game (right-click a game), and
+  game names next to title-ID folders in the Drive tab.
 - **New in v1.5: Homebrew tab.**
   - **Play** the homebrew on your Xbox hard disk image (`E:\Games`,
     `E:\Apps`, `E:\Emulators`) straight from the dashboard, no homebrew

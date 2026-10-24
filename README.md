@@ -16,8 +16,9 @@
 
 This fork is based on xemu 0.8.139. Emulation is unchanged except where noted
 under Performance and stability; the work here is on the interface: a
-console-style dashboard, a homebrew tab, upscaling options, tools for
-finding out why a game is slow, and quality-of-life features.
+console-style dashboard in 11 languages, a homebrew tab, upscaling options,
+tools for finding out why a game is slow, easy Insignia setup, and
+quality-of-life features.
 
 > **Agent Declaration**: These changes were created with assistance from
 > Claude Code (Anthropic, Claude Opus 5.5).
@@ -154,7 +155,8 @@ the Home tab that points out any missing files.
 - **Dashboard** with tabs, switched with LB / RB:
   - **Home:** continue your last game.
   - **Library:** your full game collection.
-  - **Insignia:** online status, your online-capable games and setup steps.
+  - **Insignia:** online status, your online-capable games and one-click
+    network setup.
   - **Media:** save states and screenshots.
   - **Drive:** the Xbox hard drive explorer.
   - **Homebrew:** play, delete or get more homebrew (XboxHomebrew.store).
@@ -173,14 +175,20 @@ the Home tab that points out any missing files.
     [Jay's Magic Patches](https://github.com/JayYardley/Xbox-Magic-Patches-by-Jay).
 - **Video mode switches:** widescreen, 480p, 720p and 1080i, the same as the
   Xbox dashboard's settings.
-- **Insignia** (Xbox Live revival) integration: ONLINE badges, a status light
-  and setup help.
+- **Languages:** English, Español, Português (Brasil), Français, Deutsch,
+  Italiano, Polski, Русский, 日本語, 简体中文 and 한국어, following the Windows
+  language by default.
+- **Insignia** (Xbox Live revival) integration: ONLINE badges, a status
+  light, and "Set up xemu for Insignia": networking on and the Xbox's DNS
+  lookups answered by Insignia's DNS (an optional change to the NAT
+  backend), with a connection test.
 - **Performance and stability:**
   - Vulkan shader and pipeline caches.
   - Higher-priority emulation threads.
   - A larger CPU code cache.
   - Windows power throttling turned off.
-  - A performance overlay (F9) and Performance Capture (Shift+F9).
+  - A performance overlay (F9) and Performance Capture (Shift+F9), with
+    optional voice commands.
   - OpenGL loads saved shaders from disk when they aren't in memory, so the
     shader cache still works after a crash or forced close.
   - Experimental dynamic resolution.

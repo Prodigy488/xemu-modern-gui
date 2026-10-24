@@ -97,12 +97,12 @@ void AutoUpdateWindow::Draw()
     if (updater.is_update_available()) {
         ImGui::Dummy(ImVec2(0.0f, ImGui::GetStyle().WindowPadding.y));
 
-        ImGui::Text("Current version: %s (xemu %s)", kModernGuiVersion, xemu_version);
-        ImGui::Text("Latest version: %s", updater.get_release_version().c_str());
+        ImGui::Text(tr("Current version: %s (xemu %s)"), kModernGuiVersion, xemu_version);
+        ImGui::Text(tr("Latest version: %s"), updater.get_release_version().c_str());
 
         ImGui::Dummy(ImVec2(0.0f, ImGui::GetStyle().ItemSpacing.y));
 
-        if (ImGui::SmallButton("Release notes...")) {
+        if (ImGui::SmallButton(tr("Release notes..."))) {
             SDL_OpenURL(updater.get_release_url().c_str());
         }
     }
@@ -122,20 +122,20 @@ void AutoUpdateWindow::Draw()
     ImGui::SetCursorPosX(ImGui::GetWindowWidth()-bw);
 
     if (updater.is_checking_for_update() || updater.is_updating()) {
-        if (ImGui::Button("Cancel", ImVec2(w, 0))) {
+        if (ImGui::Button(tr("Cancel"), ImVec2(w, 0))) {
             updater.cancel();
         }
     } else {
         if (updater.is_pending_restart()) {
-            if (ImGui::Button("Restart", ImVec2(w, 0))) {
+            if (ImGui::Button(tr("Restart"), ImVec2(w, 0))) {
                 updater.restart_to_updated();
             }
         } else if (updater.is_update_available()) {
-            if (ImGui::Button("Update", ImVec2(w, 0))) {
+            if (ImGui::Button(tr("Update"), ImVec2(w, 0))) {
                 updater.update();
             }
         } else {
-            if (ImGui::Button("Check for Update", ImVec2(w, 0))) {
+            if (ImGui::Button(tr("Check for Update"), ImVec2(w, 0))) {
                 updater.check_for_update();
             }
         }

@@ -532,7 +532,7 @@ void AddHostPaths(const std::vector<std::string> &paths)
                   true);
         return;
     }
-    job->title = string_format("Copying %d file%s to %c:", job->files,
+    job->title = string_format(tr("Copying %d file%s to %c:"), job->files,
                                job->files == 1 ? "" : "s", g_vol);
     AskThenStart(std::move(job));
 }
@@ -629,7 +629,7 @@ void DrawVolumes()
         }
         if (ImGui::IsItemHovered()) {
             if (v.free_known) {
-                ImGui::SetTooltip("%s free of %s", FormatSize(v.free).c_str(),
+                ImGui::SetTooltip(tr("%s free of %s"), FormatSize(v.free).c_str(),
                                   FormatSize(v.size).c_str());
             } else {
                 ImGui::SetTooltip("%s", FormatSize(v.size).c_str());
@@ -678,42 +678,42 @@ void DrawToolbar()
 
     ImGui::BeginDisabled(busy);
     const XboxFileInfo *sel = Selected();
-    if (ImGui::Button(ICON_FA_ARROW_UP " Up") && g_path != "/") {
+    if (ImGui::Button(tr(ICON_FA_ARROW_UP " Up")) && g_path != "/") {
         Navigate(g_vol, XboxParent(g_path));
     }
     ImGui::SameLine();
-    if (ImGui::Button(ICON_FA_ROTATE " Refresh")) {
+    if (ImGui::Button(tr(ICON_FA_ROTATE " Refresh"))) {
         Reopen();
     }
     ImGui::SameLine();
-    if (ImGui::Button(ICON_FA_FOLDER_PLUS " New folder")) {
+    if (ImGui::Button(tr(ICON_FA_FOLDER_PLUS " New folder"))) {
         g_name_buf[0] = 0;
         g_focus_name = true;
         ImGui::OpenPopup("##xdrive-newfolder");
     }
     ImGui::SameLine();
-    if (ImGui::Button(ICON_FA_FILE_IMPORT " Add files")) {
+    if (ImGui::Button(tr(ICON_FA_FILE_IMPORT " Add files"))) {
         ShowOpenFilesDialog(nullptr, [](const std::vector<std::string> &p) {
             AddHostPaths(p);
         });
     }
     ImGui::SameLine();
-    if (ImGui::Button(ICON_FA_FOLDER_OPEN " Add folder")) {
+    if (ImGui::Button(tr(ICON_FA_FOLDER_OPEN " Add folder"))) {
         ShowOpenFolderDialog(nullptr, [](const char *p) { AddHostPaths({ p }); });
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(!sel);
-    if (ImGui::Button(ICON_FA_FILE_EXPORT " Copy to PC")) {
+    if (ImGui::Button(tr(ICON_FA_FILE_EXPORT " Copy to PC"))) {
         ShowOpenFolderDialog(nullptr, [](const char *p) { ExportSelected(p); });
     }
     ImGui::SameLine();
-    if (ImGui::Button(ICON_FA_PEN " Rename") && sel) {
+    if (ImGui::Button(tr(ICON_FA_PEN " Rename")) && sel) {
         snprintf(g_name_buf, sizeof(g_name_buf), "%s", sel->name.c_str());
         g_focus_name = true;
         ImGui::OpenPopup("##xdrive-rename");
     }
     ImGui::SameLine();
-    if (ImGui::Button(ICON_FA_TRASH " Delete")) {
+    if (ImGui::Button(tr(ICON_FA_TRASH " Delete"))) {
         ImGui::OpenPopup("##xdrive-delete");
     }
     ImGui::EndDisabled();
@@ -755,9 +755,9 @@ void DrawList(float height)
         return;
     }
     ImGui::TableSetupScrollFreeze(0, 1);
-    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-    ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 110 * s);
-    ImGui::TableSetupColumn("Modified", ImGuiTableColumnFlags_WidthFixed, 160 * s);
+    ImGui::TableSetupColumn(tr("Name"), ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    ImGui::TableSetupColumn(tr("Size"), ImGuiTableColumnFlags_WidthFixed, 110 * s);
+    ImGui::TableSetupColumn(tr("Modified"), ImGuiTableColumnFlags_WidthFixed, 160 * s);
     ImGui::TableHeadersRow();
     if (!g_list_err.empty()) {
         ImGui::TableNextRow();
@@ -766,7 +766,7 @@ void DrawList(float height)
     } else if (g_list.empty()) {
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
-        ImGui::TextDisabled("This folder is empty");
+        ImGui::TextDisabled(tr("This folder is empty"));
     }
     std::string open_dir;
     for (int i = 0; i < (int)g_list.size(); i++) {
@@ -821,7 +821,7 @@ void DrawFooter()
             j.i < j.steps.size() ? j.steps[j.i].xpath : std::string();
         ImGui::ProgressBar(frac, ImVec2(-120 * s, 0), j.title.c_str());
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(-1, 0))) {
+        if (ImGui::Button(tr("Cancel"), ImVec2(-1, 0))) {
             j.cancel = true;
         }
         ImGui::TextDisabled("%s", cur.c_str());
@@ -835,9 +835,9 @@ void DrawFooter()
             ImGui::TextDisabled("%s", g_status.c_str());
         }
     } else if (XboxIsRunning()) {
-        ImGui::TextDisabled("Copying to the Xbox pauses it and restarts it when done.");
+        ImGui::TextDisabled(tr("Copying to the Xbox pauses it and restarts it when done."));
     } else {
-        ImGui::TextDisabled("Double-click a folder to open it.");
+        ImGui::TextDisabled(tr("Double-click a folder to open it."));
     }
 }
 
@@ -858,7 +858,7 @@ bool NamePopup(const char *id, const char *title, const char *button,
         if (!valid && g_name_buf[0]) {
             ImGui::TextColored(ImVec4(1, 0.5f, 0.4f, 1), "%s", why.c_str());
         }
-        ImGui::TextDisabled("The Xbox pauses and restarts to make the change.");
+        ImGui::TextDisabled(tr("The Xbox pauses and restarts to make the change."));
         ImGui::BeginDisabled(!valid);
         if (ImGui::Button(button) || (enter && valid)) {
             *out = g_name_buf;
@@ -867,7 +867,7 @@ bool NamePopup(const char *id, const char *title, const char *button,
         }
         ImGui::EndDisabled();
         ImGui::SameLine();
-        if (ImGui::Button("Cancel") || CancelPressed()) {
+        if (ImGui::Button(tr("Cancel")) || CancelPressed()) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -899,16 +899,16 @@ void DrawPopups()
     if (ImGui::BeginPopupModal("##xdrive-delete", nullptr,
                                ImGuiWindowFlags_AlwaysAutoResize)) {
         const XboxFileInfo *fi = Selected();
-        ImGui::Text("Delete \"%s\"%s from %c:?", fi ? fi->name.c_str() : "",
+        ImGui::Text(tr("Delete \"%s\"%s from %c:?"), fi ? fi->name.c_str() : "",
                     fi && fi->dir ? " and everything in it" : "", g_vol);
-        ImGui::TextDisabled("This can't be undone. The Xbox pauses and "
-                            "restarts to make the change.");
-        if (ImGui::Button(ICON_FA_TRASH " Delete")) {
+        ImGui::TextDisabled(tr("This can't be undone. The Xbox pauses and "
+                            "restarts to make the change."));
+        if (ImGui::Button(tr(ICON_FA_TRASH " Delete"))) {
             ImGui::CloseCurrentPopup();
             DeleteSelected();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel") || CancelPressed()) {
+        if (ImGui::Button(tr("Cancel")) || CancelPressed()) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -923,17 +923,17 @@ void DrawPopups()
             ImGui::TextDisabled("%s", FormatSize(g_pending_write->total).c_str());
         }
         ImGui::Spacing();
-        ImGui::TextWrapped("The Xbox pauses while the files are written and "
+        ImGui::TextWrapped(tr("The Xbox pauses while the files are written and "
                            "restarts when they're done. Progress in a running "
-                           "game that hasn't been saved will be lost.");
-        if (ImGui::Button("Copy to the Xbox")) {
+                           "game that hasn't been saved will be lost."));
+        if (ImGui::Button(tr("Copy to the Xbox"))) {
             ImGui::CloseCurrentPopup();
             if (g_pending_write) {
                 StartJob(std::move(g_pending_write));
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel") || CancelPressed()) {
+        if (ImGui::Button(tr("Cancel")) || CancelPressed()) {
             g_pending_write.reset();
             ImGui::CloseCurrentPopup();
         }
@@ -1425,9 +1425,9 @@ void XboxExplorerDraw(void)
     ImGui::PushID("xbox-drive");
     if (!EnsureOpen()) {
         ImGui::Dummy(ImVec2(0, 20 * s));
-        ImGui::TextUnformatted(ICON_FA_HARD_DRIVE "  Xbox hard drive");
+        ImGui::TextUnformatted(tr(ICON_FA_HARD_DRIVE "  Xbox hard drive"));
         ImGui::TextDisabled("%s", g_open_err.empty() ? "Opening..." : g_open_err.c_str());
-        if (ImGui::Button("Try again")) {
+        if (ImGui::Button(tr("Try again"))) {
             g_open_tried = 0;
         }
         ImGui::PopID();

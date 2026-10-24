@@ -64,16 +64,16 @@ void DrawPerformanceOverlay(void)
         ImVec4 col = fps >= 55   ? ImVec4(0.45f, 0.9f, 0.3f, 1)
                      : fps >= 28 ? ImVec4(0.95f, 0.8f, 0.25f, 1)
                                  : ImVec4(1.0f, 0.45f, 0.4f, 1);
-        ImGui::TextColored(col, "%u FPS", fps);
+        ImGui::TextColored(col, tr("%u FPS"), fps);
         ImGui::SameLine();
-        ImGui::TextDisabled("%.1f ms (worst %d)", avg, worst);
+        ImGui::TextDisabled(tr("%.1f ms (worst %d)"), avg, worst);
         const char *renderer =
             g_config.display.renderer == CONFIG_DISPLAY_RENDERER_VULKAN ? "Vulkan"
             : g_config.display.renderer == CONFIG_DISPLAY_RENDERER_OPENGL
                 ? "OpenGL"
                 : "Null";
         if (int user = DynamicResUserScale()) {
-            ImGui::TextDisabled("%s  %ux (dynamic, set %dx)  %s", renderer,
+            ImGui::TextDisabled(tr("%s  %ux (dynamic, set %dx)  %s"), renderer,
                                 nv2a_get_surface_scale_factor(), user,
                                 FilterName(g_config.display.filtering));
         } else {
@@ -82,7 +82,7 @@ void DrawPerformanceOverlay(void)
                                 FilterName(g_config.display.filtering));
         }
         if (!runstate_is_running()) {
-            ImGui::TextColored(ImVec4(0.95f, 0.8f, 0.25f, 1), "Paused");
+            ImGui::TextColored(ImVec4(0.95f, 0.8f, 0.25f, 1), tr("Paused"));
         }
     }
     ImGui::End();

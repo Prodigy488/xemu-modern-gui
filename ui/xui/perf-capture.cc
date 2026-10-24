@@ -111,8 +111,8 @@ void Start()
              nv2a_get_surface_scale_factor(), FilterName(g_config.display.filtering),
              g_config.display.fsr_sharpness);
     g.cap.settings = b;
-    xemu_queue_notification("Recording performance. Shift+F12 marks a glitch, "
-                            "Shift+F9 stops.");
+    xemu_queue_notification(tr("Recording performance. Shift+F12 marks a glitch, "
+                            "Shift+F9 stops."));
 }
 
 // Write the report files, plus screenshots taken while recording
@@ -229,16 +229,16 @@ void DrawReport()
 {
     const PerfReport &r = g.report;
     ImGui::Text("%s", g.cap.game.empty() ? "No game detected" : g.cap.game.c_str());
-    ImGui::TextDisabled("%s  -  %s  -  %.0f s, %d frames", g.cap.renderer.c_str(),
+    ImGui::TextDisabled(tr("%s  -  %s  -  %.0f s, %d frames"), g.cap.renderer.c_str(),
                         g.cap.settings.c_str(), g.cap.duration_ms / 1000, r.frames);
-    ImGui::Text("Frame rate %.0f average, %.0f lowest.  Render time %d ms typical, "
-                "%d ms worst.  %d slow frames.",
+    ImGui::Text(tr("Frame rate %.0f average, %.0f lowest.  Render time %d ms typical, "
+                "%d ms worst.  %d slow frames."),
                 r.avg_fps, r.low1_fps, r.median_work, r.worst_work, r.slow_frames);
     DrawGraph(ImGui::GetContentRegionAvail().x, 110 * g_viewport_mgr.m_scale);
-    ImGui::TextDisabled("Bars: each frame's render time (red = slow). Yellow lines: "
-                        "glitch marks. Hover for that frame's counters.");
+    ImGui::TextDisabled(tr("Bars: each frame's render time (red = slow). Yellow lines: "
+                        "glitch marks. Hover for that frame's counters."));
     ImGui::Spacing();
-    ImGui::SeparatorText("What stands out");
+    ImGui::SeparatorText(tr("What stands out"));
     for (auto &f : r.findings) {
         ImVec4 col = f.severity == 2   ? ImVec4(1.0f, 0.55f, 0.45f, 1)
                      : f.severity == 1 ? ImVec4(0.95f, 0.8f, 0.3f, 1)
@@ -252,7 +252,7 @@ void DrawReport()
         ImGui::TextWrapped("%s", f.detail.c_str());
         if (!f.how.empty()) {
             ImGui::PushID(&f);
-            if (ImGui::TreeNode("How this was worked out")) {
+            if (ImGui::TreeNode(tr("How this was worked out"))) {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
                 ImGui::TextWrapped("%s", f.how.c_str());
                 ImGui::PopStyleColor();
@@ -265,9 +265,9 @@ void DrawReport()
     if (!r.slow_diffs.empty() &&
         ImGui::BeginTable("##diffs", 3,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
-        ImGui::TableSetupColumn("Per frame");
-        ImGui::TableSetupColumn("Slow");
-        ImGui::TableSetupColumn("Others");
+        ImGui::TableSetupColumn(tr("Per frame"));
+        ImGui::TableSetupColumn(tr("Slow"));
+        ImGui::TableSetupColumn(tr("Others"));
         ImGui::TableHeadersRow();
         for (auto &d : r.slow_diffs) {
             ImGui::TableNextRow();
@@ -289,7 +289,7 @@ void DrawReport()
                               (sec % 60 < 10 ? "0" : "") + std::to_string(sec % 60))
                                  .c_str());
         for (auto &d : m.unusual) {
-            ImGui::BulletText("%s: %.1f per frame here, %.1f usually", d.name.c_str(),
+            ImGui::BulletText(tr("%s: %.1f per frame here, %.1f usually"), d.name.c_str(),
                               d.slow_avg, d.normal_avg);
             ImGui::SetItemTooltip("%s", PerfCounterMeaning(d.name));
         }
@@ -298,7 +298,7 @@ void DrawReport()
         }
         if (!m.how.empty()) {
             ImGui::PushID((int)i);
-            if (ImGui::TreeNode("How this was worked out")) {
+            if (ImGui::TreeNode(tr("How this was worked out"))) {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
                 ImGui::TextWrapped("%s", m.how.c_str());
                 ImGui::PopStyleColor();
@@ -308,18 +308,18 @@ void DrawReport()
         }
     }
     if (!r.marks.empty()) {
-        ImGui::SeparatorText("Narrow it down");
-        ImGui::TextWrapped("Change one thing, play the same part and see if the "
-                           "glitch stays:");
-        if (ImGui::Button("Resolution 1x")) {
+        ImGui::SeparatorText(tr("Narrow it down"));
+        ImGui::TextWrapped(tr("Change one thing, play the same part and see if the "
+                           "glitch stays:"));
+        if (ImGui::Button(tr("Resolution 1x"))) {
             nv2a_set_surface_scale_factor(1);
         }
         ImGui::SameLine();
-        if (ImGui::Button("Upscaling: Linear")) {
+        if (ImGui::Button(tr("Upscaling: Linear"))) {
             g_config.display.filtering = CONFIG_DISPLAY_FILTERING_LINEAR;
         }
-        ImGui::TextDisabled("Also try the other renderer (Settings, needs a "
-                            "restart), the game's patches off, and official xemu.");
+        ImGui::TextDisabled(tr("Also try the other renderer (Settings, needs a "
+                            "restart), the game's patches off, and official xemu."));
     }
 }
 
@@ -507,12 +507,12 @@ void PerfCaptureToggleRecording(void)
 void PerfCaptureMarkGlitch(void)
 {
     if (!g.recording) {
-        xemu_queue_notification("Start a performance recording first (Shift+F9)");
+        xemu_queue_notification(tr("Start a performance recording first (Shift+F9)"));
         return;
     }
     g.cap.marks_ms.push_back(NowMs());
     ActionScreenshot();
-    xemu_queue_notification("Glitch marked");
+    xemu_queue_notification(tr("Glitch marked"));
 }
 
 namespace
@@ -587,40 +587,40 @@ void PerfCaptureDraw(void)
         ImGui::End();
         return;
     }
-    ImGui::TextWrapped("Record a slow or glitchy part of a game to see what the "
+    ImGui::TextWrapped(tr("Record a slow or glitchy part of a game to see what the "
                        "emulated graphics chip was doing. Start recording, play "
-                       "the part, and press Shift+F12 the moment a glitch shows.");
+                       "the part, and press Shift+F12 the moment a glitch shows."));
     ImGui::Spacing();
     if (g.recording) {
-        if (ImGui::Button(ICON_FA_STOP " Stop (Shift+F9)")) {
+        if (ImGui::Button(tr(ICON_FA_STOP " Stop (Shift+F9)"))) {
             Stop();
         }
         ImGui::SameLine();
-        if (ImGui::Button(ICON_FA_FLAG " Mark glitch (Shift+F12)")) {
+        if (ImGui::Button(tr(ICON_FA_FLAG " Mark glitch (Shift+F12)"))) {
             PerfCaptureMarkGlitch();
         }
         ImGui::SameLine();
-        ImGui::TextDisabled("%d frames, %d marks", (int)g.cap.frames.size(),
+        ImGui::TextDisabled(tr("%d frames, %d marks"), (int)g.cap.frames.size(),
                             (int)g.cap.marks_ms.size());
     } else {
         ImGui::SetNextItemWidth(160 * s);
-        ImGui::Combo("##len", &g.length, "15 seconds\0" "30 seconds\0" "60 seconds\0"
-                                         "Until stopped\0");
+        ImGui::Combo("##len", &g.length, tr_items("15 seconds\0" "30 seconds\0" "60 seconds\0"
+                                         "Until stopped\0"));
         ImGui::SameLine();
-        if (ImGui::Button(ICON_FA_CIRCLE " Record (Shift+F9)")) {
+        if (ImGui::Button(tr(ICON_FA_CIRCLE " Record (Shift+F9)"))) {
             Start();
         }
         if (!runstate_is_running()) {
             ImGui::TextColored(ImVec4(0.95f, 0.8f, 0.25f, 1),
-                               "The Xbox is paused or not started: start a game "
-                               "first.");
+                               tr("The Xbox is paused or not started: start a game "
+                               "first."));
         }
     }
     if (g.have_report && !g.recording) {
         ImGui::Separator();
         if (!g.saved_dir.empty()) {
-            ImGui::TextDisabled("Saved to %s", g.saved_dir.c_str());
-            if (ImGui::Button(ICON_FA_FOLDER_OPEN " Open folder")) {
+            ImGui::TextDisabled(tr("Saved to %s"), g.saved_dir.c_str());
+            if (ImGui::Button(tr(ICON_FA_FOLDER_OPEN " Open folder"))) {
                 if (!RevealFileInFolder((fs::u8path(g.saved_dir) / "report.txt").u8string())) {
                     SDL_OpenURL(("file:///" + g.saved_dir).c_str());
                 }
@@ -629,22 +629,22 @@ void PerfCaptureDraw(void)
         } else if (!g.save_err.empty()) {
             ImGui::TextColored(ImVec4(1, 0.5f, 0.4f, 1), "%s", g.save_err.c_str());
         }
-        if (ImGui::Button(ICON_FA_COPY " Copy report")) {
+        if (ImGui::Button(tr(ICON_FA_COPY " Copy report"))) {
             ImGui::SetClipboardText(PerfReportText(g.cap, g.report).c_str());
-            xemu_queue_notification("Report copied");
+            xemu_queue_notification(tr("Report copied"));
         }
-        ImGui::SetItemTooltip("Paste it into an issue or a message");
+        ImGui::SetItemTooltip(tr("Paste it into an issue or a message"));
         ImGui::SameLine();
-        if (ImGui::Button(ICON_FA_IMAGE " Save picture")) {
+        if (ImGui::Button(tr(ICON_FA_IMAGE " Save picture"))) {
             g.export_pending = true; // drawn after this frame's UI
         }
-        ImGui::SetItemTooltip("summary.png: the graph and main findings, for "
-                              "posting");
+        ImGui::SetItemTooltip(tr("summary.png: the graph and main findings, for "
+                              "posting"));
         if (!g.export_msg.empty()) {
             ImGui::TextDisabled("%s", g.export_msg.c_str());
         }
         ImGui::SameLine();
-        ImGui::TextDisabled("trace.json opens in ui.perfetto.dev");
+        ImGui::TextDisabled(tr("trace.json opens in ui.perfetto.dev"));
         ImGui::Spacing();
         ImGui::BeginChild("##report", ImVec2(0, 0));
         DrawReport();

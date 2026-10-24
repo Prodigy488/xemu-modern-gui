@@ -60,13 +60,13 @@ void FirstBootWindow::Draw()
     // Guided setup on the dashboard, or xemu's own settings
     float bw = 120*g_viewport_mgr.m_scale, gap = 10*g_viewport_mgr.m_scale;
     ImGui::SetCursorPosX((ImGui::GetWindowWidth()-2*bw-gap)/2);
-    if (ImGui::Button("Guided setup", ImVec2(bw, 0))) {
+    if (ImGui::Button(tr("Guided setup"), ImVec2(bw, 0))) {
         GameLibraryOpenSetup();
         g_config.general.show_welcome = false;
         is_open = false;
     }
     ImGui::SameLine(0, gap);
-    if (ImGui::Button("Settings", ImVec2(bw, 0))) {
+    if (ImGui::Button(tr("Settings"), ImVec2(bw, 0))) {
         g_main_menu.ShowSystem();
         g_config.general.show_welcome = false;
     }

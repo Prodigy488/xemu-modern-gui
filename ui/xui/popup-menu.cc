@@ -312,25 +312,25 @@ public:
         if (m_focus && !m_pop_focus) {
             ImGui::SetKeyboardFocusHere();
         }
-        PopupMenuSlider("Volume", ICON_FA_VOLUME_HIGH, &g_config.audio.volume_limit);
+        PopupMenuSlider(tr("Volume"), ICON_FA_VOLUME_HIGH, &g_config.audio.volume_limit);
         bool fs = xemu_is_fullscreen();
-        if (PopupMenuToggle("Fullscreen", ICON_FA_WINDOW_MAXIMIZE, &fs)) {
+        if (PopupMenuToggle(tr("Fullscreen"), ICON_FA_WINDOW_MAXIMIZE, &fs)) {
             xemu_toggle_fullscreen();
         }
-        if (PopupMenuSubmenuButton("Display Mode", ICON_FA_EXPAND)) {
+        if (PopupMenuSubmenuButton(tr("Display Mode"), ICON_FA_EXPAND)) {
             nav.PushFocus();
             nav.PushMenu(display_mode);
         }
-        if (PopupMenuSubmenuButton("Aspect Ratio", ICON_FA_EXPAND)) {
+        if (PopupMenuSubmenuButton(tr("Aspect Ratio"), ICON_FA_EXPAND)) {
             nav.PushFocus();
             nav.PushMenu(aspect_ratio);
         }
-        if (PopupMenuButton("Snapshots...", ICON_FA_CLOCK_ROTATE_LEFT)) {
+        if (PopupMenuButton(tr("Snapshots..."), ICON_FA_CLOCK_ROTATE_LEFT)) {
             nav.ClearMenuStack();
             g_scene_mgr.PushScene(g_main_menu);
             g_main_menu.ShowSnapshots();
         }
-        if (PopupMenuButton("All settings...", ICON_FA_SLIDERS)) {
+        if (PopupMenuButton(tr("All settings..."), ICON_FA_SLIDERS)) {
             nav.ClearMenuStack();
             g_scene_mgr.PushScene(g_main_menu);
         }
@@ -369,7 +369,7 @@ public:
         }
 
         if (sorted_file_names.size() == 0) {
-            if (PopupMenuButton("No games found", ICON_FA_SLIDERS)) {
+            if (PopupMenuButton(tr("No games found"), ICON_FA_SLIDERS)) {
                 nav.ClearMenuStack();
                 g_scene_mgr.PushScene(g_main_menu);
             }
@@ -422,46 +422,46 @@ public:
 
         bool running = runstate_is_running();
         if (running) {
-            if (PopupMenuButton("Pause", ICON_FA_CIRCLE_PAUSE)) {
+            if (PopupMenuButton(tr("Pause"), ICON_FA_CIRCLE_PAUSE)) {
                 ActionTogglePause();
                 refocus_first_item = true;
             }
         } else {
-            if (PopupMenuButton("Resume", ICON_FA_CIRCLE_PLAY)) {
+            if (PopupMenuButton(tr("Resume"), ICON_FA_CIRCLE_PLAY)) {
                 ActionTogglePause();
                 refocus_first_item = true;
             }
         }
-        if (PopupMenuButton("Screenshot", ICON_FA_CAMERA)) {
+        if (PopupMenuButton(tr("Screenshot"), ICON_FA_CAMERA)) {
             ActionScreenshot();
             pop = true;
         }
-        if (PopupMenuButton("Save Snapshot", ICON_FA_DOWNLOAD)) {
+        if (PopupMenuButton(tr("Save Snapshot"), ICON_FA_DOWNLOAD)) {
             xemu_snapshots_save(NULL, NULL);
-            xemu_queue_notification("Created new snapshot");
+            xemu_queue_notification(tr("Created new snapshot"));
             pop = true;
         }
-        if (PopupMenuButton("Game Library", ICON_FA_GAMEPAD)) {
+        if (PopupMenuButton(tr("Game Library"), ICON_FA_GAMEPAD)) {
             game_library_window.Open();
             pop = true;
         }
-        if (PopupMenuButton("Eject Disc", ICON_FA_EJECT)) {
+        if (PopupMenuButton(tr("Eject Disc"), ICON_FA_EJECT)) {
             ActionEjectDisc();
             pop = true;
         }
-        if (PopupMenuButton("Load Disc...", ICON_FA_COMPACT_DISC)) {
+        if (PopupMenuButton(tr("Load Disc..."), ICON_FA_COMPACT_DISC)) {
             ActionLoadDisc();
             pop = true;
         }
-        if (PopupMenuSubmenuButton("Settings", ICON_FA_GEARS)) {
+        if (PopupMenuSubmenuButton(tr("Settings"), ICON_FA_GEARS)) {
             nav.PushFocus();
             nav.PushMenu(settings);
         }
-        if (PopupMenuButton("Restart", ICON_FA_ARROWS_ROTATE)) {
+        if (PopupMenuButton(tr("Restart"), ICON_FA_ARROWS_ROTATE)) {
             ActionReset();
             pop = true;
         }
-        if (PopupMenuButton("Exit", ICON_FA_POWER_OFF)) {
+        if (PopupMenuButton(tr("Exit"), ICON_FA_POWER_OFF)) {
             ActionShutdown();
             pop = true;
         }

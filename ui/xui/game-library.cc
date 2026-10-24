@@ -429,35 +429,35 @@ bool ReadWholeFile(const fs::path &p, std::vector<uint8_t> &out)
 std::string FormatPlayTime(double seconds)
 {
     if (seconds < 60) {
-        return seconds > 0 ? "< 1m" : "Never played";
+        return seconds > 0 ? "< 1m" : tr("Never played");
     }
     int mins = (int)(seconds / 60);
     if (mins < 60) {
         return string_format("%dm", mins);
     }
-    return string_format("%dh %dm", mins / 60, mins % 60);
+    return string_format(tr("%dh %dm"), mins / 60, mins % 60);
 }
 
 std::string FormatLastPlayed(int64_t t)
 {
     if (t <= 0) {
-        return "Never";
+        return tr("Never");
     }
     int64_t days = ((int64_t)time(NULL) - t) / 86400;
     if (days <= 0) {
-        return "Today";
+        return tr("Today");
     }
     if (days == 1) {
-        return "Yesterday";
+        return tr("Yesterday");
     }
     if (days < 30) {
-        return string_format("%d days ago", (int)days);
+        return string_format(tr("%d days ago"), (int)days);
     }
     time_t tt = (time_t)t;
     struct tm *tm = localtime(&tt);
     char buf[32];
     if (!tm || !strftime(buf, sizeof(buf), "%Y-%m-%d", tm)) {
-        return "Long ago";
+        return tr("Long ago");
     }
     return buf;
 }
@@ -1337,7 +1337,7 @@ void SaveResumePoint()
     Error *err = NULL;
     xemu_snapshots_save(name.c_str(), &err);
     if (err) {
-        std::string msg = std::string("Could not save a resume point: ") +
+        std::string msg = std::string(tr("Could not save a resume point: ")) +
                           error_get_pretty(err);
         xemu_queue_error_message(msg.c_str());
         error_free(err);
@@ -1617,7 +1617,7 @@ void ApplyOverridesFor(const std::string &path)
     if (ov.dynamic_res >= 0) {
         g_config.display.quality.dynamic_resolution = ov.dynamic_res == 1;
     }
-    xemu_queue_notification("Per-game settings applied");
+    xemu_queue_notification(tr("Per-game settings applied"));
 }
 
 // ---------------------------------------------------------------------------
@@ -2119,7 +2119,7 @@ bool EnsureDownloadsReady()
     Error *err = NULL;
     if (!ensure_libcurl_initialized(&err)) {
         xemu_queue_error_message(err ? error_get_pretty(err)
-                                     : "Could not start downloads");
+                                     : tr("Could not start downloads"));
         if (err) {
             error_free(err);
         }
@@ -2133,7 +2133,7 @@ bool EnsureDownloadsReady()
 void StartPatchDownload(uint32_t only_title, bool check_new)
 {
     if (g_patchdl_running) {
-        xemu_queue_notification("Patch download already in progress");
+        xemu_queue_notification(tr("Patch download already in progress"));
         return;
     }
     if (g_patchdl_thread.joinable()) {
@@ -2159,8 +2159,8 @@ void StartPatchDownload(uint32_t only_title, bool check_new)
     }
     if (jobs.empty() && !check_new) {
         xemu_queue_notification(only_title
-                                    ? "No online patches for this game"
-                                    : "No new online patches for your games");
+                                    ? tr("No online patches for this game")
+                                    : tr("No new online patches for your games"));
         return;
     }
     if (!EnsureDownloadsReady()) {
@@ -2282,25 +2282,25 @@ void MergePatchResults()
     }
     std::string msg;
     if (index_failed) {
-        msg = "Could not check GitHub for new patches (try again later). ";
+        msg = tr("Could not check GitHub for new patches (try again later). ");
     } else if (!new_index.empty() || g_patchdl_total == 0) {
-        msg = new_count ? string_format("Found %d new patch%s online. ", new_count,
+        msg = new_count ? string_format(tr("Found %d new patch%s online. "), new_count,
                                         new_count == 1 ? "" : "es")
-                        : std::string("No new patches online. ");
+                        : std::string(tr("No new patches online. "));
     }
     if (added) {
-        msg += string_format("Downloaded %d patch%s for %d game%s, switched off "
-                             "until you enable them in Patches.",
+        msg += string_format(tr("Downloaded %d patch%s for %d game%s, switched off "
+                             "until you enable them in Patches."),
                              added, added == 1 ? "" : "es", (int)games.size(),
                              games.size() == 1 ? "" : "s");
     } else if (g_patchdl_total) {
-        msg += "No new patches that fit your copies.";
+        msg += tr("No new patches that fit your copies.");
     }
     if (skipped) {
-        msg += string_format(" %d made for other versions skipped.", skipped);
+        msg += string_format(tr(" %d made for other versions skipped."), skipped);
     }
     if (failed) {
-        msg += string_format(" %d could not be downloaded.", failed);
+        msg += string_format(tr(" %d could not be downloaded."), failed);
     }
     xemu_queue_notification(msg.c_str());
     SaveLibrary();
@@ -2381,7 +2381,7 @@ void AddPatchFile(uint32_t title_id)
         fs::path src = fs::u8path(path);
         if (!IsPatchFile(src)) {
             xemu_queue_error_message(
-                "Unsupported patch file. Use .xbe, .ips, .bps or .jmp files.");
+                tr("Unsupported patch file. Use .xbe, .ips, .bps or .jmp files."));
             return;
         }
         std::error_code ec;
@@ -2394,7 +2394,7 @@ void AddPatchFile(uint32_t title_id)
                                    src.extension().u8string());
         }
         if (!fs::copy_file(src, dst, ec)) {
-            xemu_queue_error_message("Could not copy the patch file.");
+            xemu_queue_error_message(tr("Could not copy the patch file."));
             return;
         }
         SyncPatches(title_id);
@@ -2408,15 +2408,15 @@ const char *PatchTypeLabel(const std::string &file)
 {
     std::string ext = Lower(fs::u8path(file).extension().u8string());
     if (ext == ".xbe") {
-        return "Custom XBE";
+        return tr("Custom XBE");
     }
     if (ext == ".ips") {
-        return "IPS patch";
+        return tr("IPS patch");
     }
     if (ext == ".jmp") {
-        return "Magic Patch";
+        return tr("Magic Patch");
     }
-    return "BPS patch";
+    return tr("BPS patch");
 }
 
 ImVec4 JmpFitColor(JmpFit fit)
@@ -2436,7 +2436,7 @@ void DrawJmpDetails(PatchItem &pi, const JmpInfo &info)
 {
     const float s = g_viewport_mgr.m_scale;
     if (!info.ok) {
-        ImGui::TextColored(JmpFitColor(JmpFit::OtherGame), "Can't read: %s",
+        ImGui::TextColored(JmpFitColor(JmpFit::OtherGame), tr("Can't read: %s"),
                            info.error.c_str());
         return;
     }
@@ -2444,17 +2444,17 @@ void DrawJmpDetails(PatchItem &pi, const JmpInfo &info)
     if (g_jmp_have_xbe) {
         ImGui::TextColored(JmpFitColor(info.fit), "%s", JmpFitLabel(info.fit));
         if (info.fit == JmpFit::Unverified) {
-            ImGui::SetItemTooltip("The patch has no checksum, so xemu can't "
+            ImGui::SetItemTooltip(tr("The patch has no checksum, so xemu can't "
                                   "confirm it was made for your version of "
                                   "the game. Try it; if the game misbehaves, "
-                                  "switch it off.");
+                                  "switch it off."));
         }
         if (!jmp.author.empty()) {
             ImGui::SameLine();
-            ImGui::TextDisabled("by %s", jmp.author.c_str());
+            ImGui::TextDisabled(tr("by %s"), jmp.author.c_str());
         }
     } else if (!jmp.author.empty()) {
-        ImGui::TextDisabled("by %s", jmp.author.c_str());
+        ImGui::TextDisabled(tr("by %s"), jmp.author.c_str());
     }
     if (!jmp.notes.empty()) {
         ImGui::SameLine();
@@ -2477,7 +2477,7 @@ void DrawJmpDetails(PatchItem &pi, const JmpInfo &info)
     if (jmp.options.size() <= 1) {
         return;
     }
-    std::string label = string_format("Options (%d of %d on)###opts", n_on, n_usable);
+    std::string label = string_format(tr("Options (%d of %d on)###opts"), n_on, n_usable);
     if (!ImGui::TreeNode(label.c_str())) {
         return;
     }
@@ -2499,8 +2499,8 @@ void DrawJmpDetails(PatchItem &pi, const JmpInfo &info)
         }
         ImGui::EndDisabled();
         if (o.other_xbe) {
-            ImGui::SetItemTooltip("Changes another program on the disc; only "
-                                  "default.xbe can be patched");
+            ImGui::SetItemTooltip(tr("Changes another program on the disc; only "
+                                  "default.xbe can be patched"));
         }
         ImGui::PopID();
     }
@@ -2510,12 +2510,12 @@ void DrawJmpDetails(PatchItem &pi, const JmpInfo &info)
 void DrawPatchesPopup()
 {
     if (g_open_patches_popup) {
-        ImGui::OpenPopup("Game Patches");
+        ImGui::OpenPopup(trid("Game Patches"));
         g_open_patches_popup = false;
     }
     const float s = g_viewport_mgr.m_scale;
     ImGui::SetNextWindowSize(ImVec2(620 * s, 0), ImGuiCond_Appearing);
-    if (!ImGui::BeginPopupModal("Game Patches", NULL,
+    if (!ImGui::BeginPopupModal(trid("Game Patches"), NULL,
                                 ImGuiWindowFlags_AlwaysAutoResize)) {
         return;
     }
@@ -2527,13 +2527,13 @@ void DrawPatchesPopup()
     }
     uint32_t id = e->title_id;
     ImGui::TextUnformatted(e->DisplayName().c_str());
-    ImGui::TextDisabled("%s  -  patch folder: patches\\%s",
+    ImGui::TextDisabled(tr("%s  -  patch folder: patches\\%s"),
                         FormatTitleId(id).c_str(), TitleIdHex(id).c_str());
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 600 * s);
-    ImGui::TextDisabled("Enabled patches are applied, top to bottom, when you "
+    ImGui::TextDisabled(tr("Enabled patches are applied, top to bottom, when you "
                         "play this game from the library. Your disc image is "
                         "never modified. A custom .xbe replaces the game's "
-                        "default.xbe; .ips, .bps and .jmp patches modify it.");
+                        "default.xbe; .ips, .bps and .jmp patches modify it."));
     ImGui::PopTextWrapPos();
     ImGui::Separator();
 
@@ -2541,19 +2541,19 @@ void DrawPatchesPopup()
     if (items.empty()) {
         ImGui::Dummy(ImVec2(0, 4 * s));
         ImGui::TextUnformatted(OnlinePatchCount(id)
-                                   ? "No patches yet. Download some below, or "
-                                     "add a .xbe, .ips, .bps or .jmp file."
-                                   : "No patches yet. Add a .xbe, .ips, .bps "
-                                     "or .jmp file.");
+                                   ? tr("No patches yet. Download some below, or "
+                                     "add a .xbe, .ips, .bps or .jmp file.")
+                                   : tr("No patches yet. Add a .xbe, .ips, .bps "
+                                     "or .jmp file."));
         ImGui::Dummy(ImVec2(0, 4 * s));
     } else if (ImGui::BeginTable("##patches", 4,
                                  ImGuiTableFlags_RowBg |
                                      ImGuiTableFlags_BordersInnerH |
                                      ImGuiTableFlags_SizingStretchProp,
                                  ImVec2(600 * s, 0))) {
-        ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed);
-        ImGui::TableSetupColumn("Patch", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableSetupColumn(tr("On"), ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableSetupColumn(tr("Patch"), ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn(tr("Type"), ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableHeadersRow();
         int move_from = -1, move_to = -1;
@@ -2592,13 +2592,13 @@ void DrawPatchesPopup()
             ImGui::EndDisabled();
             ImGui::SameLine();
             if (g_patch_confirm_remove == pi.file) {
-                if (ImGui::SmallButton("Delete file?")) {
+                if (ImGui::SmallButton(tr("Delete file?"))) {
                     remove = pi.file;
                 }
             } else if (ImGui::SmallButton(ICON_FA_XMARK)) {
                 g_patch_confirm_remove = pi.file;
             }
-            ImGui::SetItemTooltip("Remove this patch from the patch folder");
+            ImGui::SetItemTooltip(tr("Remove this patch from the patch folder"));
             ImGui::PopID();
         }
         ImGui::EndTable();
@@ -2618,29 +2618,29 @@ void DrawPatchesPopup()
     }
 
     ImGui::Dummy(ImVec2(0, 4 * s));
-    if (ImGui::Button(ICON_FA_FOLDER_OPEN "  Add patch...")) {
+    if (ImGui::Button(tr(ICON_FA_FOLDER_OPEN "  Add patch..."))) {
         AddPatchFile(id);
     }
     ImGui::SameLine();
-    if (ImGui::Button("Open patch folder")) {
+    if (ImGui::Button(tr("Open patch folder"))) {
         std::error_code ec;
         fs::create_directories(PatchDir(id), ec);
         SDL_OpenURL(("file:///" + PatchDir(id).generic_u8string()).c_str());
     }
     ImGui::SameLine();
-    if (ImGui::Button("Refresh")) {
+    if (ImGui::Button(tr("Refresh"))) {
         SyncPatches(id);
         RefreshPatchInfo();
         g_patch_check_msg.clear();
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(EnabledPatchCount(id) == 0);
-    if (ImGui::Button(ICON_FA_CHECK "  Check patches")) {
+    if (ImGui::Button(tr(ICON_FA_CHECK "  Check patches"))) {
         std::string load, error;
         g_patch_check_ok = PrepareLaunchImage(*e, load, error);
         g_patch_check_msg =
             g_patch_check_ok
-                ? string_format("Ready: %d patch%s will be applied on Play.",
+                ? string_format(tr("Ready: %d patch%s will be applied on Play."),
                                 EnabledPatchCount(id),
                                 EnabledPatchCount(id) == 1 ? "" : "es")
                 : error;
@@ -2650,27 +2650,27 @@ void DrawPatchesPopup()
     ImGui::BeginDisabled(g_patchdl_running || online == 0);
     std::string dl_label =
         g_patchdl_running
-            ? std::string(ICON_FA_DOWNLOAD "  Downloading...")
-            : online ? string_format(ICON_FA_DOWNLOAD "  Download patches (%d online)",
+            ? std::string(tr(ICON_FA_DOWNLOAD "  Downloading..."))
+            : online ? string_format(tr(ICON_FA_DOWNLOAD "  Download patches (%d online)"),
                                      online)
-                     : std::string(ICON_FA_DOWNLOAD "  No online patches for this game");
+                     : std::string(tr(ICON_FA_DOWNLOAD "  No online patches for this game"));
     if (ImGui::Button(dl_label.c_str())) {
         StartPatchDownload(id, false);
     }
     ImGui::EndDisabled();
     ImGui::SetItemTooltip(
-        "Downloads this game's patches from Jay's Magic Patches collection on "
+        tr("Downloads this game's patches from Jay's Magic Patches collection on "
         "GitHub (widescreen, 60 FPS, 480p/720p and more). Only patches that "
         "fit your copy of the game are kept, switched off until you enable "
-        "them.");
+        "them."));
     ImGui::SameLine();
     ImGui::BeginDisabled(g_patchdl_running);
-    if (ImGui::Button("Check for new patches")) {
+    if (ImGui::Button(tr("Check for new patches"))) {
         StartPatchDownload(0, true);
     }
     ImGui::EndDisabled();
-    ImGui::SetItemTooltip("Look for patches added to the collection since "
-                          "this version of xemu (list from %s)",
+    ImGui::SetItemTooltip(tr("Look for patches added to the collection since "
+                          "this version of xemu (list from %s)"),
                           kJmpIndexDate);
     if (!g_patch_check_msg.empty()) {
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 600 * s);
@@ -2680,7 +2680,7 @@ void DrawPatchesPopup()
         ImGui::PopTextWrapPos();
     }
     ImGui::Separator();
-    if (ImGui::Button("Done", ImVec2(120 * s, 0)) ||
+    if (ImGui::Button(tr("Done"), ImVec2(120 * s, 0)) ||
         ImGui::IsKeyPressed(ImGuiKey_Escape) ||
         ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight)) {
         SaveLibrary();
@@ -2703,27 +2703,27 @@ void DrawContextMenu(LibraryEntry &e)
     GameStats &st = g_stats[e.path];
     ImGui::TextDisabled("%s", e.DisplayName().c_str());
     ImGui::Separator();
-    if (ImGui::MenuItem(ICON_FA_PLAY "  Play")) {
+    if (ImGui::MenuItem(tr(ICON_FA_PLAY "  Play"))) {
         game_library_window.Launch(e.path);
     }
-    if (ImGui::MenuItem(st.favorite ? ICON_FA_STAR "  Remove from favorites"
-                                    : ICON_FA_STAR "  Add to favorites")) {
+    if (ImGui::MenuItem(st.favorite ? tr(ICON_FA_STAR "  Remove from favorites")
+                                    : tr(ICON_FA_STAR "  Add to favorites"))) {
         st.favorite = !st.favorite;
         g_dirty = true;
     }
-    if (ImGui::MenuItem(ICON_FA_GEAR "  Game settings...", NULL, false,
+    if (ImGui::MenuItem(tr(ICON_FA_GEAR "  Game settings..."), NULL, false,
                         e.valid)) {
         OpenSettingsFor(e);
     }
-    if (ImGui::MenuItem("Patches...", NULL, false, e.valid)) {
+    if (ImGui::MenuItem(tr("Patches..."), NULL, false, e.valid)) {
         OpenPatchesFor(e);
     }
-    if (ImGui::MenuItem("Clear shader cache...", NULL, false, e.valid)) {
+    if (ImGui::MenuItem(tr("Clear shader cache..."), NULL, false, e.valid)) {
         OpenSettingsFor(e); // the option lives in the game's settings
         g_settings_shader_confirm = true;
     }
     if (PreviewPlayer::Supported()) {
-        if (ImGui::MenuItem(ICON_FA_PLAY "  Add preview video...", NULL, false,
+        if (ImGui::MenuItem(tr(ICON_FA_PLAY "  Add preview video..."), NULL, false,
                             e.valid)) {
             ImportPreview(e);
         }
@@ -2733,31 +2733,31 @@ void DrawContextMenu(LibraryEntry &e)
             imported |= fs::exists(
                 PreviewDir() / (TitleIdHex(e.title_id) + kPreviewExtensions[i]), pec);
         }
-        if (imported && ImGui::MenuItem("Remove preview video")) {
+        if (imported && ImGui::MenuItem(tr("Remove preview video"))) {
             RequestPreviewStop();
             RemoveImportedPreview(e.title_id);
         }
     }
     ImGui::Separator();
-    if (ImGui::MenuItem("Copy title ID", NULL, false, e.valid)) {
+    if (ImGui::MenuItem(tr("Copy title ID"), NULL, false, e.valid)) {
         ImGui::SetClipboardText(FormatTitleId(e.title_id).c_str());
     }
-    if (ImGui::MenuItem(ICON_FA_FOLDER_OPEN "  Show file location")) {
+    if (ImGui::MenuItem(tr(ICON_FA_FOLDER_OPEN "  Show file location"))) {
         std::string url =
             "file:///" + fs::u8path(e.path).parent_path().generic_u8string();
         SDL_OpenURL(url.c_str());
     }
     if (GameShortcutsSupported() &&
-        ImGui::MenuItem("Create desktop shortcut")) {
+        ImGui::MenuItem(tr("Create desktop shortcut"))) {
         std::string error;
         if (CreateGameDesktopShortcut(e.DisplayName(), e.path, error)) {
-            xemu_queue_notification("Shortcut created on your desktop");
+            xemu_queue_notification(tr("Shortcut created on your desktop"));
         } else {
             xemu_queue_error_message(error.c_str());
         }
     }
     ImGui::Separator();
-    if (ImGui::MenuItem(ICON_FA_XMARK "  Remove from library")) {
+    if (ImGui::MenuItem(tr(ICON_FA_XMARK "  Remove from library"))) {
         std::string path = e.path; // e may go away once removed
         ImGui::EndPopup();
         RemoveFromLibrary(path);
@@ -3071,7 +3071,7 @@ void DrawCompatRow(const LibraryEntry &e, float label_x)
     if (c == CompatStatus::None && g_compat.empty()) {
         return; // list not loaded (yet)
     }
-    ImGui::TextDisabled("Compatibility");
+    ImGui::TextDisabled(tr("Compatibility"));
     ImGui::SameLine(label_x);
     float h = ImGui::GetFontSize();
     ImVec2 p = ImGui::GetCursorScreenPos();
@@ -3081,8 +3081,8 @@ void DrawCompatRow(const LibraryEntry &e, float label_x)
     ImGui::SameLine();
     ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(CompatColor(c)), "%s",
                        CompatName(c));
-    ImGui::SetItemTooltip("%s\nRated by xemu users on xemu.app", CompatDescription(c));
-    if (e.valid && ImGui::SmallButton("Compatibility report...")) {
+    ImGui::SetItemTooltip(tr("%s\nRated by xemu users on xemu.app"), CompatDescription(c));
+    if (e.valid && ImGui::SmallButton(tr("Compatibility report..."))) {
         SDL_OpenURL(CompatTitleUrl(e.title_id).c_str());
     }
 }
@@ -3135,15 +3135,15 @@ void DrawTile(LibraryEntry &e, float tile_w, int &tex_budget)
     }
     if (hovered) {
         CompatStatus cs = CompatFor(e);
-        ImGui::SetItemTooltip("%s\n%s%s%s\nPlay time: %s\nLast played: %s%s%s",
+        ImGui::SetItemTooltip(tr("%s\n%s%s%s\nPlay time: %s\nLast played: %s%s%s"),
                               e.DisplayName().c_str(),
                               e.valid ? FormatTitleId(e.title_id).c_str() : "",
                               e.valid ? "  -  " : "",
                               e.valid ? FormatRegion(e.region).c_str()
-                                      : "Unrecognized image",
+                                      : tr("Unrecognized image"),
                               FormatPlayTime(st.play_seconds).c_str(),
                               FormatLastPlayed(st.last_played).c_str(),
-                              cs != CompatStatus::None ? "\nCompatibility: " : "",
+                              cs != CompatStatus::None ? tr("\nCompatibility: ") : tr(""),
                               cs != CompatStatus::None ? CompatName(cs) : "");
     }
     DrawContextMenu(e);
@@ -3224,7 +3224,7 @@ void DrawTile(LibraryEntry &e, float tile_w, int &tex_budget)
             dl->AddText(p, IM_COL32(255, 205, 60, 255), ICON_FA_STAR);
         }
         if (IsCurrentDisc(e)) {
-            const char *badge = ICON_FA_PLAY " Playing";
+            const char *badge = tr(ICON_FA_PLAY " Playing");
             ImVec2 ts = ImGui::CalcTextSize(badge);
             ImVec2 p(a.x + 6 * s, art_b.y - ts.y - 10 * s);
             dl->AddRectFilled(ImVec2(p.x - 4 * s, p.y - 2 * s),
@@ -3240,7 +3240,7 @@ void DrawTile(LibraryEntry &e, float tile_w, int &tex_budget)
                     e.DisplayName().c_str(), NULL, tile_w - 4 * s, &clip);
         std::string sub = e.valid ? FormatTitleId(e.title_id) + "  " +
                                         FormatRegion(e.region)
-                                  : "Unrecognized image";
+                                  : tr("Unrecognized image");
         ImVec4 clip2(a.x, a.y, a.x + tile_w, a.y + tile_h);
         dl->AddText(ImGui::GetFont(), font_h * 0.85f,
                     ImVec2(a.x + 2 * s, art_b.y + 12 * s + font_h * 2),
@@ -3290,11 +3290,11 @@ void DrawList(std::vector<LibraryEntry *> &items, int &tex_budget)
     }
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, icon + 8 * s);
-    ImGui::TableSetupColumn("Title", ImGuiTableColumnFlags_WidthStretch, 4.0f);
-    ImGui::TableSetupColumn("Title ID", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-    ImGui::TableSetupColumn("Region", ImGuiTableColumnFlags_WidthStretch, 1.2f);
-    ImGui::TableSetupColumn("Play time", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-    ImGui::TableSetupColumn("Last played", ImGuiTableColumnFlags_WidthStretch, 1.2f);
+    ImGui::TableSetupColumn(tr("Title"), ImGuiTableColumnFlags_WidthStretch, 4.0f);
+    ImGui::TableSetupColumn(tr("Title ID"), ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    ImGui::TableSetupColumn(tr("Region"), ImGuiTableColumnFlags_WidthStretch, 1.2f);
+    ImGui::TableSetupColumn(tr("Play time"), ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    ImGui::TableSetupColumn(tr("Last played"), ImGuiTableColumnFlags_WidthStretch, 1.2f);
     ImGui::TableHeadersRow();
 
     for (LibraryEntry *ep : items) {
@@ -3337,9 +3337,9 @@ void DrawList(std::vector<LibraryEntry *> &items, int &tex_budget)
         };
         cell((st.favorite ? ICON_FA_STAR " " : "") + e.DisplayName(), false);
         cell(e.valid ? FormatTitleId(e.title_id) : "-", true);
-        cell(e.valid ? FormatRegion(e.region) : "Unrecognized", true);
+        cell(e.valid ? FormatRegion(e.region) : tr("Unrecognized"), true);
         cell(FormatPlayTime(st.play_seconds), true);
-        cell(IsCurrentDisc(e) ? "Playing now" : FormatLastPlayed(st.last_played),
+        cell(IsCurrentDisc(e) ? tr("Playing now") : FormatLastPlayed(st.last_played),
              !IsCurrentDisc(e));
         ImGui::PopID();
     }
@@ -3353,7 +3353,7 @@ void DrawRecentRow(int &tex_budget)
         return;
     }
     const float s = g_viewport_mgr.m_scale;
-    ImGui::TextDisabled(ICON_FA_CLOCK "  Recently played");
+    ImGui::TextDisabled(tr(ICON_FA_CLOCK "  Recently played"));
     float tile_w = 92 * s;
     float spacing = 10 * s;
     float avail = ImGui::GetContentRegionAvail().x;
@@ -3400,92 +3400,92 @@ void DrawSettingsPopup()
     ImGui::TextDisabled("%s  -  %s", FormatTitleId(e->title_id).c_str(),
                         FormatRegion(e->region).c_str());
     ImGui::Separator();
-    ImGui::Checkbox("Use custom settings for this game", &g_settings_edit.enabled);
+    ImGui::Checkbox(tr("Use custom settings for this game"), &g_settings_edit.enabled);
     ImGui::BeginDisabled(!g_settings_edit.enabled);
 
     int scale = g_settings_edit.surface_scale;
-    if (ImGui::Combo("Resolution scale", &scale,
-                     "Use global\0" "1x\0" "2x\0" "3x\0" "4x\0" "5x\0" "6x\0"
-                     "7x\0" "8x\0" "9x\0" "10x\0")) {
+    if (ImGui::Combo(tr("Resolution scale"), &scale,
+                     tr_items("Use global\0" "1x\0" "2x\0" "3x\0" "4x\0" "5x\0" "6x\0"
+                     "7x\0" "8x\0" "9x\0" "10x\0"))) {
         g_settings_edit.surface_scale = scale;
     }
     int filter = g_settings_edit.filtering + 1;
-    if (ImGui::Combo("Upscaling filter", &filter,
-                     "Use global\0" "Linear\0" "Nearest\0"
+    if (ImGui::Combo(tr("Upscaling filter"), &filter,
+                     tr_items("Use global\0" "Linear\0" "Nearest\0"
                      "AMD FidelityFX FSR 1.0\0" "Bicubic (Catmull-Rom)\0"
                      "Lanczos\0" "Snapdragon GSR 1\0"
-                     "NVIDIA Image Scaling (NIS)\0" "NVIDIA RTX Video (AI)\0")) {
+                     "NVIDIA Image Scaling (NIS)\0" "NVIDIA RTX Video (AI)\0"))) {
         g_settings_edit.filtering = filter - 1;
     }
     bool custom_sharp = g_settings_edit.fsr_sharpness >= 0;
-    if (ImGui::Checkbox("Custom sharpening", &custom_sharp)) {
+    if (ImGui::Checkbox(tr("Custom sharpening"), &custom_sharp)) {
         g_settings_edit.fsr_sharpness =
             custom_sharp ? g_config.display.fsr_sharpness : -1.0f;
     }
     if (custom_sharp) {
-        ImGui::SliderFloat("Sharpness", &g_settings_edit.fsr_sharpness, 0.0f,
+        ImGui::SliderFloat(tr("Sharpness"), &g_settings_edit.fsr_sharpness, 0.0f,
                            1.0f, "%.2f");
     }
     // Renderer: some games only work, or run better, on one of them
     int rend = g_settings_edit.renderer == CONFIG_DISPLAY_RENDERER_OPENGL   ? 1
                : g_settings_edit.renderer == CONFIG_DISPLAY_RENDERER_VULKAN ? 2
                                                                            : 0;
-    if (ImGui::Combo("Renderer", &rend, "Use global\0" "OpenGL\0" "Vulkan\0")) {
+    if (ImGui::Combo(tr("Renderer"), &rend, tr_items("Use global\0" "OpenGL\0" "Vulkan\0"))) {
         g_settings_edit.renderer = rend == 1   ? CONFIG_DISPLAY_RENDERER_OPENGL
                                    : rend == 2 ? CONFIG_DISPLAY_RENDERER_VULKAN
                                                : -1;
     }
-    ImGui::SetItemTooltip("Switched when the game starts, and back when it "
-                          "ends");
+    ImGui::SetItemTooltip(tr("Switched when the game starts, and back when it "
+                          "ends"));
     int dyn = g_settings_edit.dynamic_res + 1;
-    if (ImGui::Combo("Dynamic resolution", &dyn,
-                     "Use global\0" "Off\0" "On (experimental)\0")) {
+    if (ImGui::Combo(tr("Dynamic resolution"), &dyn,
+                     tr_items("Use global\0" "Off\0" "On (experimental)\0"))) {
         g_settings_edit.dynamic_res = dyn - 1;
     }
     ImGui::EndDisabled();
-    ImGui::TextDisabled("Applied whenever this game's disc is loaded.");
+    ImGui::TextDisabled(tr("Applied whenever this game's disc is loaded."));
     ImGui::Separator();
     // Shader cache: try clearing it if the game hangs or draws wrong after
     // a crash
-    ImGui::TextUnformatted("Shader cache");
+    ImGui::TextUnformatted(tr("Shader cache"));
     if (!g_settings_shader_msg.empty()) {
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 440 * s);
         ImGui::TextDisabled("%s", g_settings_shader_msg.c_str());
         ImGui::PopTextWrapPos();
     } else if (!g_settings_shader_confirm) {
         ImGui::TextDisabled(g_settings_shader_count
-                                ? "%d shader files saved for this game."
-                                : "No shader files recorded for this game yet "
-                                  "(recording started with this version).",
+                                ? tr("%d shader files saved for this game.")
+                                : tr("No shader files recorded for this game yet "
+                                  "(recording started with this version)."),
                             g_settings_shader_count);
-        if (ImGui::Button("Clear this game's shader cache...")) {
+        if (ImGui::Button(tr("Clear this game's shader cache..."))) {
             g_settings_shader_confirm = true;
         }
-        ImGui::SetItemTooltip("If the game hangs or draws wrong after a crash, "
-                              "a damaged cached shader may be the cause");
+        ImGui::SetItemTooltip(tr("If the game hangs or draws wrong after a crash, "
+                              "a damaged cached shader may be the cause"));
     } else {
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 440 * s);
         ImGui::TextWrapped(
             g_settings_shader_count
-                ? "Delete this game's saved shaders and the Vulkan pipeline "
+                ? tr("Delete this game's saved shaders and the Vulkan pipeline "
                   "cache (shared by all games)? They're rebuilt as you play, "
-                  "with some stutter the first time."
-                : "No shader files are recorded for this game, so only the "
+                  "with some stutter the first time.")
+                : tr("No shader files are recorded for this game, so only the "
                   "Vulkan pipeline cache (shared by all games) is cleared. To "
                   "be sure, use \"Clear all shader caches\" in the "
-                  "dashboard's Settings tab.");
+                  "dashboard's Settings tab."));
         ImGui::PopTextWrapPos();
-        if (ImGui::Button("Clear")) {
+        if (ImGui::Button(tr("Clear"))) {
             ShaderCacheClearFor(e->title_id, &g_settings_shader_msg);
             g_settings_shader_confirm = false;
         }
         ImGui::SameLine();
-        if (ImGui::Button("Keep")) {
+        if (ImGui::Button(tr("Keep"))) {
             g_settings_shader_confirm = false;
         }
     }
     ImGui::Separator();
-    if (ImGui::Button("Save", ImVec2(120 * s, 0))) {
+    if (ImGui::Button(tr("Save"), ImVec2(120 * s, 0))) {
         g_overrides[e->title_id] = g_settings_edit;
         g_dirty = true;
         SaveLibrary();
@@ -3495,7 +3495,7 @@ void DrawSettingsPopup()
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(120 * s, 0)) ||
+    if (ImGui::Button(tr("Cancel"), ImVec2(120 * s, 0)) ||
         ImGui::IsKeyPressed(ImGuiKey_Escape) ||
         ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight)) {
         ImGui::CloseCurrentPopup();
@@ -3591,13 +3591,13 @@ void StartCoverDownload()
         }
     }
     if (ids.empty()) {
-        xemu_queue_notification("All your games already have covers");
+        xemu_queue_notification(tr("All your games already have covers"));
         return;
     }
     Error *err = NULL;
     if (!ensure_libcurl_initialized(&err)) {
         xemu_queue_error_message(err ? error_get_pretty(err)
-                                     : "Could not start downloads");
+                                     : tr("Could not start downloads"));
         if (err) {
             error_free(err);
         }
@@ -3632,7 +3632,7 @@ void MergeCoverResults()
     }
     if (finished) {
         std::string msg = string_format(
-            "Downloaded %d cover%s (%d not in the database)", (int)g_covers_found,
+            tr("Downloaded %d cover%s (%d not in the database)"), (int)g_covers_found,
             g_covers_found == 1 ? "" : "s",
             (int)g_covers_total - (int)g_covers_found);
         xemu_queue_notification(msg.c_str());
@@ -3650,12 +3650,12 @@ void AddGameFile()
                        [](const char *path) {
         std::string key = PathKey(fs::u8path(path));
         if (g_hidden.erase(key)) {
-            xemu_queue_notification("Game restored to your library");
+            xemu_queue_notification(tr("Game restored to your library"));
         } else {
             for (auto &e : g_entries) {
                 if (PathKey(fs::u8path(e.path)) == key) {
                     g_selected_path = e.path;
-                    xemu_queue_notification("That game is already in your library");
+                    xemu_queue_notification(tr("That game is already in your library"));
                     return;
                 }
             }
@@ -3665,7 +3665,7 @@ void AddGameFile()
                 }
             }
             g_extra_files.push_back(path);
-            xemu_queue_notification("Game added to your library");
+            xemu_queue_notification(tr("Game added to your library"));
         }
         g_selected_path = path;
         SaveLibrary();
@@ -3696,7 +3696,7 @@ void RemoveFromLibrary(const std::string &path)
         g_selected_path.clear();
     }
     SaveLibrary();
-    xemu_queue_notification("Removed from your library (the file was not deleted)");
+    xemu_queue_notification(tr("Removed from your library (the file was not deleted)"));
 }
 
 void AddGameFolder()
@@ -3712,7 +3712,7 @@ void AddGameFolder()
                 std::string fkey = PathKey(fs::u8path(f.path));
                 if (key == fkey || (f.recursive && PathWithin(key, fkey))) {
                     xemu_queue_notification(
-                        "That folder is already in your game library");
+                        tr("That folder is already in your game library"));
                     return;
                 }
             }
@@ -3837,28 +3837,28 @@ void DrawResumeWarningPopup()
     };
     std::string now = MachineSignature();
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 500 * s);
-    ImGui::TextUnformatted("This resume point was saved with a different BIOS "
+    ImGui::TextUnformatted(tr("This resume point was saved with a different BIOS "
                            "or boot ROM. Resuming restores the game exactly as "
                            "it was, so with a different BIOS the game or xemu "
-                           "may crash.");
+                           "may crash."));
     ImGui::PopTextWrapPos();
     ImGui::Dummy(ImVec2(0, 4 * s));
-    ImGui::TextDisabled("Saved with:  %s  /  %s",
+    ImGui::TextDisabled(tr("Saved with:  %s  /  %s"),
                         file(g_resume_warn_saved_with, true).c_str(),
                         file(g_resume_warn_saved_with, false).c_str());
-    ImGui::TextDisabled("Current:     %s  /  %s", file(now, true).c_str(),
+    ImGui::TextDisabled(tr("Current:     %s  /  %s"), file(now, true).c_str(),
                         file(now, false).c_str());
     ImGui::Dummy(ImVec2(0, 4 * s));
-    ImGui::TextUnformatted("Switch back to that BIOS in Settings > System, "
-                           "or start the game normally with Play.");
+    ImGui::TextUnformatted(tr("Switch back to that BIOS in Settings > System, "
+                           "or start the game normally with Play."));
     ImGui::Separator();
-    if (ImGui::Button("Cancel", ImVec2(120 * s, 0)) ||
+    if (ImGui::Button(tr("Cancel"), ImVec2(120 * s, 0)) ||
         ImGui::IsKeyPressed(ImGuiKey_Escape) ||
         ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight)) {
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Load anyway", ImVec2(120 * s, 0))) {
+    if (ImGui::Button(tr("Load anyway"), ImVec2(120 * s, 0))) {
         std::string name = g_resume_warn_name;
         ImGui::CloseCurrentPopup();
         RequestPreviewStop();
@@ -3886,51 +3886,51 @@ void DrawInsigniaPopup()
     }
     float wrap = ImGui::GetCursorPosX() + 540 * s;
     ImGui::PushTextWrapPos(wrap);
-    ImGui::TextUnformatted("Insignia is a free, fan-run revival of the original "
-                           "Xbox Live service.");
+    ImGui::TextUnformatted(tr("Insignia is a free, fan-run revival of the original "
+                           "Xbox Live service."));
     CheckInsigniaStatus(false);
     DrawInsigniaStatusDot();
     ImGui::SameLine();
     ImGui::BeginDisabled(g_insignia_status == (int)InsigniaStatus::Checking);
-    if (ImGui::SmallButton("Check again")) {
+    if (ImGui::SmallButton(tr("Check again"))) {
         CheckInsigniaStatus(true);
     }
     ImGui::EndDisabled();
-    ImGui::SetItemTooltip("Shows whether insignia.live is reachable. Online play "
-                          "can keep working even while the website is down.");
-    ImGui::TextDisabled("%d of your games support it (Insignia's list from %s, "
-                        "%d games). They're marked ONLINE in the library.",
+    ImGui::SetItemTooltip(tr("Shows whether insignia.live is reachable. Online play "
+                          "can keep working even while the website is down."));
+    ImGui::TextDisabled(tr("%d of your games support it (Insignia's list from %s, "
+                        "%d games). They're marked ONLINE in the library."),
                         owned, kInsigniaListDate,
                         (int)(sizeof(kInsigniaTitleIds) / sizeof(kInsigniaTitleIds[0])));
     ImGui::Separator();
-    ImGui::TextUnformatted("To play online in xemu:");
-    ImGui::BulletText("In xemu: Settings > Network, turn on Enable and choose "
-                      "the NAT backend.");
-    ImGui::BulletText("Follow Insignia's Connect guide: set the DNS address it "
+    ImGui::TextUnformatted(tr("To play online in xemu:"));
+    ImGui::BulletText(tr("In xemu: Settings > Network, turn on Enable and choose "
+                      "the NAT backend."));
+    ImGui::BulletText(tr("Follow Insignia's Connect guide: set the DNS address it "
                       "gives you in the Xbox dashboard's network settings, then "
                       "register with the Insignia Setup Assistant and create "
-                      "your account.");
-    ImGui::BulletText("Run the dashboard's network test, then start a "
-                      "supported game and sign in.");
-    ImGui::TextDisabled("Insignia is an independent service, not part of xemu. "
-                        "For setup help, use Insignia's Discord.");
+                      "your account."));
+    ImGui::BulletText(tr("Run the dashboard's network test, then start a "
+                      "supported game and sign in."));
+    ImGui::TextDisabled(tr("Insignia is an independent service, not part of xemu. "
+                        "For setup help, use Insignia's Discord."));
     ImGui::PopTextWrapPos();
     ImGui::Separator();
-    if (ImGui::Button("Connect guide")) {
+    if (ImGui::Button(tr("Connect guide"))) {
         SDL_OpenURL("https://insignia.live/connect");
     }
     ImGui::SameLine();
-    if (ImGui::Button("Who's playing")) {
+    if (ImGui::Button(tr("Who's playing"))) {
         SDL_OpenURL("https://insignia.live/games");
     }
-    ImGui::SetItemTooltip("Insignia's games page: players online and active "
-                          "sessions per game, in your browser");
+    ImGui::SetItemTooltip(tr("Insignia's games page: players online and active "
+                          "sessions per game, in your browser"));
     ImGui::SameLine();
-    if (ImGui::Button(g_online_only ? "Show all games" : "Show my online games")) {
+    if (ImGui::Button(g_online_only ? tr("Show all games") : tr("Show my online games"))) {
         g_online_only = !g_online_only;
     }
     ImGui::SameLine();
-    if (ImGui::Button("Close", ImVec2(90 * s, 0)) ||
+    if (ImGui::Button(tr("Close"), ImVec2(90 * s, 0)) ||
         ImGui::IsKeyPressed(ImGuiKey_Escape) ||
         ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight)) {
         ImGui::CloseCurrentPopup();
@@ -3952,19 +3952,19 @@ void DrawFoldersPopup()
                                 ImGuiWindowFlags_AlwaysAutoResize)) {
         return;
     }
-    ImGui::TextDisabled("Every .iso / .xiso in these folders appears in your library.");
+    ImGui::TextDisabled(tr("Every .iso / .xiso in these folders appears in your library."));
     ImGui::Dummy(ImVec2(0, 4 * s));
     auto folders = AllFolders();
     std::string remove;
     if (folders.empty()) {
-        ImGui::TextUnformatted("No game folders yet.");
+        ImGui::TextUnformatted(tr("No game folders yet."));
     } else if (ImGui::BeginTable("##folders", 3,
                                  ImGuiTableFlags_RowBg |
                                      ImGuiTableFlags_BordersInnerH |
                                      ImGuiTableFlags_SizingStretchProp,
                                  ImVec2(600 * s, 0))) {
-        ImGui::TableSetupColumn("Folder", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Include subfolders", ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableSetupColumn(tr("Folder"), ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn(tr("Include subfolders"), ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableHeadersRow();
         const char *primary = g_config.general.games_dir;
@@ -3989,7 +3989,7 @@ void DrawFoldersPopup()
                 SaveLibrary();
             }
             ImGui::TableNextColumn();
-            if (ImGui::SmallButton(ICON_FA_XMARK " Remove")) {
+            if (ImGui::SmallButton(tr(ICON_FA_XMARK " Remove"))) {
                 remove = f.path;
             }
             ImGui::PopID();
@@ -4002,13 +4002,13 @@ void DrawFoldersPopup()
     std::string drop_file, unhide;
     if (!g_extra_files.empty()) {
         ImGui::Dummy(ImVec2(0, 6 * s));
-        ImGui::TextDisabled("Games added individually");
+        ImGui::TextDisabled(tr("Games added individually"));
         for (auto &f : g_extra_files) {
             ImGui::PushID(f.c_str());
             if (ImGui::SmallButton(ICON_FA_XMARK)) {
                 drop_file = f;
             }
-            ImGui::SetItemTooltip("Remove from library (the file is not deleted)");
+            ImGui::SetItemTooltip(tr("Remove from library (the file is not deleted)"));
             ImGui::SameLine();
             ImGui::TextUnformatted(f.c_str());
             ImGui::PopID();
@@ -4016,10 +4016,10 @@ void DrawFoldersPopup()
     }
     if (!g_hidden.empty()) {
         ImGui::Dummy(ImVec2(0, 6 * s));
-        ImGui::TextDisabled("Hidden games (removed from the library)");
+        ImGui::TextDisabled(tr("Hidden games (removed from the library)"));
         for (auto &h : g_hidden) {
             ImGui::PushID(h.c_str());
-            if (ImGui::SmallButton("Restore")) {
+            if (ImGui::SmallButton(tr("Restore"))) {
                 unhide = h;
             }
             ImGui::SameLine();
@@ -4036,15 +4036,15 @@ void DrawFoldersPopup()
     }
 
     ImGui::Dummy(ImVec2(0, 4 * s));
-    if (ImGui::Button(ICON_FA_FOLDER_OPEN "  Add folder...")) {
+    if (ImGui::Button(tr(ICON_FA_FOLDER_OPEN "  Add folder..."))) {
         AddGameFolder();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Add game...")) {
+    if (ImGui::Button(tr("Add game..."))) {
         AddGameFile();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Done", ImVec2(100 * s, 0)) ||
+    if (ImGui::Button(tr("Done"), ImVec2(100 * s, 0)) ||
         ImGui::IsKeyPressed(ImGuiKey_Escape) ||
         ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight)) {
         ImGui::CloseCurrentPopup();
@@ -4122,7 +4122,7 @@ void FinishPreviewImport()
     }
     if (!ok_ext) {
         xemu_queue_error_message(
-            "Unsupported video type. Use MP4, WMV, AVI, MOV or MKV.");
+            tr("Unsupported video type. Use MP4, WMV, AVI, MOV or MKV."));
         return;
     }
     std::error_code ec;
@@ -4130,13 +4130,13 @@ void FinishPreviewImport()
     RemoveImportedPreview(imp.title_id);
     fs::path dst = PreviewDir() / (TitleIdHex(imp.title_id) + ext);
     if (!fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec)) {
-        xemu_queue_error_message("Could not copy the video.");
+        xemu_queue_error_message(tr("Could not copy the video."));
         return;
     }
     g_preview_cache.clear();
     g_selected_path = imp.game_path;
     g_preview_open_requested = dst.u8string();
-    xemu_queue_notification("Preview video added");
+    xemu_queue_notification(tr("Preview video added"));
 }
 
 void ImportPreview(const LibraryEntry &e)
@@ -4203,23 +4203,23 @@ void DrawDeleteStatePopup()
     }
     if (ImGui::BeginPopupModal("##delete-state", nullptr,
                                ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Delete the save state \"%s\"?", g_delete_state.c_str());
-        ImGui::TextDisabled("This can't be undone.");
-        if (ImGui::Button(ICON_FA_TRASH "  Delete")) {
+        ImGui::Text(tr("Delete the save state \"%s\"?"), g_delete_state.c_str());
+        ImGui::TextDisabled(tr("This can't be undone."));
+        if (ImGui::Button(tr(ICON_FA_TRASH "  Delete"))) {
             Error *err = NULL;
             xemu_snapshots_delete(g_delete_state.c_str(), &err);
             if (err) {
                 xemu_queue_error_message(error_get_pretty(err));
                 error_free(err);
             } else {
-                xemu_queue_notification("Save state deleted");
+                xemu_queue_notification(tr("Save state deleted"));
             }
             g_snapshot_mgr.Refresh();
             g_delete_state.clear();
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape) ||
+        if (ImGui::Button(tr("Cancel")) || ImGui::IsKeyPressed(ImGuiKey_Escape) ||
             ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight)) {
             g_delete_state.clear();
             GameLibraryConsumeBack();
@@ -4239,13 +4239,13 @@ void DrawSaveStates(LibraryEntry &e, float w, int max_shown = 6)
 
     ImGui::Dummy(ImVec2(0, 6 * s));
     ImGui::Separator();
-    ImGui::TextDisabled("Save states (%d)", (int)mine.size());
+    ImGui::TextDisabled(tr("Save states (%d)"), (int)mine.size());
     const float thumb_h = 42 * s, thumb_w = thumb_h * 4 / 3;
     int shown = 0;
     std::string load_name; // loaded after the loop: loading refreshes the list
     for (int i : mine) {
         if (shown++ >= max_shown) {
-            ImGui::TextDisabled("More in Settings > Snapshots");
+            ImGui::TextDisabled(tr("More in Settings > Snapshots"));
             break;
         }
         const QEMUSnapshotInfo &info = g_snapshot_mgr.m_snapshots[i];
@@ -4253,7 +4253,7 @@ void DrawSaveStates(LibraryEntry &e, float w, int max_shown = 6)
         ImGui::PushID(info.name);
         ImVec2 p = ImGui::GetCursorScreenPos();
         bool clicked = ImGui::Selectable("##snap", false, 0, ImVec2(w, thumb_h));
-        ImGui::SetItemTooltip("Load this save state (right-click or Y for more)");
+        ImGui::SetItemTooltip(tr("Load this save state (right-click or Y for more)"));
         // Right-click (or Y on a controller): load, delete, show the file
         if (ImGui::IsItemFocused() && ImGui::GetIO().NavVisible &&
             ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false)) {
@@ -4262,19 +4262,19 @@ void DrawSaveStates(LibraryEntry &e, float w, int max_shown = 6)
         if (ImGui::BeginPopupContextItem("##snapmenu")) {
             ImGui::TextDisabled("%s", info.name);
             ImGui::Separator();
-            if (ImGui::MenuItem(ICON_FA_PLAY "  Load")) {
+            if (ImGui::MenuItem(tr(ICON_FA_PLAY "  Load"))) {
                 load_name = info.name;
             }
-            if (ImGui::MenuItem(ICON_FA_TRASH "  Delete...")) {
+            if (ImGui::MenuItem(tr(ICON_FA_TRASH "  Delete..."))) {
                 g_delete_state = info.name;
             }
             const char *hdd = g_config.sys.files.hdd_path;
-            if (ImGui::MenuItem(ICON_FA_FOLDER_OPEN "  Show file location", NULL,
+            if (ImGui::MenuItem(tr(ICON_FA_FOLDER_OPEN "  Show file location"), NULL,
                                 false, hdd && hdd[0])) {
                 RevealInFolder(hdd);
             }
-            ImGui::SetItemTooltip("Save states are stored inside your Xbox hard "
-                                  "disk image (%s)",
+            ImGui::SetItemTooltip(tr("Save states are stored inside your Xbox hard "
+                                  "disk image (%s)"),
                                   hdd && hdd[0] ? fs::u8path(hdd).filename().u8string().c_str()
                                                 : "none");
             ImGui::EndPopup();
@@ -4360,9 +4360,9 @@ void DrawScreenshots(const LibraryEntry &e, float w, int per_row = 3,
     const float s = g_viewport_mgr.m_scale;
     ImGui::Dummy(ImVec2(0, 6 * s));
     ImGui::Separator();
-    ImGui::TextDisabled("Screenshots (%d)", (int)shots.size());
+    ImGui::TextDisabled(tr("Screenshots (%d)"), (int)shots.size());
     ImGui::SameLine();
-    if (ImGui::SmallButton("Open folder")) {
+    if (ImGui::SmallButton(tr("Open folder"))) {
         const char *dir = g_config.general.screenshot_dir;
         std::string p = fs::absolute(fs::u8path(dir && dir[0] ? dir : ".")).generic_u8string();
         SDL_OpenURL(("file:///" + p).c_str());
@@ -4454,8 +4454,8 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
     }
     ImGui::Dummy(ImVec2(w, art));
     if (!preview.empty() && PreviewPlayer::Supported()) {
-        if (ImGui::SmallButton(playing ? ICON_FA_XMARK "  Stop preview"
-                                       : ICON_FA_PLAY "  Watch preview")) {
+        if (ImGui::SmallButton(playing ? tr(ICON_FA_XMARK "  Stop preview")
+                                       : tr(ICON_FA_PLAY "  Watch preview"))) {
             if (playing) {
                 RequestPreviewStop();
             } else {
@@ -4480,7 +4480,7 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
         ImGui::TextDisabled("%s  -  %s", FormatTitleId(e.title_id).c_str(),
                             FormatRegion(e.region).c_str());
     } else {
-        ImGui::TextDisabled("Unrecognized disc image");
+        ImGui::TextDisabled(tr("Unrecognized disc image"));
     }
     ImGui::Dummy(ImVec2(0, 8 * s));
 
@@ -4506,7 +4506,7 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
             ResumeGame(e, info.name);
         }
         ImGui::PopStyleColor(3);
-        ImGui::SetItemTooltip("Continue from where you left off");
+        ImGui::SetItemTooltip(tr("Continue from where you left off"));
     }
     ImGui::PushStyleColor(ImGuiCol_Button, ImGui::ColorConvertU32ToFloat4(T().accent));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, T().neon ? ImVec4(0.45f, 0.94f, 1, 1)
@@ -4514,26 +4514,26 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, T().neon ? ImVec4(0, 0.70f, 0.80f, 1)
                                                           : ImVec4(0.32f, 0.70f, 0.06f, 1));
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0, 0, 0, 1));
-    if (ImGui::Button(IsCurrentDisc(e) ? ICON_FA_PLAY "  Playing - restart"
-                                       : ICON_FA_PLAY "  Play",
+    if (ImGui::Button(IsCurrentDisc(e) ? tr(ICON_FA_PLAY "  Playing - restart")
+                                       : tr(ICON_FA_PLAY "  Play"),
                       ImVec2(w, 40 * s))) {
         game_library_window.Launch(e.path);
     }
     ImGui::PopStyleColor(4);
     float half = (w - ImGui::GetStyle().ItemSpacing.x) / 2;
-    if (ImGui::Button(st.favorite ? ICON_FA_STAR "  Favorited" : ICON_FA_STAR "  Favorite",
+    if (ImGui::Button(st.favorite ? tr(ICON_FA_STAR "  Favorited") : tr(ICON_FA_STAR "  Favorite"),
                       ImVec2(half, 0))) {
         st.favorite = !st.favorite;
         g_dirty = true;
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(!e.valid);
-    if (ImGui::Button(ICON_FA_GEAR "  Settings", ImVec2(half, 0))) {
+    if (ImGui::Button(tr(ICON_FA_GEAR "  Settings"), ImVec2(half, 0))) {
         OpenSettingsFor(e);
     }
     int npatch = e.valid ? EnabledPatchCount(e.title_id) : 0;
     std::string patch_label =
-        npatch ? string_format("Patches (%d on)", npatch) : std::string("Patches");
+        npatch ? string_format(tr("Patches (%d on)"), npatch) : std::string("Patches");
     if (ImGui::Button(patch_label.c_str(), ImVec2(w, 0))) {
         OpenPatchesFor(e);
     }
@@ -4547,33 +4547,33 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
         ImGui::TextUnformatted(value.c_str());
         ImGui::PopTextWrapPos();
     };
-    row("Play time", FormatPlayTime(st.play_seconds));
-    row("Last played", IsCurrentDisc(e) ? "Playing now" : FormatLastPlayed(st.last_played));
+    row(tr("Play time"), FormatPlayTime(st.play_seconds));
+    row(tr("Last played"), IsCurrentDisc(e) ? tr("Playing now") : FormatLastPlayed(st.last_played));
     DrawCompatRow(e, w * 0.42f);
     if (SupportsOnline(e)) {
-        row("Online", "Supported on Insignia");
-        if (ImGui::SmallButton("How to play online...")) {
+        row(tr("Online"), tr("Supported on Insignia"));
+        if (ImGui::SmallButton(tr("How to play online..."))) {
             g_open_insignia_popup = true;
         }
     }
     if (e.valid && g_overrides.count(e.title_id) && g_overrides[e.title_id].enabled) {
-        row("Settings", "Custom for this game");
+        row(tr("Settings"), tr("Custom for this game"));
     }
     if (e.valid) {
         int online = OnlinePatchCount(e.title_id);
         if (online) {
-            row("Patches", string_format("%d available online", online));
-            if (ImGui::SmallButton(ICON_FA_DOWNLOAD "  Get patches...")) {
+            row(tr("Patches"), string_format(tr("%d available online"), online));
+            if (ImGui::SmallButton(tr(ICON_FA_DOWNLOAD "  Get patches..."))) {
                 OpenPatchesFor(e);
             }
-            ImGui::SetItemTooltip("Widescreen, 60 FPS, HD and other patches "
-                                  "from Jay's Magic Patches collection");
+            ImGui::SetItemTooltip(tr("Widescreen, 60 FPS, HD and other patches "
+                                  "from Jay's Magic Patches collection"));
         }
     }
-    row("File", fs::u8path(e.path).filename().u8string());
-    row("Size", string_format("%.2f GB", e.file_size / 1e9));
+    row(tr("File"), fs::u8path(e.path).filename().u8string());
+    row(tr("Size"), string_format(tr("%.2f GB"), e.file_size / 1e9));
     ImGui::Dummy(ImVec2(0, 4 * s));
-    if (ImGui::SmallButton(ICON_FA_FOLDER_OPEN "  Show file location")) {
+    if (ImGui::SmallButton(tr(ICON_FA_FOLDER_OPEN "  Show file location"))) {
         std::string url =
             "file:///" + fs::u8path(e.path).parent_path().generic_u8string();
         SDL_OpenURL(url.c_str());
@@ -5046,7 +5046,7 @@ void DrawDashTopBar()
         }
         ImGui::PopFont();
     };
-    chip("LB");
+    chip(tr("LB"));
 
     // Tabs. Green: pills. Neon: numbered labels with an underline. The
     // highlight is drawn underneath (channel 0) and glides to the active tab.
@@ -5132,7 +5132,7 @@ void DrawDashTopBar()
     }
     dl->ChannelsMerge();
     ImGui::PopFont();
-    chip("RB");
+    chip(tr("RB"));
 
     // Right side: scan progress, Insignia status, clock, close
     const char *dvd = g_config.sys.files.dvd_path;
@@ -5214,7 +5214,7 @@ void DrawDashTopBar()
     if (DashButton(close_label, th.glass, th.white, ImVec2(close_w, 32 * s))) {
         game_library_window.is_open = false;
     }
-    ImGui::SetItemTooltip("Esc or B");
+    ImGui::SetItemTooltip(tr("Esc or B"));
     if (th.neon) {
         // Thin divider under the bar
         float y = start.y + bar_h + 4 * s;
@@ -5383,8 +5383,8 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
     ImVec2 t0(a.x + pad - (1 - show) * 18 * s, b.y - pad - block_h);
     ImGui::SetCursorScreenPos(t0);
     ImGui::PushClipRect(a, ImVec2(a.x + pad + text_w, b.y), true);
-    DashLabel(IsCurrentDisc(e) ? "Playing now"
-                               : is_recent ? "Continue playing" : "Selected");
+    DashLabel(IsCurrentDisc(e) ? tr("Playing now")
+                               : is_recent ? tr("Continue playing") : tr("Selected"));
     ImGui::SetCursorScreenPos(ImVec2(t0.x, ImGui::GetCursorScreenPos().y + 2 * s));
     ImGui::PushFont(big);
     ImGui::TextUnformatted(neon ? Upper(e.DisplayName()).c_str()
@@ -5413,19 +5413,19 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
     ImGui::PopStyleColor();
     if (SupportsOnline(e)) {
         ImGui::SameLine(0, 18 * s);
-        DashPill("ONLINE", T().online);
+        DashPill(tr("ONLINE"), T().online);
     }
     CompatStatus hcs = CompatFor(e);
     if (hcs != CompatStatus::None && hcs != CompatStatus::Unknown) {
         ImGui::SameLine(0, 10 * s);
         DashPill(Upper(CompatName(hcs)).c_str(), CompatColor(hcs));
-        ImGui::SetItemTooltip("Compatibility: %s", CompatDescription(hcs));
+        ImGui::SetItemTooltip(tr("Compatibility: %s"), CompatDescription(hcs));
     }
     int npatch = e.valid ? EnabledPatchCount(e.title_id) : 0;
     if (npatch) {
         ImGui::SameLine(0, 18 * s);
         ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(T().accent),
-                           ICON_FA_WRENCH "  %d patch%s on", npatch,
+                           tr(ICON_FA_WRENCH "  %d patch%s on"), npatch,
                            npatch == 1 ? "" : "es");
     }
     ImGui::PopClipRect();
@@ -5435,11 +5435,11 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
     int resume = FindResumeSnapshot(e);
     if (resume >= 0) {
         std::string name = g_snapshot_mgr.m_snapshots[resume].name;
-        if (DashButton(ICON_FA_FORWARD "  Resume", T().resume, T().white,
+        if (DashButton(tr(ICON_FA_FORWARD "  Resume"), T().resume, T().white,
                        ImVec2(150 * s, btn_h))) {
             ResumeGame(e, name);
         }
-        ImGui::SetItemTooltip("Continue from where you left off");
+        ImGui::SetItemTooltip(tr("Continue from where you left off"));
         ImGui::SameLine(0, 12 * s);
     }
     if (g_home_focus_play) {
@@ -5449,13 +5449,13 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
         }
         g_home_focus_play = false;
     }
-    if (DashButton(IsCurrentDisc(e) ? ICON_FA_ROTATE_RIGHT "  Restart"
-                                    : ICON_FA_PLAY "  Play",
+    if (DashButton(IsCurrentDisc(e) ? tr(ICON_FA_ROTATE_RIGHT "  Restart")
+                                    : tr(ICON_FA_PLAY "  Play"),
                    T().primary, T().on_primary, ImVec2(140 * s, btn_h))) {
         game_library_window.Launch(e.path);
     }
     ImGui::SameLine(0, 12 * s);
-    if (DashButton(st.favorite ? ICON_FA_STAR "  Favorited" : ICON_FA_STAR "  Favorite",
+    if (DashButton(st.favorite ? tr(ICON_FA_STAR "  Favorited") : tr(ICON_FA_STAR "  Favorite"),
                    T().glass, T().white, ImVec2(150 * s, btn_h))) {
         st.favorite = !st.favorite;
         g_dirty = true;
@@ -5465,12 +5465,12 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
     if (DashButton(ICON_FA_GEAR, T().glass, T().white, ImVec2(btn_h, btn_h))) {
         OpenSettingsFor(e);
     }
-    ImGui::SetItemTooltip("Settings for this game");
+    ImGui::SetItemTooltip(tr("Settings for this game"));
     ImGui::SameLine(0, 12 * s);
     if (DashButton(ICON_FA_WRENCH, T().glass, T().white, ImVec2(btn_h, btn_h))) {
         OpenPatchesFor(e);
     }
-    ImGui::SetItemTooltip("Patches for this game");
+    ImGui::SetItemTooltip(tr("Patches for this game"));
     ImGui::EndDisabled();
     ImGui::SetCursorScreenPos(ImVec2(a.x, b.y));
     ImGui::Dummy(ImVec2(size.x, 0));
@@ -5556,8 +5556,8 @@ void DrawHomeActivity(ImVec2 size, int &tex_budget)
                           ImGuiChildFlags_NavFlattened,
                       ImGuiWindowFlags_NoScrollbar);
     float w = ImGui::GetContentRegionAvail().x;
-    DashLabel("Activity");
-    DashTitle("Recently played");
+    DashLabel(tr("Activity"));
+    DashTitle(tr("Recently played"));
     ImGui::Dummy(ImVec2(0, 4 * s));
     auto recent = game_library_window.GetRecentGames(6);
     int shown = 0;
@@ -5596,7 +5596,7 @@ void DrawHomeActivity(ImVec2 size, int &tex_budget)
         shown++;
     }
     if (!shown) {
-        ImGui::TextDisabled("Games you play show up here.");
+        ImGui::TextDisabled(tr("Games you play show up here."));
     }
     if (new_hb) {
         // Newly installed homebrew, one click to play
@@ -5608,7 +5608,7 @@ void DrawHomeActivity(ImVec2 size, int &tex_budget)
         bool go = ImGui::Selectable("##newhomebrew", false,
                                     ImGuiSelectableFlags_NoPadWithHalfSpacing,
                                     ImVec2(w, row_h));
-        ImGui::SetItemTooltip("Play %s", app.title.c_str());
+        ImGui::SetItemTooltip(tr("Play %s"), app.title.c_str());
         ImDrawList *dl = ImGui::GetWindowDrawList();
         float th = row_h - 8 * s;
         ShapeFill(dl, ImVec2(p.x + 4 * s, p.y + 4 * s),
@@ -5628,7 +5628,7 @@ void DrawHomeActivity(ImVec2 size, int &tex_budget)
                           "  -  " + app.section;
         dl->AddText(ImGui::GetFont(), fh * 0.88f, ImVec2(tx, ty + fh + 4 * s),
                     T().dim, sub.c_str(), NULL, 0, &clip);
-        ImVec2 gs = ImGui::CalcTextSize("Play  " ICON_FA_CHEVRON_RIGHT);
+        ImVec2 gs = ImGui::CalcTextSize(tr("Play  " ICON_FA_CHEVRON_RIGHT));
         dl->AddText(ImVec2(p.x + w - gs.x - 8 * s, p.y + (row_h - fh) / 2), T().accent,
                     "Play  " ICON_FA_CHEVRON_RIGHT);
         if (go || ActivatedByNav()) {
@@ -5655,13 +5655,13 @@ void DrawHomeActivity(ImVec2 size, int &tex_budget)
         float fh = ImGui::GetFontSize();
         float tx = p.x + th * 0.8f + 16 * s, ty = p.y + (row_h - fh * 2 - 4 * s) / 2;
         dl->AddText(ImVec2(tx, ty), T().text, "New patches available");
-        std::string sub = string_format("Widescreen, 60 FPS and more for %d of your "
-                                        "games",
+        std::string sub = string_format(tr("Widescreen, 60 FPS and more for %d of your "
+                                        "games"),
                                         new_patches);
         ImVec4 clip(tx, p.y, p.x + w - 60 * s, p.y + row_h);
         dl->AddText(ImGui::GetFont(), fh * 0.88f, ImVec2(tx, ty + fh + 4 * s),
                     T().dim, sub.c_str(), NULL, 0, &clip);
-        ImVec2 gs = ImGui::CalcTextSize("Get  " ICON_FA_CHEVRON_RIGHT);
+        ImVec2 gs = ImGui::CalcTextSize(tr("Get  " ICON_FA_CHEVRON_RIGHT));
         dl->AddText(ImVec2(p.x + w - gs.x - 8 * s, p.y + (row_h - fh) / 2), T().accent,
                     "Get  " ICON_FA_CHEVRON_RIGHT);
         if (go || ActivatedByNav()) {
@@ -5677,10 +5677,10 @@ void DrawHomeActivity(ImVec2 size, int &tex_budget)
 void DrawHomeShelf(int &tex_budget)
 {
     const float s = g_viewport_mgr.m_scale;
-    DashLabel(string_format("Your library  -  %d games", (int)g_entries.size()).c_str());
+    DashLabel(string_format(tr("Your library  -  %d games"), (int)g_entries.size()).c_str());
     ImGui::SameLine();
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 12 * s);
-    if (ImGui::SmallButton("See all  " ICON_FA_CHEVRON_RIGHT)) {
+    if (ImGui::SmallButton(tr("See all  " ICON_FA_CHEVRON_RIGHT))) {
         SwitchTab(kTabLibrary);
     }
     // Recently played first, then favorites, then the rest by title
@@ -5763,12 +5763,12 @@ uint64_t FileSizeOr(const char *p, bool *exists)
 std::string SizeText(uint64_t n)
 {
     if (n >= (1ull << 20)) {
-        return string_format("%.1f MB", n / 1048576.0);
+        return string_format(tr("%.1f MB"), n / 1048576.0);
     }
     if (n >= 1024) {
-        return string_format("%llu KB", (unsigned long long)(n / 1024));
+        return string_format(tr("%llu KB"), (unsigned long long)(n / 1024));
     }
-    return string_format("%llu bytes", (unsigned long long)n);
+    return string_format(tr("%llu bytes"), (unsigned long long)n);
 }
 
 void RefreshSetup(bool force = false)
@@ -5793,7 +5793,7 @@ void RefreshSetup(bool force = false)
         if (!it.path) {
             int n = (int)AllFolders().size();
             it.state = n ? 0 : 1;
-            it.detail = n ? string_format("%d folder%s, %d games", n, n == 1 ? "" : "s",
+            it.detail = n ? string_format(tr("%d folder%s, %d games"), n, n == 1 ? "" : "s",
                                           (int)g_entries.size())
                           : "Not set";
             continue;
@@ -5865,7 +5865,7 @@ void DrawSetupItems(bool compact)
         ImGui::TextUnformatted(it.name);
         if (!it.required) {
             ImGui::SameLine();
-            ImGui::TextDisabled("(optional)");
+            ImGui::TextDisabled(tr("(optional)"));
         }
         ImGui::Indent(24 * s);
         ImGui::PushTextWrapPos(0.0f);
@@ -5878,8 +5878,8 @@ void DrawSetupItems(bool compact)
         ImGui::PopTextWrapPos();
         const char **path = it.path;
         if (path) {
-            if (DashButton(it.state ? ICON_FA_FOLDER_OPEN "  Choose file..."
-                                    : ICON_FA_FOLDER_OPEN "  Change...",
+            if (DashButton(it.state ? tr(ICON_FA_FOLDER_OPEN "  Choose file...")
+                                    : tr(ICON_FA_FOLDER_OPEN "  Change..."),
                            it.state ? T().primary : T().glass,
                            it.state ? T().on_primary : T().white, ImVec2(0, 30 * s))) {
                 ShowOpenFileDialog(nullptr, 0, *path, [path](const char *p) {
@@ -5889,7 +5889,7 @@ void DrawSetupItems(bool compact)
                     RefreshSetup(true);
                 });
             }
-        } else if (DashButton(ICON_FA_FOLDER_PLUS "  Add a folder...",
+        } else if (DashButton(tr(ICON_FA_FOLDER_PLUS "  Add a folder..."),
                               it.state ? T().primary : T().glass,
                               it.state ? T().on_primary : T().white,
                               ImVec2(0, 30 * s))) {
@@ -5901,11 +5901,11 @@ void DrawSetupItems(bool compact)
     }
     if (g_setup_changed) {
         ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(T().warn),
-                           ICON_FA_ROTATE "  Restart xemu to use the new files.");
+                           tr(ICON_FA_ROTATE "  Restart xemu to use the new files."));
     }
-    ImGui::TextDisabled("You need files from your own Xbox; they can't be shared.");
+    ImGui::TextDisabled(tr("You need files from your own Xbox; they can't be shared."));
     ImGui::SameLine();
-    if (ImGui::SmallButton("Setup guide")) {
+    if (ImGui::SmallButton(tr("Setup guide"))) {
         SDL_OpenURL("https://xemu.app/docs/getting-started/");
     }
 }
@@ -5925,8 +5925,8 @@ void DrawSetupCard()
     ImGui::BeginGroup();
     ImGui::Dummy(ImVec2(0, 10 * s));
     ImGui::Indent(18 * s);
-    DashLabel("Setup");
-    DashTitle("A few things before games can run");
+    DashLabel(tr("Setup"));
+    DashTitle(tr("A few things before games can run"));
     ImGui::Dummy(ImVec2(0, 4 * s));
     DrawSetupItems(true);
     ImGui::Unindent(18 * s);
@@ -5955,7 +5955,7 @@ void DrawSetupPopup()
     }
     DrawSetupItems(false);
     ImGui::Separator();
-    if (ImGui::Button("Done", ImVec2(120 * s, 0)) ||
+    if (ImGui::Button(tr("Done"), ImVec2(120 * s, 0)) ||
         ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
         ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
         GameLibraryConsumeBack();
@@ -5985,9 +5985,9 @@ void DrawHomeTab(int &tex_budget)
     }
     if (!hero) {
         ImGui::Dummy(ImVec2(0, 30 * s));
-        ImGui::TextDisabled(g_scan_running ? "Looking for games..."
-                                           : "No games yet. Add a folder on the "
-                                             "Library tab.");
+        ImGui::TextDisabled(g_scan_running ? tr("Looking for games...")
+                                           : tr("No games yet. Add a folder on the "
+                                             "Library tab."));
         return;
     }
     auto recent = game_library_window.GetRecentGames(1);
@@ -6035,7 +6035,7 @@ void DrawInsigniaTab(int &tex_budget)
     DashCard(dl, a, ImVec2(a.x + left_w, a.y + status_h));
     ImGui::SetCursorScreenPos(ImVec2(a.x + 26 * s, a.y + 22 * s));
     ImGui::BeginGroup();
-    DashLabel("Insignia  -  Xbox Live revival");
+    DashLabel(tr("Insignia  -  Xbox Live revival"));
     ImGui::Dummy(ImVec2(0, 8 * s));
     ImVec2 rc = ImGui::GetCursorScreenPos();
     float rr = 28 * s;
@@ -6061,19 +6061,19 @@ void DrawInsigniaTab(int &tex_budget)
     ImGui::SetCursorScreenPos(ImVec2(rc.x + rr * 2 + 18 * s, rc.y + 2 * s));
     ImGui::BeginGroup();
     ImGui::PushFont(FontOr(g_font_mgr.m_menu_font_medium));
-    ImGui::TextUnformatted(st == InsigniaStatus::Up            ? "Service online"
-                           : st == InsigniaStatus::Maintenance ? "Maintenance"
-                           : st == InsigniaStatus::Down        ? "Unreachable"
-                           : st == InsigniaStatus::Checking    ? "Checking..."
-                                                               : "Status unknown");
+    ImGui::TextUnformatted(st == InsigniaStatus::Up            ? tr("Service online")
+                           : st == InsigniaStatus::Maintenance ? tr("Maintenance")
+                           : st == InsigniaStatus::Down        ? tr("Unreachable")
+                           : st == InsigniaStatus::Checking    ? tr("Checking...")
+                                                               : tr("Status unknown"));
     ImGui::PopFont();
     uint64_t ago = (SDL_GetTicks() - g_insignia_checked_at) / 60000;
     if (st == InsigniaStatus::Checking || st == InsigniaStatus::Unknown) {
-        ImGui::TextDisabled("insignia.live");
+        ImGui::TextDisabled(tr("insignia.live"));
     } else {
-        ImGui::TextDisabled("Checked %s  -  insignia.live",
+        ImGui::TextDisabled(tr("Checked %s  -  insignia.live"),
                             ago == 0 ? "just now"
-                                     : string_format("%d min ago", (int)ago).c_str());
+                                     : string_format(tr("%d min ago"), (int)ago).c_str());
     }
     ImGui::EndGroup();
     ImGui::SetCursorScreenPos(ImVec2(rc.x, rc.y + rr * 2 + 20 * s));
@@ -6092,9 +6092,9 @@ void DrawInsigniaTab(int &tex_budget)
         ImGui::EndGroup();
         ImGui::SetCursorScreenPos(ImVec2(p.x + stat_w + 14 * s, p.y));
     };
-    stat(std::to_string(owned), "of your games play online");
+    stat(std::to_string(owned), tr("of your games play online"));
     stat(std::to_string((int)(sizeof(kInsigniaTitleIds) / sizeof(kInsigniaTitleIds[0]))),
-         "supported games");
+         tr("supported games"));
     ImGui::EndGroup();
 
     // Setup checklist
@@ -6104,7 +6104,7 @@ void DrawInsigniaTab(int &tex_budget)
     ImGui::SetCursorScreenPos(ImVec2(a.x + 26 * s, setup_y + 22 * s));
     ImGui::BeginGroup();
     ImGui::PushTextWrapPos(a.x + left_w - 26 * s);
-    DashLabel("Get online in xemu");
+    DashLabel(tr("Get online in xemu"));
     ImGui::Dummy(ImVec2(0, 6 * s));
     bool net_ok = g_config.net.enable &&
                   g_config.net.backend == CONFIG_NET_BACKEND_NAT;
@@ -6141,26 +6141,26 @@ void DrawInsigniaTab(int &tex_budget)
         ImGui::EndGroup();
         ImGui::SetCursorScreenPos(ImVec2(p.x, ImGui::GetItemRectMax().y + 12 * s));
     };
-    step(1, net_ok, "Turn on networking",
+    step(1, net_ok, tr("Turn on networking"),
          "Settings > Network: Enable, with the NAT backend");
-    step(2, false, "Point the Xbox at Insignia",
+    step(2, false, tr("Point the Xbox at Insignia"),
          "Set the DNS from Insignia's Connect guide in the dashboard's network "
          "settings");
-    step(3, false, "Create your account",
+    step(3, false, tr("Create your account"),
          "Register with the Insignia Setup Assistant, then run the network test");
-    step(4, false, "Play", "Start a supported game and sign in to Xbox Live");
-    if (ImGui::Button("Connect guide")) {
+    step(4, false, tr("Play"), "Start a supported game and sign in to Xbox Live");
+    if (ImGui::Button(tr("Connect guide"))) {
         SDL_OpenURL("https://insignia.live/connect");
     }
     ImGui::SameLine();
-    if (ImGui::Button("Who's playing")) {
+    if (ImGui::Button(tr("Who's playing"))) {
         SDL_OpenURL("https://insignia.live/games");
     }
-    ImGui::SetItemTooltip("Players online and active sessions per game, on "
-                          "insignia.live");
+    ImGui::SetItemTooltip(tr("Players online and active sessions per game, on "
+                          "insignia.live"));
     ImGui::SameLine();
     ImGui::BeginDisabled(st == InsigniaStatus::Checking);
-    if (ImGui::Button("Check again")) {
+    if (ImGui::Button(tr("Check again"))) {
         CheckInsigniaStatus(true);
     }
     ImGui::EndDisabled();
@@ -6179,10 +6179,10 @@ void DrawInsigniaTab(int &tex_budget)
     ImGui::BeginChild("##online", ImVec2(list_w, list_h),
                       ImGuiChildFlags_AlwaysUseWindowPadding |
                           ImGuiChildFlags_NavFlattened);
-    DashLabel("Your library");
-    DashTitle("Ready for online play");
-    ImGui::TextDisabled("Games you own that Insignia supports. Live player counts "
-                        "are on insignia.live.");
+    DashLabel(tr("Your library"));
+    DashTitle(tr("Ready for online play"));
+    ImGui::TextDisabled(tr("Games you own that Insignia supports. Live player counts "
+                        "are on insignia.live."));
     ImGui::Dummy(ImVec2(0, 8 * s));
     std::vector<LibraryEntry *> mine;
     for (auto &e : g_entries) {
@@ -6198,7 +6198,7 @@ void DrawInsigniaTab(int &tex_budget)
         return Lower(x->DisplayName()) < Lower(y->DisplayName());
     });
     if (mine.empty()) {
-        ImGui::TextDisabled("None of your games are on Insignia's list yet.");
+        ImGui::TextDisabled(tr("None of your games are on Insignia's list yet."));
     }
     float w = ImGui::GetContentRegionAvail().x;
     for (LibraryEntry *e : mine) {
@@ -6232,14 +6232,14 @@ void DrawMediaTab(int &tex_budget)
             e = DefaultHomeGame();
         }
         if (!e) {
-            ImGui::TextDisabled("No games yet.");
+            ImGui::TextDisabled(tr("No games yet."));
             return;
         }
         g_media_path = e->path;
     }
     // Game picker: games with save states or screenshots first
     ImGui::AlignTextToFramePadding();
-    DashLabel("Showing");
+    DashLabel(tr("Showing"));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(std::min(420 * s, ImGui::GetContentRegionAvail().x * 0.5f));
     if (ImGui::BeginCombo("##mediagame", e->DisplayName().c_str())) {
@@ -6250,7 +6250,7 @@ void DrawMediaTab(int &tex_budget)
             size_t shots = it->valid ? ScreenshotsFor(it->title_id).size() : 0;
             std::string label = it->DisplayName();
             if (saves || shots) {
-                label += string_format("   (%zu save%s, %zu screenshot%s)", saves,
+                label += string_format(tr("   (%zu save%s, %zu screenshot%s)"), saves,
                                        saves == 1 ? "" : "s", shots,
                                        shots == 1 ? "" : "s");
             }
@@ -6263,7 +6263,7 @@ void DrawMediaTab(int &tex_budget)
         ImGui::EndCombo();
     }
     ImGui::SameLine();
-    if (ImGui::Button(ICON_FA_FOLDER_OPEN "  Screenshot folder")) {
+    if (ImGui::Button(tr(ICON_FA_FOLDER_OPEN "  Screenshot folder"))) {
         const char *dir = g_config.general.screenshot_dir;
         std::string p =
             fs::absolute(fs::u8path(dir && dir[0] ? dir : ".")).generic_u8string();
@@ -6287,21 +6287,21 @@ void DrawMediaTab(int &tex_budget)
                               ImGuiChildFlags_NavFlattened);
         float w = ImGui::GetContentRegionAvail().x;
         if (col == 0) {
-            DashLabel("Save states");
+            DashLabel(tr("Save states"));
             DashTitle(e->DisplayName().c_str());
             if (SnapshotsFor(*e).empty()) {
                 ImGui::Dummy(ImVec2(0, 8 * s));
-                ImGui::TextDisabled("No save states for this game yet. Create one "
-                                    "from Machine > Snapshot while playing.");
+                ImGui::TextDisabled(tr("No save states for this game yet. Create one "
+                                    "from Machine > Snapshot while playing."));
             } else {
                 DrawSaveStates(*e, w, 50);
             }
         } else {
-            DashLabel("Screenshots");
+            DashLabel(tr("Screenshots"));
             DashTitle(e->DisplayName().c_str());
             if (!e->valid || ScreenshotsFor(e->title_id).empty()) {
                 ImGui::Dummy(ImVec2(0, 8 * s));
-                ImGui::TextDisabled("No screenshots yet. Press F12 while playing.");
+                ImGui::TextDisabled(tr("No screenshots yet. Press F12 while playing."));
             } else {
                 DrawScreenshots(*e, w, w > 600 * s ? 3 : 2, 60);
             }
@@ -6428,7 +6428,7 @@ std::string StoreHttpError(int code)
         return "Couldn't reach XboxHomebrew.store. Check your internet "
                "connection.";
     }
-    return string_format("XboxHomebrew.store answered with an error (HTTP %d).",
+    return string_format(tr("XboxHomebrew.store answered with an error (HTTP %d)."),
                          code);
 }
 
@@ -6730,8 +6730,8 @@ void StoreInstall(const StoreApp &app, const StoreVersion &v)
             if (code != 200 || body.empty()) {
                 err = code == 200   ? std::string("The download was empty.")
                       : code <= 0 ? StoreHttpError(code)
-                                  : string_format("The download failed (HTTP %d). "
-                                                  "Try again later.",
+                                  : string_format(tr("The download failed (HTTP %d). "
+                                                  "Try again later."),
                                                   code);
                 break;
             }
@@ -6825,12 +6825,12 @@ void StorePump()
 std::string StoreSize(uint64_t n)
 {
     if (n >= (1ull << 30)) {
-        return string_format("%.2f GB", n / 1073741824.0);
+        return string_format(tr("%.2f GB"), n / 1073741824.0);
     }
     if (n >= (1ull << 20)) {
-        return string_format("%.1f MB", n / 1048576.0);
+        return string_format(tr("%.1f MB"), n / 1048576.0);
     }
-    return string_format("%.0f KB", std::max<uint64_t>(n, 1) / 1024.0 + 0.5);
+    return string_format(tr("%.0f KB"), std::max<uint64_t>(n, 1) / 1024.0 + 0.5);
 }
 
 // Image scaled to cover [a, b], cropped to keep its shape
@@ -6961,12 +6961,12 @@ void DrawStoreDetails(const StoreApp &app, float w)
     // Version, install
     const StoreVersion *v = nullptr;
     if (g_store.versions_loading) {
-        ImGui::TextDisabled("Loading versions...");
+        ImGui::TextDisabled(tr("Loading versions..."));
     } else if (!g_store.versions_err.empty()) {
         ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(T().warn), "%s",
                            g_store.versions_err.c_str());
     } else if (g_store.versions.empty()) {
-        ImGui::TextDisabled("No downloads for this app yet.");
+        ImGui::TextDisabled(tr("No downloads for this app yet."));
     } else {
         g_store.ver = std::min(g_store.ver, (int)g_store.versions.size() - 1);
         v = &g_store.versions[g_store.ver];
@@ -6989,7 +6989,7 @@ void DrawStoreDetails(const StoreApp &app, float w)
             }
             v = &g_store.versions[g_store.ver];
         } else {
-            ImGui::Text("Version %s", v->version.c_str());
+            ImGui::Text(tr("Version %s"), v->version.c_str());
         }
         std::string meta;
         auto add = [&](const std::string &t) {
@@ -6999,7 +6999,7 @@ void DrawStoreDetails(const StoreApp &app, float w)
         };
         add(v->release_date);
         add(v->size ? StoreSize(v->size) : "");
-        add(v->region == "GLO" ? "All regions" : v->region);
+        add(v->region == "GLO" ? tr("All regions") : v->region);
         ImGui::TextDisabled("%s", meta.c_str());
         ImGui::Dummy(ImVec2(0, 4 * s));
 
@@ -7015,12 +7015,12 @@ void DrawStoreDetails(const StoreApp &app, float w)
                                     StoreSize(t.total).c_str())
                     : std::string("Downloading...");
             if (t.files > 1) {
-                label += string_format("  (file %d of %d)", t.file + 1, t.files);
+                label += string_format(tr("  (file %d of %d)"), t.file + 1, t.files);
             }
             ImGui::ProgressBar(t.phase == 1 ? 1.0f : frac,
                                ImVec2(w - 110 * s, 0), label.c_str());
             ImGui::SameLine();
-            if (ImGui::Button("Cancel", ImVec2(100 * s, 0))) {
+            if (ImGui::Button(tr("Cancel"), ImVec2(100 * s, 0))) {
                 t.cancel = true;
             }
         } else if (this_one && g_store.phase == StoreState::Copying) {
@@ -7028,7 +7028,7 @@ void DrawStoreDetails(const StoreApp &app, float w)
                                "Copying to the Xbox...");
         } else {
             ImGui::BeginDisabled(busy || XboxExplorerBusy());
-            if (DashButton(ICON_FA_DOWNLOAD "  Install to Xbox", T().primary,
+            if (DashButton(tr(ICON_FA_DOWNLOAD "  Install to Xbox"), T().primary,
                            T().on_primary, ImVec2(0, 38 * s))) {
                 g_store.confirm = true;
             }
@@ -7036,7 +7036,7 @@ void DrawStoreDetails(const StoreApp &app, float w)
             ImGui::SameLine(0, 12 * s);
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() +
                                  (38 * s - ImGui::GetFontSize()) / 2);
-            ImGui::TextDisabled("to E:\\%s\\%s",
+            ImGui::TextDisabled(tr("to E:\\%s\\%s"),
                                 StoreInstallFolder(app.category).c_str(),
                                 StoreSafeFolderName(v->folder_name.empty()
                                                         ? app.name
@@ -7055,7 +7055,7 @@ void DrawStoreDetails(const StoreApp &app, float w)
                                g_store.inst_msg.c_str());
             ImGui::PopTextWrapPos();
             if (g_store.phase == StoreState::Done &&
-                DashButton(ICON_FA_HARD_DRIVE "  Show on the Xbox drive", T().glass,
+                DashButton(tr(ICON_FA_HARD_DRIVE "  Show on the Xbox drive"), T().glass,
                            T().white, ImVec2(0, 32 * s))) {
                 SwitchTab(kTabDrive); // the explorer is already in that folder
             }
@@ -7068,7 +7068,7 @@ void DrawStoreDetails(const StoreApp &app, float w)
     }
     if (v && !v->changelog.empty()) {
         ImGui::Dummy(ImVec2(0, 6 * s));
-        DashLabel("What's new");
+        DashLabel(tr("What's new"));
         ImGui::TextDisabled("%s", v->changelog.c_str());
     }
     ImGui::PopTextWrapPos();
@@ -7084,25 +7084,25 @@ void DrawStoreDetails(const StoreApp &app, float w)
                                                          ? app.name
                                                          : v->folder_name)
                                : "";
-        ImGui::Text("Install %s%s?", app.name.c_str(),
+        ImGui::Text(tr("Install %s%s?"), app.name.c_str(),
                     v ? (" " + v->version).c_str() : "");
-        ImGui::TextDisabled("Goes to E:\\%s\\%s%s",
+        ImGui::TextDisabled(tr("Goes to E:\\%s\\%s%s"),
                             StoreInstallFolder(app.category).c_str(), folder.c_str(),
                             v && v->size ? ("  (" + StoreSize(v->size) + ")").c_str()
                                          : "");
         ImGui::Spacing();
         ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30);
         ImGui::TextWrapped(
-            "When the download is done the Xbox pauses while the files are "
+            tr("When the download is done the Xbox pauses while the files are "
             "copied, then restarts. Progress in a running game that hasn't been "
-            "saved will be lost. An older copy in that folder is replaced.");
+            "saved will be lost. An older copy in that folder is replaced."));
         ImGui::PopTextWrapPos();
-        if (ImGui::Button(ICON_FA_DOWNLOAD " Install") && v) {
+        if (ImGui::Button(tr(ICON_FA_DOWNLOAD " Install")) && v) {
             ImGui::CloseCurrentPopup();
             StoreInstall(app, *v);
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+        if (ImGui::Button(tr("Cancel")) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
             ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
             GameLibraryConsumeBack();
             ImGui::CloseCurrentPopup();
@@ -7409,7 +7409,7 @@ bool HomebrewCard(const XboxHomebrewApp &a, float w)
     bool pressed = ImGui::InvisibleButton("##hb", ImVec2(w, h), ImGuiButtonFlags_EnableNav);
     bool hovered = ImGui::IsItemHovered() || ImGui::IsItemFocused();
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("%s\n%s\nRight-click for more", a.title.c_str(),
+        ImGui::SetTooltip(tr("%s\n%s\nRight-click for more"), a.title.c_str(),
                           HomebrewDisplayDir(a).c_str());
     }
     if (ImGui::IsItemClicked(ImGuiMouseButton_Right) ||
@@ -7478,7 +7478,7 @@ void DrawMyHomebrew()
     if (!g_hb.loaded && !XboxExplorerBusy()) {
         HomebrewRefresh();
     }
-    if (DashButton(ICON_FA_ROTATE "  Refresh", T().glass, T().white,
+    if (DashButton(tr(ICON_FA_ROTATE "  Refresh"), T().glass, T().white,
                    ImVec2(0, 32 * s)) &&
         !XboxExplorerBusy()) {
         HomebrewRefresh();
@@ -7496,9 +7496,9 @@ void DrawMyHomebrew()
                                                                        : T().dim),
                            "%s", g_hb.msg.c_str());
     } else {
-        ImGui::TextDisabled("Pick one to play; right-click (or Y) to delete. It "
+        ImGui::TextDisabled(tr("Pick one to play; right-click (or Y) to delete. It "
                             "runs from the DVD drive, so anything it saves to its "
-                            "own folder isn't kept.");
+                            "own folder isn't kept."));
     }
     ImGui::Dummy(ImVec2(0, 6 * s));
     ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -7513,10 +7513,10 @@ void DrawMyHomebrew()
         ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(T().warn), "%s",
                            g_hb.err.c_str());
     } else if (g_hb.apps.empty()) {
-        ImGui::TextDisabled("No homebrew on the Xbox hard drive yet. Apps in "
-                            "E:\\Games, E:\\Apps or E:\\Emulators show up here.");
+        ImGui::TextDisabled(tr("No homebrew on the Xbox hard drive yet. Apps in "
+                            "E:\\Games, E:\\Apps or E:\\Emulators show up here."));
         ImGui::Dummy(ImVec2(0, 8 * s));
-        if (DashButton(ICON_FA_DOWNLOAD "  Get homebrew from the store", T().primary,
+        if (DashButton(tr(ICON_FA_DOWNLOAD "  Get homebrew from the store"), T().primary,
                        T().on_primary, ImVec2(0, 38 * s))) {
             g_hb.view = 1;
         }
@@ -7549,14 +7549,14 @@ void DrawMyHomebrew()
         ImGui::TextDisabled("%s", m.title.c_str());
         ImGui::Separator();
         bool busy = g_hb.preparing || g_hb.deleting || XboxExplorerBusy();
-        if (ImGui::MenuItem(ICON_FA_PLAY "  Play", nullptr, false, !busy)) {
+        if (ImGui::MenuItem(tr(ICON_FA_PLAY "  Play"), nullptr, false, !busy)) {
             HomebrewPlay(m);
         }
-        if (ImGui::MenuItem(ICON_FA_HARD_DRIVE "  Show on the Xbox drive")) {
+        if (ImGui::MenuItem(tr(ICON_FA_HARD_DRIVE "  Show on the Xbox drive"))) {
             SwitchTab(kTabDrive);
             XboxExplorerShowFolder(m.vol, m.dir);
         }
-        if (ImGui::MenuItem(ICON_FA_TRASH "  Delete...", nullptr, false, !busy)) {
+        if (ImGui::MenuItem(tr(ICON_FA_TRASH "  Delete..."), nullptr, false, !busy)) {
             g_hb.open_delete = true;
         }
         ImGui::EndPopup();
@@ -7568,19 +7568,19 @@ void DrawMyHomebrew()
     if (ImGui::BeginPopupModal("##hbdelete", nullptr,
                                ImGuiWindowFlags_AlwaysAutoResize)) {
         const XboxHomebrewApp &m = g_hb.menu_app;
-        ImGui::Text("Delete %s?", m.title.c_str());
-        ImGui::TextDisabled("Removes %s and everything in it.",
+        ImGui::Text(tr("Delete %s?"), m.title.c_str());
+        ImGui::TextDisabled(tr("Removes %s and everything in it."),
                             HomebrewDisplayDir(m).c_str());
         ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30);
-        ImGui::TextWrapped("This can't be undone. The Xbox pauses and restarts "
-                           "to make the change, so save your game first.");
+        ImGui::TextWrapped(tr("This can't be undone. The Xbox pauses and restarts "
+                           "to make the change, so save your game first."));
         ImGui::PopTextWrapPos();
-        if (ImGui::Button(ICON_FA_TRASH " Delete")) {
+        if (ImGui::Button(tr(ICON_FA_TRASH " Delete"))) {
             ImGui::CloseCurrentPopup();
             HomebrewDelete(m);
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+        if (ImGui::Button(tr("Cancel")) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
             ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
             GameLibraryConsumeBack();
             ImGui::CloseCurrentPopup();
@@ -7596,14 +7596,14 @@ void DrawStoreBrowser()
 {
     const float s = g_viewport_mgr.m_scale;
     StoreStart();
-    ImGui::TextDisabled("XboxHomebrew.store, run by Team Resurgent. Games install "
+    ImGui::TextDisabled(tr("XboxHomebrew.store, run by Team Resurgent. Games install "
                         "to E:\\Games, emulators to E:\\Emulators, the rest to "
-                        "E:\\Apps.");
+                        "E:\\Apps."));
     ImGui::Dummy(ImVec2(0, 2 * s));
 
     // Search and categories
     ImGui::SetNextItemWidth(260 * s);
-    if (ImGui::InputTextWithHint("##storesearch", ICON_FA_MAGNIFYING_GLASS " Search",
+    if (ImGui::InputTextWithHint("##storesearch", tr(ICON_FA_MAGNIFYING_GLASS " Search"),
                                  g_store.search, sizeof(g_store.search))) {
         g_store.search_edit_t = ImGui::GetTime();
     }
@@ -7628,7 +7628,7 @@ void DrawStoreBrowser()
         ImGui::PopStyleVar();
         ImGui::PopStyleColor();
     };
-    chip("", "All");
+    chip("", tr("All"));
     for (auto &c : g_store.cats) {
         chip(c.name, c.count ? string_format("%s  %d", c.name.c_str(), c.count)
                              : c.name);
@@ -7667,11 +7667,11 @@ void DrawStoreBrowser()
         ImGui::Dummy(ImVec2(0, 4 * s));
     }
     if (g_store.loading) {
-        ImGui::TextDisabled("Loading...");
+        ImGui::TextDisabled(tr("Loading..."));
     } else if (!g_store.err.empty()) {
         ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(T().warn), "%s",
                            g_store.err.c_str());
-        if (ImGui::Button("Try again")) {
+        if (ImGui::Button(tr("Try again"))) {
             g_store.err.clear();
             if (g_store.cats.empty()) {
                 g_store.started = false;
@@ -7682,11 +7682,11 @@ void DrawStoreBrowser()
         }
     } else if (g_store.apps.empty()) {
         ImGui::TextDisabled(g_store.search_applied.empty()
-                                ? "Nothing here yet."
-                                : "No apps match your search.");
+                                ? tr("Nothing here yet.")
+                                : tr("No apps match your search."));
     } else if (g_store.more) {
         // Also loads by itself when scrolled to the end
-        if (DashButton("Load more", T().glass, T().white, ImVec2(160 * s, 34 * s)) ||
+        if (DashButton(tr("Load more"), T().glass, T().white, ImVec2(160 * s, 34 * s)) ||
             (ImGui::GetScrollMaxY() > 0 &&
              ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 40 * s)) {
             StoreFetchApps(false);
@@ -7720,8 +7720,8 @@ void DrawStoreTab()
     if (!g_hb.loaded && !XboxExplorerBusy()) {
         HomebrewRefresh();
     }
-    DashLabel("Homebrew");
-    DashTitle("Play homebrew on your Xbox hard drive, or get more");
+    DashLabel(tr("Homebrew"));
+    DashTitle(tr("Play homebrew on your Xbox hard drive, or get more"));
     ImGui::Dummy(ImVec2(0, 2 * s));
     auto seg = [&](int v, const std::string &label) {
         bool on = std::max(g_hb.view, 0) == v;
@@ -7735,7 +7735,7 @@ void DrawStoreTab()
         ImGui::PopStyleVar();
         ImGui::PopStyleColor();
     };
-    seg(0, string_format(ICON_FA_GAMEPAD "  Installed (%d)", (int)g_hb.apps.size()));
+    seg(0, string_format(tr(ICON_FA_GAMEPAD "  Installed (%d)"), (int)g_hb.apps.size()));
     ImGui::SameLine(0, 8 * s);
     seg(1, ICON_FA_DOWNLOAD "  Store");
     ImGui::Dummy(ImVec2(0, 4 * s));
@@ -7750,8 +7750,8 @@ void DrawStoreTab()
 
 void DrawDriveTab()
 {
-    DashLabel("Xbox hard drive");
-    DashTitle("Files on the Xbox's C, E, F, X, Y and Z drives");
+    DashLabel(tr("Xbox hard drive"));
+    DashTitle(tr("Files on the Xbox's C, E, F, X, Y and Z drives"));
     ImGui::Dummy(ImVec2(0, 4 * g_viewport_mgr.m_scale));
     XboxExplorerDraw();
 }
@@ -7759,28 +7759,28 @@ void DrawDriveTab()
 void DrawPatchesTab(int &tex_budget)
 {
     const float s = g_viewport_mgr.m_scale;
-    DashLabel("Patches");
-    DashTitle("Widescreen, 60 FPS, HD and fixes for your games");
-    ImGui::TextDisabled("From Jay's Magic Patches collection on GitHub, plus any "
+    DashLabel(tr("Patches"));
+    DashTitle(tr("Widescreen, 60 FPS, HD and fixes for your games"));
+    ImGui::TextDisabled(tr("From Jay's Magic Patches collection on GitHub, plus any "
                         "patches you add yourself. Downloaded patches start "
-                        "switched off.");
+                        "switched off."));
     ImGui::Dummy(ImVec2(0, 6 * s));
     ImGui::BeginDisabled(g_patchdl_running);
     if (DashButton(g_patchdl_running
-                       ? ICON_FA_DOWNLOAD "  Downloading..."
-                       : ICON_FA_DOWNLOAD "  Download patches for all games",
+                       ? tr(ICON_FA_DOWNLOAD "  Downloading...")
+                       : tr(ICON_FA_DOWNLOAD "  Download patches for all games"),
                    T().primary, T().on_primary, ImVec2(0, 38 * s))) {
         StartPatchDownload(0, false);
     }
     ImGui::SameLine(0, 12 * s);
-    if (DashButton(ICON_FA_MAGNIFYING_GLASS "  Check for new patches", T().glass,
+    if (DashButton(tr(ICON_FA_MAGNIFYING_GLASS "  Check for new patches"), T().glass,
                    T().white, ImVec2(0, 38 * s))) {
         StartPatchDownload(0, true);
     }
     ImGui::EndDisabled();
     ImGui::SameLine(0, 18 * s);
     ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled("Built-in list from %s", kJmpIndexDate);
+    ImGui::TextDisabled(tr("Built-in list from %s"), kJmpIndexDate);
     ImGui::Dummy(ImVec2(0, 12 * s));
 
     // Games with patches installed or available
@@ -7811,7 +7811,7 @@ void DrawPatchesTab(int &tex_budget)
                       ImGuiChildFlags_AlwaysUseWindowPadding |
                           ImGuiChildFlags_NavFlattened);
     if (games.empty()) {
-        ImGui::TextDisabled("None of your games have patches yet.");
+        ImGui::TextDisabled(tr("None of your games have patches yet."));
     }
     float w = ImGui::GetContentRegionAvail().x;
     float btn_w = 120 * s;
@@ -7821,9 +7821,9 @@ void DrawPatchesTab(int &tex_budget)
         int on = EnabledPatchCount(e->title_id);
         int online = OnlinePatchCount(e->title_id);
         std::string sub = FormatTitleId(e->title_id) + "  -  " +
-                          string_format("%d installed, %d available online",
+                          string_format(tr("%d installed, %d available online"),
                                         installed, online);
-        std::string note = on ? string_format(ICON_FA_WRENCH "  %d on", on)
+        std::string note = on ? string_format(tr(ICON_FA_WRENCH "  %d on"), on)
                               : installed ? std::string("all off") : std::string();
         ImVec2 p = ImGui::GetCursorScreenPos();
         if (DashRow(*e, sub, note, w - btn_w - 12 * s, tex_budget, false,
@@ -7835,7 +7835,7 @@ void DrawPatchesTab(int &tex_budget)
         ImGui::SetCursorScreenPos(
             ImVec2(p.x + w - btn_w, p.y + (q.y - p.y - 32 * s) / 2));
         ImGui::PushID(e->path.c_str());
-        if (DashButton("Manage", T().glass, T().white, ImVec2(btn_w, 32 * s))) {
+        if (DashButton(tr("Manage"), T().glass, T().white, ImVec2(btn_w, 32 * s))) {
             OpenPatchesFor(*e);
         }
         ImGui::PopID();
@@ -7881,89 +7881,89 @@ void DrawDashSettingsTab()
     };
 
     card(0, "##picture", [&] {
-        DashLabel("Picture");
-        DashTitle("Display and upscaling");
-        label("Internal resolution");
+        DashLabel(tr("Picture"));
+        DashTitle(tr("Display and upscaling"));
+        label(tr("Internal resolution"));
         int scale = std::clamp(g_config.display.quality.surface_scale, 1, 10) - 1;
         if (ImGui::Combo("##scale", &scale,
-                         "1x (native)\0" "2x\0" "3x\0" "4x\0" "5x\0" "6x\0" "7x\0"
-                         "8x\0" "9x\0" "10x\0")) {
+                         tr_items("1x (native)\0" "2x\0" "3x\0" "4x\0" "5x\0" "6x\0" "7x\0"
+                         "8x\0" "9x\0" "10x\0"))) {
             nv2a_set_surface_scale_factor(scale + 1);
         }
-        ImGui::TextDisabled("The heaviest setting. 1x-2x with FSR is fast and sharp.");
-        ImGui::Checkbox("Dynamic resolution (experimental)",
+        ImGui::TextDisabled(tr("The heaviest setting. 1x-2x with FSR is fast and sharp."));
+        ImGui::Checkbox(tr("Dynamic resolution (experimental)"),
                         &g_config.display.quality.dynamic_resolution);
         ImGui::SetItemTooltip(
-            "Lowers the resolution while a game runs below its usual frame "
+            tr("Lowers the resolution while a game runs below its usual frame "
             "rate, and raises it again when there's room. If lowering doesn't "
-            "help (the slowdown isn't about resolution), it changes back.");
+            "help (the slowdown isn't about resolution), it changes back."));
         if (int user = DynamicResUserScale()) {
-            ImGui::TextDisabled("Now %dx; your setting is %dx.",
+            ImGui::TextDisabled(tr("Now %dx; your setting is %dx."),
                                 g_config.display.quality.surface_scale, user);
         }
-        label("Upscaling filter");
+        label(tr("Upscaling filter"));
         ImGui::Combo("##filter", &g_config.display.filtering,
-                     "Linear\0Nearest\0AMD FidelityFX FSR 1.0\0Bicubic (Catmull-Rom)\0"
+                     tr_items("Linear\0Nearest\0AMD FidelityFX FSR 1.0\0Bicubic (Catmull-Rom)\0"
                      "Lanczos\0Snapdragon GSR 1\0NVIDIA Image Scaling (NIS)\0"
-                     "NVIDIA RTX Video (AI)\0");
+                     "NVIDIA RTX Video (AI)\0"));
         if (g_config.display.filtering == CONFIG_DISPLAY_FILTERING_RTX) {
-            ImGui::TextWrapped("RTX Video: %s", RtxVideoStatus());
-            if (DashButton("Check again", T().glass, T().white, ImVec2(0, 30 * s))) {
+            ImGui::TextWrapped(tr("RTX Video: %s"), RtxVideoStatus());
+            if (DashButton(tr("Check again"), T().glass, T().white, ImVec2(0, 30 * s))) {
                 RtxVideoRetry();
             }
         } else if (g_config.display.filtering >= 2) {
-            label("Sharpening");
+            label(tr("Sharpening"));
             ImGui::SliderFloat("##sharp", &g_config.display.fsr_sharpness, 0.0f, 1.0f,
                                "%.2f");
         }
         ImGui::Dummy(ImVec2(0, 8 * s));
-        ImGui::Checkbox("Performance overlay (F9)",
+        ImGui::Checkbox(tr("Performance overlay (F9)"),
                         &g_config.display.ui.show_perf_overlay);
-        ImGui::Checkbox("\"Preparing shaders\" indicator",
+        ImGui::Checkbox(tr("\"Preparing shaders\" indicator"),
                         &g_config.display.ui.show_shader_indicator);
-        ImGui::SetItemTooltip("Shown in the lower left while a game builds "
-                              "shaders, gone when it's done");
+        ImGui::SetItemTooltip(tr("Shown in the lower left while a game builds "
+                              "shaders, gone when it's done"));
         {
             static int clear_step = 0; // 0 button, 1 confirm, 2 done
             static std::string clear_msg;
             if (clear_step == 0) {
-                if (DashButton(ICON_FA_TRASH "  Clear all shader caches...",
+                if (DashButton(tr(ICON_FA_TRASH "  Clear all shader caches..."),
                                T().glass, T().white, ImVec2(0, 32 * s))) {
                     clear_step = 1;
                 }
-                ImGui::SetItemTooltip("For every game. Single games: right-click "
-                                      "> Clear shader cache");
+                ImGui::SetItemTooltip(tr("For every game. Single games: right-click "
+                                      "> Clear shader cache"));
             } else if (clear_step == 1) {
-                ImGui::TextWrapped("Delete every saved shader for every game? "
+                ImGui::TextWrapped(tr("Delete every saved shader for every game? "
                                    "They're rebuilt as you play, with some "
-                                   "stutter the first time.");
-                if (DashButton("Clear all", T().primary, T().on_primary,
+                                   "stutter the first time."));
+                if (DashButton(tr("Clear all"), T().primary, T().on_primary,
                                ImVec2(0, 30 * s))) {
                     ShaderCacheClearAll(&clear_msg);
                     clear_step = 2;
                 }
                 ImGui::SameLine();
-                if (DashButton("Keep", T().glass, T().white, ImVec2(0, 30 * s))) {
+                if (DashButton(tr("Keep"), T().glass, T().white, ImVec2(0, 30 * s))) {
                     clear_step = 0;
                 }
             } else {
                 ImGui::TextWrapped("%s", clear_msg.c_str());
             }
         }
-        if (DashButton(ICON_FA_GAUGE_HIGH "  Performance capture...", T().glass,
+        if (DashButton(tr(ICON_FA_GAUGE_HIGH "  Performance capture..."), T().glass,
                        T().white, ImVec2(0, 32 * s))) {
             PerfCaptureOpenWindow();
             game_library_window.is_open = false;
         }
-        ImGui::SetItemTooltip("Record a slow or glitchy part of a game and see "
-                              "why (Shift+F9 while playing)");
+        ImGui::SetItemTooltip(tr("Record a slow or glitchy part of a game and see "
+                              "why (Shift+F9 while playing)"));
 
         ImGui::Dummy(ImVec2(0, 14 * s));
-        DashLabel("Console");
-        DashTitle("Video modes");
+        DashLabel(tr("Console"));
+        DashTitle(tr("Video modes"));
         uint32_t flags = 0;
         if (!xbox_eeprom_get_video_flags(&flags)) {
-            ImGui::TextDisabled("Available once the console is running.");
+            ImGui::TextDisabled(tr("Available once the console is running."));
         } else {
             static const struct {
                 const char *label;
@@ -7978,66 +7978,66 @@ void DrawDashSettingsTab()
                     uint32_t nf = v ? (flags | m.flag) : (flags & ~m.flag);
                     if (xbox_eeprom_set_video_flags(nf)) {
                         flags = nf;
-                        xemu_queue_notification("Video modes saved. Games use "
-                                                "them the next time they start.");
+                        xemu_queue_notification(tr("Video modes saved. Games use "
+                                                "them the next time they start."));
                     } else {
-                        xemu_queue_error_message("Could not save the video modes "
-                                                 "to the EEPROM file");
+                        xemu_queue_error_message(tr("Could not save the video modes "
+                                                 "to the EEPROM file"));
                     }
                 }
             }
-            ImGui::TextDisabled("Same as the Xbox dashboard's video settings. "
-                                "Games read them when they start.");
+            ImGui::TextDisabled(tr("Same as the Xbox dashboard's video settings. "
+                                "Games read them when they start."));
         }
     });
     if (!two_col) {
         return; // the second card only fits side by side
     }
     card(1, "##general", [&] {
-        DashLabel("General");
-        DashTitle("Library and play");
-        ImGui::Checkbox("Resume where you left off",
+        DashLabel(tr("General"));
+        DashTitle(tr("Library and play"));
+        ImGui::Checkbox(tr("Resume where you left off"),
                         &g_config.general.library.auto_resume);
-        ImGui::TextDisabled("Save a resume point whenever you leave a game.");
-        ImGui::Checkbox("Show this dashboard when xemu starts",
+        ImGui::TextDisabled(tr("Save a resume point whenever you leave a game."));
+        ImGui::Checkbox(tr("Show this dashboard when xemu starts"),
                         &g_config.general.library.show_on_startup);
-        ImGui::Checkbox("Show what I'm playing on Discord",
+        ImGui::Checkbox(tr("Show what I'm playing on Discord"),
                         &g_config.general.discord_presence);
-        ImGui::Checkbox("Animations and moving background",
+        ImGui::Checkbox(tr("Animations and moving background"),
                         &g_config.display.ui.use_animations);
-        label("Library style");
+        label(tr("Library style"));
         ImGui::Combo("##style", &g_config.general.library.style,
-                     "Dashboard (tabs)\0Classic (library window)\0"
-                     "Blades (sliding panels)\0Metro (live tiles)\0");
-        label("Dashboard theme");
+                     tr_items("Dashboard (tabs)\0Classic (library window)\0"
+                     "Blades (sliding panels)\0Metro (live tiles)\0"));
+        label(tr("Dashboard theme"));
         ImGui::Combo("##theme", &g_config.general.library.theme,
-                     "Neon (dark, cyan and magenta)\0Green (xemu)\0");
-        label("Home screen covers");
+                     tr_items("Neon (dark, cyan and magenta)\0Green (xemu)\0"));
+        label(tr("Home screen covers"));
         ImGui::Combo("##covers", &g_config.general.library.home_covers,
-                     "3D game cases\0Flat\0");
-        ImGui::TextDisabled("Your own 3D art: covers\\<title ID>-3d.png");
+                     tr_items("3D game cases\0Flat\0"));
+        ImGui::TextDisabled(tr("Your own 3D art: covers\\<title ID>-3d.png"));
         ImGui::Dummy(ImVec2(0, 10 * s));
-        if (DashButton(ICON_FA_FOLDER_OPEN "  Game folders...", T().glass, T().white,
+        if (DashButton(tr(ICON_FA_FOLDER_OPEN "  Game folders..."), T().glass, T().white,
                        ImVec2(0, 36 * s))) {
             g_open_folders_popup = true;
         }
         ImGui::SameLine();
-        if (DashButton(ICON_FA_CHECK "  Check setup...", T().glass, T().white,
+        if (DashButton(tr(ICON_FA_CHECK "  Check setup..."), T().glass, T().white,
                        ImVec2(0, 36 * s))) {
             g_setup_open = true;
         }
         ImGui::SameLine();
-        if (DashButton(ICON_FA_IMAGE "  Get covers", T().glass, T().white,
+        if (DashButton(tr(ICON_FA_IMAGE "  Get covers"), T().glass, T().white,
                        ImVec2(0, 36 * s))) {
             StartCoverDownload();
         }
         ImGui::Dummy(ImVec2(0, 14 * s));
-        DashLabel("Everything else");
-        DashTitle("All settings");
-        ImGui::TextDisabled("Input, audio, network, system files, snapshots and "
-                            "more.");
+        DashLabel(tr("Everything else"));
+        DashTitle(tr("All settings"));
+        ImGui::TextDisabled(tr("Input, audio, network, system files, snapshots and "
+                            "more."));
         ImGui::Dummy(ImVec2(0, 4 * s));
-        if (DashButton(ICON_FA_GEAR "  Open all settings", T().primary, T().on_primary,
+        if (DashButton(tr(ICON_FA_GEAR "  Open all settings"), T().primary, T().on_primary,
                        ImVec2(0, 38 * s))) {
             GameLibraryShowAllSettings();
         }
@@ -8052,14 +8052,14 @@ void DrawClassicHeader()
     ImGui::SameLine();
     ImGui::PushFont(FontOr(g_font_mgr.m_menu_font_medium));
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 5 * s);
-    ImGui::TextUnformatted("Game Library");
+    ImGui::TextUnformatted(tr("Game Library"));
     ImGui::PopFont();
     ImGui::SameLine();
     if (g_scan_running) {
-        ImGui::TextDisabled("Scanning... %d / %d", (int)g_scan_done,
+        ImGui::TextDisabled(tr("Scanning... %d / %d"), (int)g_scan_done,
                             (int)g_scan_total);
     } else {
-        ImGui::TextDisabled("%d games", (int)g_entries.size());
+        ImGui::TextDisabled(tr("%d games"), (int)g_entries.size());
     }
     const char *dvd = g_config.sys.files.dvd_path;
     const char *close_label = (dvd && dvd[0]) ? ICON_FA_XMARK "  Back to game"
@@ -8075,13 +8075,13 @@ void DrawClassicHeader()
         g_config.general.library.style = CONFIG_GENERAL_LIBRARY_STYLE_DASHBOARD;
         SwitchTab(kTabHome);
     }
-    ImGui::SetItemTooltip("Switch to the tabbed dashboard (also in Games > "
-                          "Library Style)");
+    ImGui::SetItemTooltip(tr("Switch to the tabbed dashboard (also in Games > "
+                          "Library Style)"));
     ImGui::SameLine();
     if (ImGui::Button(close_label)) {
         game_library_window.is_open = false;
     }
-    ImGui::SetItemTooltip("Esc or B");
+    ImGui::SetItemTooltip(tr("Esc or B"));
     ImGui::Dummy(ImVec2(0, 2 * s));
 }
 
@@ -8096,7 +8096,7 @@ void DrawLibraryTab(int &tex_budget)
     if (ImGui::IsWindowAppearing()) {
         ImGui::SetKeyboardFocusHere();
     }
-    ImGui::InputTextWithHint("##search", ICON_FA_MAGNIFYING_GLASS "  Search by name or title ID",
+    ImGui::InputTextWithHint("##search", tr(ICON_FA_MAGNIFYING_GLASS "  Search by name or title ID"),
                              &g_search);
     ImGui::SameLine();
     bool grid = g_config.general.library.view == CONFIG_GENERAL_LIBRARY_VIEW_GRID;
@@ -8112,33 +8112,33 @@ void DrawLibraryTab(int &tex_budget)
         ImGui::SetItemTooltip("%s", tip);
         return pressed;
     };
-    if (toggle(ICON_FA_TABLE_CELLS, grid, "Grid view")) {
+    if (toggle(ICON_FA_TABLE_CELLS, grid, tr("Grid view"))) {
         g_config.general.library.view = CONFIG_GENERAL_LIBRARY_VIEW_GRID;
     }
     ImGui::SameLine(0, 2 * s);
-    if (toggle(ICON_FA_LIST, !grid, "List view")) {
+    if (toggle(ICON_FA_LIST, !grid, tr("List view"))) {
         g_config.general.library.view = CONFIG_GENERAL_LIBRARY_VIEW_LIST;
     }
     ImGui::SameLine();
-    if (toggle(ICON_FA_STAR, g_favorites_only, "Show favorites only")) {
+    if (toggle(ICON_FA_STAR, g_favorites_only, tr("Show favorites only"))) {
         g_favorites_only = !g_favorites_only;
     }
     ImGui::SameLine(0, 2 * s);
-    if (toggle("Online", g_online_only,
-               "Show only games playable online with Insignia")) {
+    if (toggle(tr("Online"), g_online_only,
+               tr("Show only games playable online with Insignia"))) {
         g_online_only = !g_online_only;
     }
     ImGui::SameLine(0, 2 * s);
     {
         int active = (g_filter_compat != 0) + (g_filter_played != 0);
-        std::string label = active ? string_format(ICON_FA_SLIDERS "  Filter (%d)", active)
+        std::string label = active ? string_format(tr(ICON_FA_SLIDERS "  Filter (%d)"), active)
                                    : std::string(ICON_FA_SLIDERS "  Filter");
         if (toggle(label.c_str(), active > 0,
-                   "Filter by compatibility rating or whether you've played it")) {
+                   tr("Filter by compatibility rating or whether you've played it"))) {
             ImGui::OpenPopup("##libfilter");
         }
         if (ImGui::BeginPopup("##libfilter")) {
-            ImGui::TextDisabled("Compatibility (xemu.app)");
+            ImGui::TextDisabled(tr("Compatibility (xemu.app)"));
             const char *compat[] = { "Any", "Playable or Perfect",
                                      "Has problems (Starts, Intro, Broken)",
                                      "Not rated yet" };
@@ -8148,7 +8148,7 @@ void DrawLibraryTab(int &tex_budget)
                 }
             }
             ImGui::Separator();
-            ImGui::TextDisabled("Played");
+            ImGui::TextDisabled(tr("Played"));
             const char *played[] = { "Any", "Played", "Never played" };
             for (int i = 0; i < 3; i++) {
                 ImGui::PushID(100 + i);
@@ -8158,7 +8158,7 @@ void DrawLibraryTab(int &tex_budget)
                 ImGui::PopID();
             }
             ImGui::Separator();
-            if (ImGui::Button("Clear filters")) {
+            if (ImGui::Button(tr("Clear filters"))) {
                 g_filter_compat = g_filter_played = 0;
                 ImGui::CloseCurrentPopup();
             }
@@ -8166,7 +8166,7 @@ void DrawLibraryTab(int &tex_budget)
         }
     }
     ImGui::SameLine(0, 2 * s);
-    if (ImGui::Button("Insignia")) {
+    if (ImGui::Button(tr("Insignia"))) {
         if (ClassicStyle()) {
             g_open_insignia_popup = true;
         } else {
@@ -8186,53 +8186,53 @@ void DrawLibraryTab(int &tex_budget)
                 ImVec2(mx.x - 4 * s, mn.y + 4 * s), 3.5f * s, col);
         }
     }
-    ImGui::SetItemTooltip("Play original Xbox Live games online again");
+    ImGui::SetItemTooltip(tr("Play original Xbox Live games online again"));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(150 * s);
     ImGui::Combo("##sort", &g_config.general.library.sort,
-                 "Sort: Title\0Sort: Last played\0Sort: Play time\0"
-                 "Sort: Compatibility\0");
+                 tr_items("Sort: Title\0Sort: Last played\0Sort: Play time\0"
+                 "Sort: Compatibility\0"));
     if (grid) {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(110 * s);
         ImGui::SliderFloat("##size", &g_config.general.library.tile_size, 0.0f,
                            1.0f, "");
-        ImGui::SetItemTooltip("Tile size");
+        ImGui::SetItemTooltip(tr("Tile size"));
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(g_covers_running);
     if (ImGui::Button(g_covers_running
                           ? string_format("Covers %d/%d", (int)g_covers_done,
                                           (int)g_covers_total).c_str()
-                          : "Get covers")) {
+                          : tr("Get covers"))) {
         StartCoverDownload();
     }
     ImGui::EndDisabled();
-    ImGui::SetItemTooltip("Download box art for games without a cover, from "
+    ImGui::SetItemTooltip(tr("Download box art for games without a cover, from "
                           "xemu's game database (xemu-project/xdb on GitHub). "
-                          "Your own covers always take priority.");
+                          "Your own covers always take priority."));
     ImGui::SameLine(0, 2 * s);
-    if (ImGui::Button("+ Add game")) {
+    if (ImGui::Button(tr("+ Add game"))) {
         AddGameFile();
     }
-    ImGui::SetItemTooltip("Add a single disc image to the library");
+    ImGui::SetItemTooltip(tr("Add a single disc image to the library"));
     ImGui::SameLine(0, 2 * s);
-    if (ImGui::Button(ICON_FA_FOLDER_OPEN "  Folders")) {
+    if (ImGui::Button(tr(ICON_FA_FOLDER_OPEN "  Folders"))) {
         g_open_folders_popup = true;
     }
-    ImGui::SetItemTooltip("%d game folder%s", (int)folders.size(),
+    ImGui::SetItemTooltip(tr("%d game folder%s"), (int)folders.size(),
                           folders.size() == 1 ? "" : "s");
     ImGui::SameLine(0, 2 * s);
     ImGui::BeginDisabled(g_scan_running);
-    if (ImGui::Button(ICON_FA_ARROWS_ROTATE "  Scan folders")) {
+    if (ImGui::Button(tr(ICON_FA_ARROWS_ROTATE "  Scan folders"))) {
         game_library_window.Rescan();
     }
     ImGui::EndDisabled();
-    ImGui::SetItemTooltip("Look for new or removed games and covers");
+    ImGui::SetItemTooltip(tr("Look for new or removed games and covers"));
     if (!ClassicStyle()) { // Classic shows the count in its title row
         ImGui::SameLine();
         ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("%d games", (int)g_entries.size());
+        ImGui::TextDisabled(tr("%d games"), (int)g_entries.size());
     }
     ImGui::Dummy(ImVec2(0, 4 * s));
 
@@ -8257,10 +8257,10 @@ void DrawLibraryTab(int &tex_budget)
     if (items.empty()) {
         ImGui::Dummy(ImVec2(0, 20 * s));
         ImGui::TextDisabled(g_entries.empty() && !g_scan_running
-                                ? "No disc images found in your game folders."
-                                : "No games match.");
+                                ? tr("No disc images found in your game folders.")
+                                : tr("No games match."));
         if ((g_filter_compat || g_filter_played) && !g_entries.empty() &&
-            ImGui::Button("Clear filters")) {
+            ImGui::Button(tr("Clear filters"))) {
             g_filter_compat = g_filter_played = 0;
         }
     }
@@ -8424,7 +8424,7 @@ void GameLibraryWindow::Launch(const std::string &path)
         g_leave_action = LeaveAction::Launch;
         g_leave_launch_path = path;
         is_open = false;
-        xemu_queue_notification("Saving a resume point...");
+        xemu_queue_notification(tr("Saving a resume point..."));
         return;
     }
     LaunchNow(path);
@@ -8837,8 +8837,8 @@ void DrawMetroStart(int &tex_budget)
         }
     }
     if (games.empty()) {
-        ImGui::TextDisabled("No games yet.");
-        if (DashButton(ICON_FA_FOLDER_OPEN "  Add a games folder", T().glass,
+        ImGui::TextDisabled(tr("No games yet."));
+        if (DashButton(tr(ICON_FA_FOLDER_OPEN "  Add a games folder"), T().glass,
                        T().white, ImVec2(0, 34 * s))) {
             AddGameFolder();
         }
@@ -8885,9 +8885,9 @@ void DrawMetroStart(int &tex_budget)
         LibraryEntry *e = games[i];
         if (i == recent_n && recent_n > 0) {
             ImGui::Dummy(ImVec2(0, 6 * s));
-            ImGui::TextDisabled("ALL GAMES");
+            ImGui::TextDisabled(tr("ALL GAMES"));
         } else if (i == 0 && recent_n > 0) {
-            ImGui::TextDisabled("RECENTLY PLAYED");
+            ImGui::TextDisabled(tr("RECENTLY PLAYED"));
         }
         ImGui::PushID(e->path.c_str());
         bool selected = e == cur;
@@ -8966,11 +8966,11 @@ void DrawMetroStart(int &tex_budget)
         y += fh + 6 * s;
     };
     if (cur->valid) {
-        line("Title ID", FormatTitleId(cur->title_id));
-        line("Region", FormatRegion(cur->region));
+        line(tr("Title ID"), FormatTitleId(cur->title_id));
+        line(tr("Region"), FormatRegion(cur->region));
     }
-    line("Play time", FormatPlayTime(st.play_seconds));
-    line("Last played", FormatLastPlayed(st.last_played));
+    line(tr("Play time"), FormatPlayTime(st.play_seconds));
+    line(tr("Last played"), FormatLastPlayed(st.last_played));
     CompatStatus mcs = CompatFor(*cur);
     if (mcs != CompatStatus::None) {
         dl->AddText(ImVec2(dx, y), ImGui::GetColorU32(ImGuiCol_TextDisabled),
@@ -8982,20 +8982,20 @@ void DrawMetroStart(int &tex_budget)
         y += fh + 6 * s;
     }
     if (SupportsOnline(*cur)) {
-        line("Online", "Plays on Insignia");
+        line(tr("Online"), tr("Plays on Insignia"));
     }
     int states = (int)SnapshotsFor(*cur).size();
     if (states) {
-        line("Save states", string_format("%d", states));
+        line(tr("Save states"), string_format("%d", states));
     }
     y += 10 * s;
     ImGui::SetCursorScreenPos(ImVec2(dx, y));
-    if (DashButton(ICON_FA_PLAY "  Play", T().primary, T().on_primary,
+    if (DashButton(tr(ICON_FA_PLAY "  Play"), T().primary, T().on_primary,
                    ImVec2(120 * s, 34 * s))) {
         game_library_window.Launch(cur->path);
     }
     ImGui::SameLine(0, 10 * s);
-    if (DashButton(ICON_FA_WRENCH "  Patches", T().glass, T().white,
+    if (DashButton(tr(ICON_FA_WRENCH "  Patches"), T().glass, T().white,
                    ImVec2(0, 34 * s))) {
         OpenPatchesFor(*cur);
     }
@@ -9222,12 +9222,12 @@ void GameLibraryWindow::Draw()
         ImGui::PopTextWrapPos();
         ImGui::Dummy(ImVec2(0, 10 * s));
         ImGui::SetCursorPosX(x0 + (w - 240 * s) / 2);
-        if (ImGui::Button(ICON_FA_FOLDER_OPEN "  Add a games folder",
+        if (ImGui::Button(tr(ICON_FA_FOLDER_OPEN "  Add a games folder"),
                           ImVec2(240 * s, 36 * s))) {
             AddGameFolder();
         }
         ImGui::SetCursorPosX(x0 + (w - 240 * s) / 2);
-        if (ImGui::Button("Add a single game...", ImVec2(240 * s, 0))) {
+        if (ImGui::Button(tr("Add a single game..."), ImVec2(240 * s, 0))) {
             AddGameFile();
         }
         DrawFoldersPopup();
@@ -9376,7 +9376,7 @@ bool xemu_hud_intercept_quit(void)
         return false;
     }
     g_leave_action = LeaveAction::Quit;
-    xemu_queue_notification("Saving a resume point...");
+    xemu_queue_notification(tr("Saving a resume point..."));
     return true;
 }
 
@@ -9386,7 +9386,7 @@ bool GameLibraryInterceptEject(void)
         return false;
     }
     g_leave_action = LeaveAction::Eject;
-    xemu_queue_notification("Saving a resume point...");
+    xemu_queue_notification(tr("Saving a resume point..."));
     return true;
 }
 

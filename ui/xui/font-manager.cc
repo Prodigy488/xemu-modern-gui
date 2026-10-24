@@ -18,6 +18,11 @@
 //
 #include "font-manager.hh"
 #include "viewport-manager.hh"
+#include "i18n.hh"
+
+#include <cstdio>
+#include <string>
+#include <vector>
 
 #include "data/Roboto-Medium.ttf.h"
 #include "data/RobotoCondensed-Regular.ttf.h"
@@ -32,14 +37,72 @@ FontManager::FontManager()
     m_last_pixel_density = 1;
 }
 
+// Latin with accents (Western and Central Europe), Cyrillic, and
+// punctuation like dashes, quotes and the ellipsis. Roboto has these.
+static const ImWchar kTextRanges[] = {
+    0x0020, 0x00FF, 0x0100, 0x017F, 0x0400, 0x045F, 0x2010, 0x2027,
+    0x2030, 0x203A, 0x20AC, 0x20AC, 0x2122, 0x2122, 0x2190, 0x2193, 0,
+};
+
+// Japanese, Chinese and Korean come from a font Windows already has, with
+// only the characters the translation uses (plus kana), to keep the font
+// texture small.
+static std::vector<unsigned char> s_cjk_data;
+static std::string s_cjk_path;
+
+static bool LoadCjkFont(int *font_no)
+{
+    std::string path = XuiLanguageFontPath(font_no);
+    if (path.empty()) {
+        return false;
+    }
+    if (path == s_cjk_path && !s_cjk_data.empty()) {
+        return true;
+    }
+    s_cjk_data.clear();
+    s_cjk_path = path;
+    FILE *f = fopen(path.c_str(), "rb");
+    if (!f) {
+        return false;
+    }
+    unsigned char buf[1 << 16];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+        s_cjk_data.insert(s_cjk_data.end(), buf, buf + n);
+    }
+    fclose(f);
+    return !s_cjk_data.empty();
+}
+
 void FontManager::Rebuild()
 {
     ImGuiIO &io = ImGui::GetIO();
 
     io.Fonts->Clear();
+    XuiLanguageUpdate();
+    m_language = XuiLanguageCode();
 
     float scale = g_viewport_mgr.m_scale;
     float pixel_density = g_viewport_mgr.m_pixel_density;
+
+    int cjk_font_no = 0;
+    bool cjk = XuiLanguageScript() && LoadCjkFont(&cjk_font_no);
+    const ImWchar *cjk_ranges = (const ImWchar *)XuiLanguageGlyphRanges();
+    auto merge_cjk = [&](float size) {
+        if (!cjk || !cjk_ranges[0]) {
+            return;
+        }
+        ImFontConfig c;
+        c.FontDataOwnedByAtlas = false;
+        c.RasterizerDensity = pixel_density;
+        c.MergeMode = true;
+        c.FontNo = cjk_font_no;
+        c.OversampleH = 1; // plenty for these, and half the texture
+        c.OversampleV = 1;
+        io.Fonts->AddFontFromMemoryTTF(s_cjk_data.data(),
+                                       (int)s_cjk_data.size(), size * scale,
+                                       &c, cjk_ranges);
+    };
 
     {
         ImFontConfig config;
@@ -47,7 +110,7 @@ void FontManager::Rebuild()
         config.RasterizerDensity = pixel_density;
         m_default_font = io.Fonts->AddFontFromMemoryTTF(
             (void *)Roboto_Medium_data, Roboto_Medium_size,
-            16.0f * scale, &config);
+            16.0f * scale, &config, kTextRanges);
         {
             // Icons in the regular UI font too (game library toolbar etc.)
             ImFontConfig icon_config;
@@ -63,9 +126,11 @@ void FontManager::Rebuild()
                 font_awesome_6_1_1_solid_min_size, 14.0f * scale,
                 &icon_config, fa_ranges);
         }
+        merge_cjk(16.0f);
         m_menu_font_small = io.Fonts->AddFontFromMemoryTTF(
             (void *)RobotoCondensed_Regular_data, RobotoCondensed_Regular_size,
-            22.0f * scale, &config);
+            22.0f * scale, &config, kTextRanges);
+        merge_cjk(22.0f);
     }
     {
         ImFontConfig config;
@@ -86,10 +151,12 @@ void FontManager::Rebuild()
         config.RasterizerDensity = pixel_density;
         m_menu_font_medium = io.Fonts->AddFontFromMemoryTTF(
             (void *)RobotoCondensed_Regular_data, RobotoCondensed_Regular_size,
-            26.0f * scale, &config);
+            26.0f * scale, &config, kTextRanges);
+        merge_cjk(26.0f);
         m_menu_font = io.Fonts->AddFontFromMemoryTTF(
             (void *)RobotoCondensed_Regular_data, RobotoCondensed_Regular_size,
-            34.0f * scale, &config);
+            34.0f * scale, &config, kTextRanges);
+        merge_cjk(34.0f);
     }
     {
         ImFontConfig config;
@@ -120,8 +187,10 @@ void FontManager::Rebuild()
 
 void FontManager::Update()
 {
+    XuiLanguageUpdate();
     if (g_viewport_mgr.m_scale != m_last_viewport_scale ||
-        g_viewport_mgr.m_pixel_density != m_last_pixel_density) {
+        g_viewport_mgr.m_pixel_density != m_last_pixel_density ||
+        m_language != XuiLanguageCode()) {
         Rebuild();
         m_last_viewport_scale = g_viewport_mgr.m_scale;
         m_last_pixel_density = g_viewport_mgr.m_pixel_density;

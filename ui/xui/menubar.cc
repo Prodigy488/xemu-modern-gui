@@ -116,67 +116,67 @@ void ShowMainMenu()
 
     if (ImGui::BeginMainMenuBar())
     {
-        if (ImGui::BeginMenu("Games"))
+        if (ImGui::BeginMenu(tr("Games")))
         {
-            if (ImGui::MenuItem("Game Library", SHORTCUT_MENU_TEXT(L))) {
+            if (ImGui::MenuItem(tr("Game Library"), SHORTCUT_MENU_TEXT(L))) {
                 game_library_window.Open();
             }
-            if (ImGui::MenuItem("Scan Folders")) {
+            if (ImGui::MenuItem(tr("Scan Folders"))) {
                 game_library_window.Rescan();
             }
-            if (ImGui::MenuItem("Insignia (Play Online)...")) {
+            if (ImGui::MenuItem(tr("Insignia (Play Online)..."))) {
                 game_library_window.OpenInsignia();
             }
-            if (ImGui::MenuItem("Download Covers")) {
+            if (ImGui::MenuItem(tr("Download Covers"))) {
                 game_library_window.DownloadCovers();
             }
-            if (ImGui::MenuItem("Xbox Hard Drive...")) {
+            if (ImGui::MenuItem(tr("Xbox Hard Drive..."))) {
                 XboxExplorerOpenWindow();
             }
-            if (ImGui::MenuItem("Download Patches")) {
+            if (ImGui::MenuItem(tr("Download Patches"))) {
                 game_library_window.DownloadPatches();
             }
-            if (ImGui::MenuItem("Check for New Patches")) {
+            if (ImGui::MenuItem(tr("Check for New Patches"))) {
                 game_library_window.CheckNewPatches();
             }
-            if (ImGui::MenuItem("Add Game...")) {
+            if (ImGui::MenuItem(tr("Add Game..."))) {
                 game_library_window.AddGame();
             }
-            if (ImGui::MenuItem("Manage Folders...")) {
+            if (ImGui::MenuItem(tr("Manage Folders..."))) {
                 game_library_window.OpenFolderManager();
             }
-            if (ImGui::BeginMenu("Library Style")) {
+            if (ImGui::BeginMenu(tr("Library Style"))) {
                 int &style = g_config.general.library.style;
-                if (ImGui::MenuItem("Dashboard", NULL,
+                if (ImGui::MenuItem(tr("Dashboard"), NULL,
                                     style == CONFIG_GENERAL_LIBRARY_STYLE_DASHBOARD)) {
                     style = CONFIG_GENERAL_LIBRARY_STYLE_DASHBOARD;
                     game_library_window.Open();
                 }
-                if (ImGui::MenuItem("Classic", NULL,
+                if (ImGui::MenuItem(tr("Classic"), NULL,
                                     style == CONFIG_GENERAL_LIBRARY_STYLE_CLASSIC)) {
                     style = CONFIG_GENERAL_LIBRARY_STYLE_CLASSIC;
                     game_library_window.Open();
                 }
-                if (ImGui::MenuItem("Blades", NULL,
+                if (ImGui::MenuItem(tr("Blades"), NULL,
                                     style == CONFIG_GENERAL_LIBRARY_STYLE_BLADES)) {
                     style = CONFIG_GENERAL_LIBRARY_STYLE_BLADES;
                     game_library_window.Open();
                 }
-                if (ImGui::MenuItem("Metro", NULL,
+                if (ImGui::MenuItem(tr("Metro"), NULL,
                                     style == CONFIG_GENERAL_LIBRARY_STYLE_METRO)) {
                     style = CONFIG_GENERAL_LIBRARY_STYLE_METRO;
                     game_library_window.Open();
                 }
                 ImGui::Separator();
-                ImGui::TextDisabled("Dashboard theme");
+                ImGui::TextDisabled(tr("Dashboard theme"));
                 int &theme = g_config.general.library.theme;
-                if (ImGui::MenuItem("Neon", NULL,
+                if (ImGui::MenuItem(tr("Neon"), NULL,
                                     theme == CONFIG_GENERAL_LIBRARY_THEME_NEON)) {
                     theme = CONFIG_GENERAL_LIBRARY_THEME_NEON;
                     style = CONFIG_GENERAL_LIBRARY_STYLE_DASHBOARD;
                     game_library_window.Open();
                 }
-                if (ImGui::MenuItem("Green", NULL,
+                if (ImGui::MenuItem(tr("Green"), NULL,
                                     theme == CONFIG_GENERAL_LIBRARY_THEME_GREEN)) {
                     theme = CONFIG_GENERAL_LIBRARY_THEME_GREEN;
                     style = CONFIG_GENERAL_LIBRARY_STYLE_DASHBOARD;
@@ -187,9 +187,9 @@ void ShowMainMenu()
             ImGui::Separator();
             auto recent = game_library_window.GetRecentGames(8);
             if (recent.empty()) {
-                ImGui::MenuItem("No recently played games", NULL, false, false);
+                ImGui::MenuItem(tr("No recently played games"), NULL, false, false);
             } else {
-                ImGui::TextDisabled("Recently played");
+                ImGui::TextDisabled(tr("Recently played"));
                 for (auto &r : recent) {
                     ImGui::PushID(r.path.c_str());
                     if (ImGui::MenuItem(r.title.c_str())) {
@@ -201,15 +201,15 @@ void ShowMainMenu()
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu("Machine"))
+        if (ImGui::BeginMenu(tr("Machine")))
         {
-            if (ImGui::MenuItem(running ? "Pause" : "Resume", SHORTCUT_MENU_TEXT(P))) ActionTogglePause();
-            if (ImGui::MenuItem("Screenshot", "F12")) ActionScreenshot();
+            if (ImGui::MenuItem(running ? tr("Pause") : tr("Resume"), SHORTCUT_MENU_TEXT(P))) ActionTogglePause();
+            if (ImGui::MenuItem(tr("Screenshot"), "F12")) ActionScreenshot();
 
-            if (ImGui::BeginMenu("Snapshot")) {
-                if (ImGui::MenuItem("Create Snapshot")) {
+            if (ImGui::BeginMenu(tr("Snapshot"))) {
+                if (ImGui::MenuItem(tr("Create Snapshot"))) {
                     xemu_snapshots_save(NULL, NULL);
-                    xemu_queue_notification("Created new snapshot");
+                    xemu_queue_notification(tr("Created new snapshot"));
                 }
 
                 for (int i = 0; i < 4; ++i) {
@@ -250,21 +250,21 @@ void ShowMainMenu()
 
             ImGui::Separator();
 
-            if (ImGui::MenuItem("Eject Disc", SHORTCUT_MENU_TEXT(E))) ActionEjectDisc();
-            if (ImGui::MenuItem("Load Disc...", SHORTCUT_MENU_TEXT(O))) ActionLoadDisc();
+            if (ImGui::MenuItem(tr("Eject Disc"), SHORTCUT_MENU_TEXT(E))) ActionEjectDisc();
+            if (ImGui::MenuItem(tr("Load Disc..."), SHORTCUT_MENU_TEXT(O))) ActionLoadDisc();
 
             ImGui::Separator();
 
-            if (ImGui::MenuItem("Settings...")) g_main_menu.ShowSettings();
+            if (ImGui::MenuItem(tr("Settings..."))) g_main_menu.ShowSettings();
 
             ImGui::Separator();
 
-            if (ImGui::MenuItem("Reset", SHORTCUT_MENU_TEXT(R))) ActionReset();
-            if (ImGui::MenuItem("Exit", SHORTCUT_MENU_TEXT(Q))) ActionShutdown();
+            if (ImGui::MenuItem(tr("Reset"), SHORTCUT_MENU_TEXT(R))) ActionReset();
+            if (ImGui::MenuItem(tr("Exit"), SHORTCUT_MENU_TEXT(Q))) ActionShutdown();
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu("View"))
+        if (ImGui::BeginMenu(tr("View")))
         {
             int ui_scale_idx;
             if (g_config.display.ui.auto_scale) {
@@ -274,10 +274,10 @@ void ShowMainMenu()
                 if (ui_scale_idx < 1) ui_scale_idx = 1;
                 else if (ui_scale_idx > 2) ui_scale_idx = 2;
             }
-            if (ImGui::Combo("UI Scale", &ui_scale_idx,
-                             "Auto\0"
+            if (ImGui::Combo(tr("UI Scale"), &ui_scale_idx,
+                             tr_items("Auto\0"
                              "1x\0"
-                             "2x\0")) {
+                             "2x\0"))) {
                 if (ui_scale_idx == 0) {
                     g_config.display.ui.auto_scale = true;
                 } else {
@@ -286,7 +286,7 @@ void ShowMainMenu()
                 }
             }
 
-            ImGui::Combo("Backend", &g_config.display.renderer,
+            ImGui::Combo(tr("Backend"), &g_config.display.renderer,
                  "Null\0"
                  "OpenGL\0"
 #ifdef CONFIG_VULKAN
@@ -295,8 +295,8 @@ void ShowMainMenu()
                 );
 
             int rendering_scale = nv2a_get_surface_scale_factor() - 1;
-            if (ImGui::Combo("Int. Resolution Scale", &rendering_scale,
-                             "1x\0"
+            if (ImGui::Combo(tr("Int. Resolution Scale"), &rendering_scale,
+                             tr_items("1x\0"
                              "2x\0"
                              "3x\0"
                              "4x\0"
@@ -305,66 +305,66 @@ void ShowMainMenu()
                              "7x\0"
                              "8x\0"
                              "9x\0"
-                             "10x\0")) {
+                             "10x\0"))) {
                 nv2a_set_surface_scale_factor(rendering_scale + 1);
             }
 
-            ImGui::Combo("Display Mode", &g_config.display.ui.fit,
-                         "Center\0Scale\0Stretch\0");
+            ImGui::Combo(tr("Display Mode"), &g_config.display.ui.fit,
+                         tr_items("Center\0Scale\0Stretch\0"));
             ImGui::SameLine();
-            HelpMarker("Controls how the rendered content should be scaled "
-                       "into the window");
-            ImGui::Combo("Filter Method", &g_config.display.filtering,
-                         "Linear\0Nearest\0AMD FSR 1.0\0Bicubic\0"
+            HelpMarker(tr("Controls how the rendered content should be scaled "
+                       "into the window"));
+            ImGui::Combo(tr("Filter Method"), &g_config.display.filtering,
+                         tr_items("Linear\0Nearest\0AMD FSR 1.0\0Bicubic\0"
                          "Lanczos\0Snapdragon GSR\0NVIDIA NIS\0"
-                         "NVIDIA RTX Video (AI)\0");
-            ImGui::Combo("Aspect Ratio", &g_config.display.ui.aspect_ratio,
-                         "Native\0Auto\0""4:3\0""16:9\0");
-            if (ImGui::MenuItem("Fullscreen", "F11",
+                         "NVIDIA RTX Video (AI)\0"));
+            ImGui::Combo(tr("Aspect Ratio"), &g_config.display.ui.aspect_ratio,
+                         tr_items("Native\0Auto\0""4:3\0""16:9\0"));
+            if (ImGui::MenuItem(tr("Fullscreen"), "F11",
                                 xemu_is_fullscreen(), true)) {
                 xemu_toggle_fullscreen();
             }
-            ImGui::MenuItem("Performance Overlay", "F9",
+            ImGui::MenuItem(tr("Performance Overlay"), "F9",
                             &g_config.display.ui.show_perf_overlay);
-            ImGui::MenuItem("Shader Indicator", NULL,
+            ImGui::MenuItem(tr("Shader Indicator"), NULL,
                             &g_config.display.ui.show_shader_indicator);
 
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu("Debug"))
+        if (ImGui::BeginMenu(tr("Debug")))
         {
-            ImGui::MenuItem("Monitor", "~", &monitor_window.is_open);
-            ImGui::MenuItem("Audio", NULL, &apu_window.m_is_open);
-            ImGui::MenuItem("Video", NULL, &video_window.m_is_open);
+            ImGui::MenuItem(tr("Monitor"), "~", &monitor_window.is_open);
+            ImGui::MenuItem(tr("Audio"), NULL, &apu_window.m_is_open);
+            ImGui::MenuItem(tr("Video"), NULL, &video_window.m_is_open);
             ImGui::Separator();
-            if (ImGui::MenuItem("Performance Capture...", "Shift+F9")) {
+            if (ImGui::MenuItem(tr("Performance Capture..."), "Shift+F9")) {
                 PerfCaptureOpenWindow();
             }
 #ifdef CONFIG_RENDERDOC
             if (nv2a_dbg_renderdoc_available()) {
-                ImGui::MenuItem("RenderDoc: Capture", NULL, &g_capture_renderdoc_frame);
+                ImGui::MenuItem(tr("RenderDoc: Capture"), NULL, &g_capture_renderdoc_frame);
             }
 #endif
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu("Help"))
+        if (ImGui::BeginMenu(tr("Help")))
         {
-            if (ImGui::MenuItem("Help", NULL)) {
+            if (ImGui::MenuItem(tr("Help"), NULL)) {
                 SDL_OpenURL("https://xemu.app/docs/getting-started/");
             }
 
-            ImGui::MenuItem("Report Compatibility...", NULL,
+            ImGui::MenuItem(tr("Report Compatibility..."), NULL,
                             &compatibility_reporter_window.is_open);
 
             ShowReportGitHubIssueMenuItem();
 #if defined(_WIN32)
-            ImGui::MenuItem("Check for Updates...", NULL, &update_window.is_open);
+            ImGui::MenuItem(tr("Check for Updates..."), NULL, &update_window.is_open);
 #endif
 
             ImGui::Separator();
-            if (ImGui::MenuItem("About")) g_main_menu.ShowAbout();
+            if (ImGui::MenuItem(tr("About"))) g_main_menu.ShowAbout();
             ImGui::EndMenu();
         }
 

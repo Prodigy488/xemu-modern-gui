@@ -193,7 +193,7 @@ void ShowReportGitHubIssueMenuItem()
         title_available = xemu_get_xbe_info() != nullptr;
     }
 
-    if (ImGui::MenuItem("Report GitHub Title Issue...", NULL, false,
+    if (ImGui::MenuItem(tr("Report GitHub Title Issue..."), NULL, false,
                         title_available)) {
         struct xbe *xbe = xemu_get_xbe_info();
         if (!xbe) {

@@ -18,6 +18,7 @@
 //
 #pragma once
 #include "common.hh"
+#include <string>
 
 #include "IconsFontAwesome6.h"
 #define ICON_BUTTON_A "\xef\xa4\x80"
@@ -36,6 +37,7 @@ public:
     // ImFont *m_big_state_icon_font;
     float m_last_viewport_scale;
     float m_last_pixel_density;
+    std::string m_language; // the fonts were built for
 
     FontManager();
     void Rebuild();

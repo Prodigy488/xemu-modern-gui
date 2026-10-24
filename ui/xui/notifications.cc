@@ -78,7 +78,7 @@ void NotificationManager::Draw()
         ImGui::SetItemDefaultFocus();
         ImGuiStyle &style = ImGui::GetStyle();
         ImGui::SetCursorPosX(ImGui::GetWindowWidth()-(120+2*style.FramePadding.x));
-        if (ImGui::Button("Ok", ImVec2(120, 0))) {
+        if (ImGui::Button(tr("Ok"), ImVec2(120, 0))) {
             ImGui::CloseCurrentPopup();
             free((void*)m_error_queue[0]);
             m_error_queue.pop_front();

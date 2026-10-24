@@ -98,20 +98,20 @@ void CompatibilityReporter::Draw()
 
     if (!is_xbe_identified) {
         ImGui::TextWrapped(
-            "An XBE could not be identified. Please launch an official "
-            "Xbox title to submit a compatibility report.");
+            tr("An XBE could not be identified. Please launch an official "
+            "Xbox title to submit a compatibility report."));
         ImGui::End();
         return;
     }
 
     ImGui::TextWrapped(
-        "If you would like to help improve xemu by submitting a compatibility report for this "
+        tr("If you would like to help improve xemu by submitting a compatibility report for this "
         "title, please select an appropriate playability level, enter a "
         "brief description, then click 'Send'."
         "\n\n"
         "Note: By submitting a report, you acknowledge and consent to "
         "collection, archival, and publication of information as outlined "
-        "in 'Privacy Disclosure' below.");
+        "in 'Privacy Disclosure' below."));
 
     ImGui::Dummy(ImVec2(0.0f, ImGui::GetStyle().WindowPadding.y));
     ImGui::Separator();
@@ -120,9 +120,9 @@ void CompatibilityReporter::Draw()
     ImGui::Columns(2, "", false);
     ImGui::SetColumnWidth(0, ImGui::GetWindowWidth()*0.25);
 
-    ImGui::Text("User Token");
+    ImGui::Text(tr("User Token"));
     ImGui::SameLine();
-    HelpMarker("This is a unique access token used to authorize submission of the report. To request a token, click 'Get Token'.");
+    HelpMarker(tr("This is a unique access token used to authorize submission of the report. To request a token, click 'Get Token'."));
     ImGui::NextColumn();
     float item_width = ImGui::GetColumnWidth()*0.75-20*g_viewport_mgr.m_scale;
     ImGui::SetNextItemWidth(item_width);
@@ -134,16 +134,16 @@ void CompatibilityReporter::Draw()
     }
     ImGui::PopFont();
     ImGui::SameLine();
-    if (ImGui::Button("Get Token")) {
+    if (ImGui::Button(tr("Get Token"))) {
         SDL_OpenURL("https://reports.xemu.app");
     }
     ImGui::NextColumn();
 
-    ImGui::Text("Playability");
+    ImGui::Text(tr("Playability"));
     ImGui::NextColumn();
     ImGui::SetNextItemWidth(item_width);
     if (ImGui::Combo("###PlayabilityRating", &playability,
-        "Broken\0" "Intro/Menus\0" "Starts\0" "Playable\0" "Perfect\0")) {
+        tr_items("Broken\0" "Intro/Menus\0" "Starts\0" "Playable\0" "Perfect\0"))) {
         report.compat_rating = playability_names[playability];
         dirty = true;
     }
@@ -153,13 +153,13 @@ void CompatibilityReporter::Draw()
 
     ImGui::Columns(1);
 
-    ImGui::Text("Description");
+    ImGui::Text(tr("Description"));
     if (ImGui::InputTextMultiline("###desc", description, sizeof(description), ImVec2(-FLT_MIN, ImGui::GetTextLineHeight() * 6), 0)) {
         report.compat_comments = description;
         dirty = true;
     }
 
-    if (ImGui::TreeNode("Report Details")) {
+    if (ImGui::TreeNode(tr("Report Details"))) {
         ImGui::PushFont(g_font_mgr.m_fixed_width_font);
         if (dirty) {
             serialized_report = report.GetSerializedReport();
@@ -170,9 +170,9 @@ void CompatibilityReporter::Draw()
         ImGui::TreePop();
     }
 
-    if (ImGui::TreeNode("Privacy Disclosure (Please read before submission!)")) {
+    if (ImGui::TreeNode(tr("Privacy Disclosure (Please read before submission!)"))) {
         ImGui::TextWrapped(
-            "By volunteering to submit a compatibility report, basic information about your "
+            tr("By volunteering to submit a compatibility report, basic information about your "
             "computer is collected, including: your operating system version, CPU model, "
             "graphics card/driver information, and details about the title which are "
             "extracted from the executable in memory. The contents of this report can be "
@@ -185,7 +185,7 @@ void CompatibilityReporter::Draw()
             "This information will be archived and used to analyze, resolve problems with, "
             "and improve the application. This information may be made publicly visible, "
             "for example: to anyone who wishes to see the playability status of a title, as "
-            "indicated by your report.");
+            "indicated by your report."));
         ImGui::TreePop();
     }
 
@@ -195,9 +195,9 @@ void CompatibilityReporter::Draw()
 
     if (did_send) {
         if (send_result) {
-            ImGui::Text("Sent! Thanks.");
+            ImGui::Text(tr("Sent! Thanks."));
         } else {
-            ImGui::Text("Error: %s (%d)", report.GetResultMessage().c_str(), report.GetResultCode());
+            ImGui::Text(tr("Error: %s (%d)"), report.GetResultMessage().c_str(), report.GetResultCode());
         }
         ImGui::SameLine();
     }
@@ -205,7 +205,7 @@ void CompatibilityReporter::Draw()
     ImGui::SetCursorPosX(ImGui::GetWindowWidth()-(120+10)*g_viewport_mgr.m_scale);
 
     ImGui::SetItemDefaultFocus();
-    if (ImGui::Button("Send", ImVec2(120*g_viewport_mgr.m_scale, 0))) {
+    if (ImGui::Button(tr("Send"), ImVec2(120*g_viewport_mgr.m_scale, 0))) {
         did_send = true;
         send_result = report.Send();
         if (send_result) {

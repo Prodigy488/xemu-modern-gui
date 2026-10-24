@@ -59,56 +59,56 @@ void MainMenuTabView::Draw()
 void MainMenuGeneralView::Draw()
 {
 #if defined(_WIN32)
-    SectionTitle("Updates");
-    Toggle("Check for updates", &g_config.general.updates.check,
-           "Check for updates whenever xemu is opened");
+    SectionTitle(tr("Updates"));
+    Toggle(tr("Check for updates"), &g_config.general.updates.check,
+           tr("Check for updates whenever xemu is opened"));
 #endif
 
 #if defined(__x86_64__)
-    SectionTitle("Performance");
-    Toggle("Hard FPU emulation", &g_config.perf.hard_fpu,
-           "Use hardware-accelerated floating point emulation (requires restart)");
+    SectionTitle(tr("Performance"));
+    Toggle(tr("Hard FPU emulation"), &g_config.perf.hard_fpu,
+           tr("Use hardware-accelerated floating point emulation (requires restart)"));
 #endif
 
-    Toggle("Cache shaders to disk", &g_config.perf.cache_shaders,
-           "Reduce stutter in games by caching previously generated shaders");
+    Toggle(tr("Cache shaders to disk"), &g_config.perf.cache_shaders,
+           tr("Reduce stutter in games by caching previously generated shaders"));
 #if defined(_WIN32)
-    Toggle("High priority emulation", &g_config.perf.boost_threads,
-           "Give the emulated CPU, GPU and audio a higher priority than "
+    Toggle(tr("High priority emulation"), &g_config.perf.boost_threads,
+           tr("Give the emulated CPU, GPU and audio a higher priority than "
            "other programs, for fewer stutters and audio crackles "
-           "(requires restart)");
+           "(requires restart)"));
 #endif
 
-    SectionTitle("Miscellaneous");
-    Toggle("Skip startup animation", &g_config.general.skip_boot_anim,
-           "Skip the full Xbox boot animation sequence");
-    Toggle("Discord status", &g_config.general.discord_presence,
-           "Show the game you're playing on your Discord profile");
-    ChevronCombo("Library style", &g_config.general.library.style,
-                 "Dashboard\0Classic\0Blades\0Metro\0",
-                 "Tabbed dashboard, classic window, sliding blades or live tiles");
-    ChevronCombo("Dashboard theme", &g_config.general.library.theme,
-                 "Neon\0Green\0",
-                 "Dark with cyan and magenta, or xemu green");
-    ChevronCombo("Home screen covers", &g_config.general.library.home_covers,
-                 "3D cases\0Flat\0",
-                 "Show covers on the Home screen as 3D game cases");
-    FilePicker("Screenshot output directory", g_config.general.screenshot_dir,
+    SectionTitle(tr("Miscellaneous"));
+    Toggle(tr("Skip startup animation"), &g_config.general.skip_boot_anim,
+           tr("Skip the full Xbox boot animation sequence"));
+    Toggle(tr("Discord status"), &g_config.general.discord_presence,
+           tr("Show the game you're playing on your Discord profile"));
+    ChevronCombo(tr("Library style"), &g_config.general.library.style,
+                 tr_items("Dashboard\0Classic\0Blades\0Metro\0"),
+                 tr("Tabbed dashboard, classic window, sliding blades or live tiles"));
+    ChevronCombo(tr("Dashboard theme"), &g_config.general.library.theme,
+                 tr_items("Neon\0Green\0"),
+                 tr("Dark with cyan and magenta, or xemu green"));
+    ChevronCombo(tr("Home screen covers"), &g_config.general.library.home_covers,
+                 tr_items("3D cases\0Flat\0"),
+                 tr("Show covers on the Home screen as 3D game cases"));
+    FilePicker(tr("Screenshot output directory"), g_config.general.screenshot_dir,
                nullptr, 0, true, [](const char *path) {
                    xemu_settings_set_string(&g_config.general.screenshot_dir, path);
                });
-    FilePicker("Games directory", g_config.general.games_dir, nullptr, 0, true,
+    FilePicker(tr("Games directory"), g_config.general.games_dir, nullptr, 0, true,
                [](const char *path) {
                    xemu_settings_set_string(&g_config.general.games_dir, path);
                    xemu_settings_save(); // remember the folder right away
                });
-    Toggle("Show game library on startup",
+    Toggle(tr("Show game library on startup"),
            &g_config.general.library.show_on_startup,
-           "Open the game library when xemu starts (Ctrl+L)");
-    Toggle("Resume where you left off",
+           tr("Open the game library when xemu starts (Ctrl+L)"));
+    Toggle(tr("Resume where you left off"),
            &g_config.general.library.auto_resume,
-           "Save a resume point (snapshot) when you exit, eject or switch "
-           "games, and show a Resume button in the game library");
+           tr("Save a resume point (snapshot) when you exit, eject or switch "
+           "games, and show a Resume button in the game library"));
     // toggle("Throttle DVD/HDD speeds", &g_config.general.throttle_io,
     //        "Limit DVD/HDD throughput to approximate Xbox load times");
 }
@@ -134,7 +134,7 @@ bool MainMenuInputView::IsInputRebinding()
 
 void MainMenuInputView::Draw()
 {
-    SectionTitle("Controllers");
+    SectionTitle(tr("Controllers"));
     ImGui::PushFont(g_font_mgr.m_menu_font_small);
 
     static int active = 0;
@@ -234,7 +234,7 @@ void MainMenuInputView::Draw()
     ImGui::Columns(2, "", false);
     ImGui::SetColumnWidth(0, ImGui::GetWindowWidth()*0.25);
 
-    ImGui::Text("Emulated Device");
+    ImGui::Text(tr("Emulated Device"));
     ImGui::SameLine(0, 0);
     ImGui::NextColumn();
 
@@ -273,7 +273,7 @@ void MainMenuInputView::Draw()
     // Render input device combo
     //
 
-    ImGui::Text("Input Device");
+    ImGui::Text(tr("Input Device"));
     ImGui::SameLine(0, 0);
     ImGui::NextColumn();
 
@@ -395,7 +395,7 @@ void MainMenuInputView::Draw()
     if (bound_state) {
         ImGui::PushID(active);
 
-        SectionTitle("Expansion Slots");
+        SectionTitle(tr("Expansion Slots"));
         // Begin a 2-column layout to render the expansion slots
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
                             g_viewport_mgr.Scale(ImVec2(0, 12)));
@@ -510,7 +510,7 @@ void MainMenuInputView::Draw()
 
                 // Button to generate a new XMU
                 ImGui::PushID(i);
-                if (ImGui::Button("New Image", ImVec2(250, 0))) {
+                if (ImGui::Button(tr("New Image"), ImVec2(250, 0))) {
                     int port = active;
                     int slot = i;
                     ShowSaveFileDialog(img_file_filters, 2, nullptr, [port, slot](const char *new_path) {
@@ -529,7 +529,7 @@ void MainMenuInputView::Draw()
 
                 int port = active;
                 int slot = i;
-                FilePicker("Image", xmu->filename, img_file_filters, 2, false,
+                FilePicker(tr("Image"), xmu->filename, img_file_filters, 2, false,
                            [port, slot](const char *path) {
                                if (strlen(path) > 0) {
                                    xemu_input_bind_xmu(port, slot, path, false);
@@ -549,19 +549,19 @@ void MainMenuInputView::Draw()
         ImGui::PopStyleVar(); // ItemSpacing
         ImGui::Columns(1);
 
-        SectionTitle("Mapping");
+        SectionTitle(tr("Mapping"));
         ImVec4 tc = ImGui::GetStyle().Colors[ImGuiCol_Header];
         tc.w = 0.0f;
         ImGui::PushStyleColor(ImGuiCol_Header, tc);
 
-        if (ImGui::CollapsingHeader("Input Mapping")) {
+        if (ImGui::CollapsingHeader(tr("Input Mapping"))) {
             float p = ImGui::GetFrameHeight() * 0.3;
             ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(p, p));
             if (ImGui::BeginTable("input_remap_tbl", 2,
                                   ImGuiTableFlags_RowBg |
                                       ImGuiTableFlags_Borders)) {
-                ImGui::TableSetupColumn("Emulated Input");
-                ImGui::TableSetupColumn("Host Input");
+                ImGui::TableSetupColumn(tr("Emulated Input"));
+                ImGui::TableSetupColumn(tr("Host Input"));
                 ImGui::TableHeadersRow();
 
                 PopulateTableController(bound_state);
@@ -572,23 +572,23 @@ void MainMenuInputView::Draw()
         }
 
         if (bound_state->type == INPUT_DEVICE_SDL_GAMEPAD) {
-            Toggle("Enable Rumble",
+            Toggle(tr("Enable Rumble"),
                    &bound_state->controller_map->enable_rumble);
-            Toggle("Invert Left X Axis",
+            Toggle(tr("Invert Left X Axis"),
                    &bound_state->controller_map->controller_mapping
                         .invert_axis_left_x);
-            Toggle("Invert Left Y Axis",
+            Toggle(tr("Invert Left Y Axis"),
                    &bound_state->controller_map->controller_mapping
                         .invert_axis_left_y);
-            Toggle("Invert Right X Axis",
+            Toggle(tr("Invert Right X Axis"),
                    &bound_state->controller_map->controller_mapping
                         .invert_axis_right_x);
-            Toggle("Invert Right Y Axis",
+            Toggle(tr("Invert Right Y Axis"),
                    &bound_state->controller_map->controller_mapping
                         .invert_axis_right_y);
         }
 
-        if (ImGui::Button("Reset to Default")) {
+        if (ImGui::Button(tr("Reset to Default"))) {
             xemu_input_reset_input_mapping(bound_state);
         }
 
@@ -596,12 +596,12 @@ void MainMenuInputView::Draw()
         ImGui::PopID();
     }
 
-    SectionTitle("Options");
-    Toggle("Auto-bind controllers", &g_config.input.auto_bind,
-           "Bind newly connected controllers to any open port");
-    Toggle("Background controller input capture",
+    SectionTitle(tr("Options"));
+    Toggle(tr("Auto-bind controllers"), &g_config.input.auto_bind,
+           tr("Bind newly connected controllers to any open port"));
+    Toggle(tr("Background controller input capture"),
            &g_config.input.background_input_capture,
-           "Capture even if window is unfocused (requires restart)");
+           tr("Capture even if window is unfocused (requires restart)"));
 }
 
 void MainMenuInputView::Hide()
@@ -690,7 +690,7 @@ void MainMenuInputView::PopulateTableController(ControllerState *state)
         ImGui::TableSetColumnIndex(1);
 
         if (m_rebinding && m_rebinding->GetTableRow() == i) {
-            ImGui::Text("Press a key to rebind");
+            ImGui::Text(tr("Press a key to rebind"));
             continue;
         }
 
@@ -769,18 +769,18 @@ void MainMenuInputView::PopulateTableController(ControllerState *state)
 
 void MainMenuDisplayView::Draw()
 {
-    SectionTitle("Renderer");
-    ChevronCombo("Backend", &g_config.display.renderer,
+    SectionTitle(tr("Renderer"));
+    ChevronCombo(tr("Backend"), &g_config.display.renderer,
                  "Null\0"
                  "OpenGL\0"
 #ifdef CONFIG_VULKAN
                  "Vulkan\0"
 #endif
                  ,
-                 "Select desired renderer implementation");
+                 tr("Select desired renderer implementation"));
     int rendering_scale = nv2a_get_surface_scale_factor() - 1;
-    if (ChevronCombo("Internal resolution scale", &rendering_scale,
-                     "1x\0"
+    if (ChevronCombo(tr("Internal resolution scale"), &rendering_scale,
+                     tr_items("1x\0"
                      "2x\0"
                      "3x\0"
                      "4x\0"
@@ -789,29 +789,29 @@ void MainMenuDisplayView::Draw()
                      "7x\0"
                      "8x\0"
                      "9x\0"
-                     "10x\0",
-                     "Increase surface scaling factor for higher quality")) {
+                     "10x\0"),
+                     tr("Increase surface scaling factor for higher quality"))) {
         nv2a_set_surface_scale_factor(rendering_scale+1);
     }
-    Toggle("Dynamic resolution (experimental)",
+    Toggle(tr("Dynamic resolution (experimental)"),
            &g_config.display.quality.dynamic_resolution,
-           "Lower the resolution while a game slows down, raise it again "
-           "when there's room");
-    ChevronCombo("Upscaling filter", &g_config.display.filtering,
-                 "Linear\0"
+           tr("Lower the resolution while a game slows down, raise it again "
+           "when there's room"));
+    ChevronCombo(tr("Upscaling filter"), &g_config.display.filtering,
+                 tr_items("Linear\0"
                  "Nearest\0"
                  "AMD FidelityFX FSR 1.0\0"
                  "Bicubic (Catmull-Rom)\0"
                  "Lanczos\0"
                  "Snapdragon GSR 1\0"
                  "NVIDIA Image Scaling (NIS)\0"
-                 "NVIDIA RTX Video (AI)\0",
-                 "How the image is scaled up to fit the window. FSR, NIS and "
+                 "NVIDIA RTX Video (AI)\0"),
+                 tr("How the image is scaled up to fit the window. FSR, NIS and "
                  "Snapdragon GSR sharpen edges, Lanczos and Bicubic are "
-                 "classic sharp filters");
+                 "classic sharp filters"));
     if (g_config.display.filtering == CONFIG_DISPLAY_FILTERING_RTX) {
-        ImGui::TextWrapped("RTX Video: %s", RtxVideoStatus());
-        if (ImGui::Button("Check again")) {
+        ImGui::TextWrapped(tr("RTX Video: %s"), RtxVideoStatus());
+        if (ImGui::Button(tr("Check again"))) {
             RtxVideoRetry();
         }
     } else if (g_config.display.filtering >= CONFIG_DISPLAY_FILTERING_FSR) {
@@ -820,22 +820,22 @@ void MainMenuDisplayView::Draw()
                  (int)(g_config.display.fsr_sharpness * 100),
                  g_config.display.filtering == CONFIG_DISPLAY_FILTERING_NIS
                      ? "NVIDIA NIS" : "AMD RCAS");
-        Slider("Sharpening", &g_config.display.fsr_sharpness, buf);
+        Slider(tr("Sharpening"), &g_config.display.fsr_sharpness, buf);
     }
 
-    SectionTitle("Window");
+    SectionTitle(tr("Window"));
     bool fs = xemu_is_fullscreen();
-    if (Toggle("Fullscreen", &fs, "Enable fullscreen now")) {
+    if (Toggle(tr("Fullscreen"), &fs, tr("Enable fullscreen now"))) {
         xemu_toggle_fullscreen();
     }
-    Toggle("Fullscreen on startup",
+    Toggle(tr("Fullscreen on startup"),
            &g_config.display.window.fullscreen_on_startup,
-           "Start xemu in fullscreen when opened");
-    Toggle("Exclusive fullscreen",
+           tr("Start xemu in fullscreen when opened"));
+    Toggle(tr("Exclusive fullscreen"),
            &g_config.display.window.fullscreen_exclusive,
-           "May improve responsiveness, but slows window switching");
-    if (ChevronCombo("Window size", &g_config.display.window.startup_size,
-                     "Last Used\0"
+           tr("May improve responsiveness, but slows window switching"));
+    if (ChevronCombo(tr("Window size"), &g_config.display.window.startup_size,
+                     tr_items("Last Used\0"
                      "640x480\0"
                      "720x480\0"
                      "1280x720\0"
@@ -845,19 +845,19 @@ void MainMenuDisplayView::Draw()
                      "2560x1440\0"
                      "2560x1600\0"
                      "2560x1920\0"
-                     "3840x2160\0",
-                     "Select preferred startup window size")) {
+                     "3840x2160\0"),
+                     tr("Select preferred startup window size"))) {
     }
-    Toggle("Vertical refresh sync", &g_config.display.window.vsync,
-           "Sync to screen vertical refresh to reduce tearing artifacts");
+    Toggle(tr("Vertical refresh sync"), &g_config.display.window.vsync,
+           tr("Sync to screen vertical refresh to reduce tearing artifacts"));
 
-    SectionTitle("Interface");
-    Toggle("Show main menu bar", &g_config.display.ui.show_menubar,
-           "Show main menu bar when mouse is activated");
-    Toggle("Show notifications", &g_config.display.ui.show_notifications,
-           "Display notifications in upper-right corner");
-    Toggle("Hide mouse cursor", &g_config.display.ui.hide_cursor,
-           "Hide the mouse cursor when it is not moving");
+    SectionTitle(tr("Interface"));
+    Toggle(tr("Show main menu bar"), &g_config.display.ui.show_menubar,
+           tr("Show main menu bar when mouse is activated"));
+    Toggle(tr("Show notifications"), &g_config.display.ui.show_notifications,
+           tr("Display notifications in upper-right corner"));
+    Toggle(tr("Hide mouse cursor"), &g_config.display.ui.hide_cursor,
+           tr("Hide the mouse cursor when it is not moving"));
 
     int ui_scale_idx;
     if (g_config.display.ui.auto_scale) {
@@ -867,11 +867,11 @@ void MainMenuDisplayView::Draw()
         if (ui_scale_idx < 1) ui_scale_idx = 1;
         else if (ui_scale_idx > 2) ui_scale_idx = 2;
     }
-    if (ChevronCombo("UI scale", &ui_scale_idx,
-                     "Auto\0"
+    if (ChevronCombo(tr("UI scale"), &ui_scale_idx,
+                     tr_items("Auto\0"
                      "1x\0"
-                     "2x\0",
-                     "Interface element scale")) {
+                     "2x\0"),
+                     tr("Interface element scale"))) {
         if (ui_scale_idx == 0) {
             g_config.display.ui.auto_scale = true;
         } else {
@@ -879,34 +879,34 @@ void MainMenuDisplayView::Draw()
             g_config.display.ui.scale = ui_scale_idx;
         }
     }
-    Toggle("Animations", &g_config.display.ui.use_animations,
-           "Enable xemu user interface animations");
-    ChevronCombo("Display mode", &g_config.display.ui.fit,
-                 "Center\0"
+    Toggle(tr("Animations"), &g_config.display.ui.use_animations,
+           tr("Enable xemu user interface animations"));
+    ChevronCombo(tr("Display mode"), &g_config.display.ui.fit,
+                 tr_items("Center\0"
                  "Scale\0"
-                 "Stretch\0",
-                 "Select how the framebuffer should fit or scale into the window");
-    ChevronCombo("Aspect ratio", &g_config.display.ui.aspect_ratio,
-                 "Native\0"
+                 "Stretch\0"),
+                 tr("Select how the framebuffer should fit or scale into the window"));
+    ChevronCombo(tr("Aspect ratio"), &g_config.display.ui.aspect_ratio,
+                 tr_items("Native\0"
                  "Auto (Default)\0"
                  "4:3\0"
-                 "16:9\0",
-                 "Select the displayed aspect ratio");
+                 "16:9\0"),
+                 tr("Select the displayed aspect ratio"));
 }
 
 void MainMenuAudioView::Draw()
 {
-    SectionTitle("Volume");
+    SectionTitle(tr("Volume"));
     char buf[32];
     snprintf(buf, sizeof(buf), "Limit output volume (%d%%)",
              (int)(g_config.audio.volume_limit * 100));
-    Slider("Output volume limit", &g_config.audio.volume_limit, buf);
+    Slider(tr("Output volume limit"), &g_config.audio.volume_limit, buf);
 
-    SectionTitle("Quality");
-    Toggle("Real-time DSP processing", &g_config.audio.use_dsp,
-           "Enable improved audio accuracy (experimental)");
-    Toggle("DSP JIT engine", &g_config.audio.use_dsp_jit,
-           "Use DSP JIT engine");
+    SectionTitle(tr("Quality"));
+    Toggle(tr("Real-time DSP processing"), &g_config.audio.use_dsp,
+           tr("Enable improved audio accuracy (experimental)"));
+    Toggle(tr("DSP JIT engine"), &g_config.audio.use_dsp_jit,
+           tr("Use DSP JIT engine"));
 
 }
 
@@ -990,13 +990,13 @@ MainMenuNetworkView::MainMenuNetworkView()
 
 void MainMenuNetworkView::Draw()
 {
-    SectionTitle("Adapter");
+    SectionTitle(tr("Adapter"));
     bool enabled = xemu_net_is_enabled();
     g_config.net.enable = enabled;
-    if (Toggle("Enable", &g_config.net.enable,
-               enabled ? "Virtual network connected (disable to change network "
-                         "settings)" :
-                         "Connect virtual network cable to machine")) {
+    if (Toggle(tr("Enable"), &g_config.net.enable,
+               enabled ? tr("Virtual network connected (disable to change network "
+                         "settings)") :
+                         tr("Connect virtual network cable to machine"))) {
         if (enabled) {
             xemu_net_disable();
         } else {
@@ -1007,14 +1007,14 @@ void MainMenuNetworkView::Draw()
     bool appearing = ImGui::IsWindowAppearing();
     if (enabled) ImGui::BeginDisabled();
     if (ChevronCombo(
-            "Attached to", &g_config.net.backend,
-            "NAT\0"
+            tr("Attached to"), &g_config.net.backend,
+            tr_items("NAT\0"
             "UDP Tunnel\0"
-            "Bridged Adapter\0",
-            "Controls what the virtual network controller interfaces with")) {
+            "Bridged Adapter\0"),
+            tr("Controls what the virtual network controller interfaces with"))) {
         appearing = true;
     }
-    SectionTitle("Options");
+    SectionTitle(tr("Options"));
     switch (g_config.net.backend) {
     case CONFIG_NET_BACKEND_PCAP:
         DrawPcapOptions(appearing);
@@ -1044,7 +1044,7 @@ void MainMenuNetworkView::DrawPcapOptions(bool appearing)
         ImGui::Text("%s", msg);
         ImGui::Dummy(ImVec2(0,10*g_viewport_mgr.m_scale));
         ImGui::SetCursorPosX((ImGui::GetWindowWidth()-120*g_viewport_mgr.m_scale)/2);
-        if (ImGui::Button("Install npcap", ImVec2(120*g_viewport_mgr.m_scale, 0))) {
+        if (ImGui::Button(tr("Install npcap"), ImVec2(120*g_viewport_mgr.m_scale, 0))) {
             SDL_OpenURL("https://nmap.org/npcap/");
         }
 #endif
@@ -1056,8 +1056,8 @@ void MainMenuNetworkView::DrawPcapOptions(bool appearing)
         float combo_width = ImGui::GetColumnWidth();
         float combo_size_ratio = 0.5;
         combo_width *= combo_size_ratio;
-        PrepareComboTitleDescription("Network interface",
-                                     "Host network interface to bridge with",
+        PrepareComboTitleDescription(tr("Network interface"),
+                                     tr("Host network interface to bridge with"),
                                      combo_size_ratio);
         ImGui::SetNextItemWidth(combo_width);
         ImGui::PushFont(g_font_mgr.m_menu_font_small);
@@ -1098,10 +1098,10 @@ void MainMenuNetworkView::DrawNatOptions(bool appearing)
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(p, p));
     if (ImGui::BeginTable("port_forward_tbl", 4, flags))
     {
-        ImGui::TableSetupColumn("Host Port");
-        ImGui::TableSetupColumn("Guest Port");
-        ImGui::TableSetupColumn("Protocol");
-        ImGui::TableSetupColumn("Action");
+        ImGui::TableSetupColumn(tr("Host Port"));
+        ImGui::TableSetupColumn(tr("Guest Port"));
+        ImGui::TableSetupColumn(tr("Protocol"));
+        ImGui::TableSetupColumn(tr("Action"));
         ImGui::TableHeadersRow();
 
         for (unsigned int row = 0; row < g_config.net.nat.forward_ports_count; row++)
@@ -1117,15 +1117,15 @@ void MainMenuNetworkView::DrawNatOptions(bool appearing)
             ImGui::TableSetColumnIndex(2);
             switch (g_config.net.nat.forward_ports[row].protocol) {
             case CONFIG_NET_NAT_FORWARD_PORTS_PROTOCOL_TCP:
-                ImGui::TextUnformatted("TCP"); break;
+                ImGui::TextUnformatted(tr("TCP")); break;
             case CONFIG_NET_NAT_FORWARD_PORTS_PROTOCOL_UDP:
-                ImGui::TextUnformatted("UDP"); break;
+                ImGui::TextUnformatted(tr("UDP")); break;
             default: assert(0);
             }
 
             ImGui::TableSetColumnIndex(3);
             ImGui::PushID(row);
-            if (ImGui::Button("Remove")) {
+            if (ImGui::Button(tr("Remove"))) {
                 remove_net_nat_forward_ports(row);
             }
             ImGui::PopID();
@@ -1148,10 +1148,10 @@ void MainMenuNetworkView::DrawNatOptions(bool appearing)
             CONFIG_NET_NAT_FORWARD_PORTS_PROTOCOL_TCP;
         assert(sizeof(protocol) >= sizeof(int));
         ImGui::SetNextItemWidth(ImGui::GetColumnWidth());
-        ImGui::Combo("###protocol", &protocol, "TCP\0UDP\0");
+        ImGui::Combo("###protocol", &protocol, tr_items("TCP\0UDP\0"));
 
         ImGui::TableSetColumnIndex(3);
-        if (ImGui::Button("Add")) {
+        if (ImGui::Button(tr("Add"))) {
             int host, guest;
             if (sscanf(buf, "%d", &host) == 1 &&
                 sscanf(buf2, "%d", &guest) == 1) {
@@ -1176,15 +1176,15 @@ void MainMenuNetworkView::DrawUdpOptions(bool appearing)
     float width = ImGui::GetColumnWidth() * size_ratio;
     ImGui::PushFont(g_font_mgr.m_menu_font_small);
     PrepareComboTitleDescription(
-        "Remote Address",
-        "Destination addr:port to forward packets to (1.2.3.4:9968)",
+        tr("Remote Address"),
+        tr("Destination addr:port to forward packets to (1.2.3.4:9968)"),
         size_ratio);
     ImGui::SetNextItemWidth(width);
     if (ImGui::InputText("###remote_host", remote_addr, sizeof(remote_addr))) {
         xemu_settings_set_string(&g_config.net.udp.remote_addr, remote_addr);
     }
     PrepareComboTitleDescription(
-        "Bind Address", "Local addr:port to receive packets on (0.0.0.0:9968)",
+        tr("Bind Address"), tr("Local addr:port to receive packets on (0.0.0.0:9968)"),
         size_ratio);
     ImGui::SetNextItemWidth(width);
     if (ImGui::InputText("###local_host", local_addr, sizeof(local_addr))) {
@@ -1352,11 +1352,11 @@ void MainMenuSnapshotsView::Draw()
 {
     g_snapshot_mgr.Refresh();
 
-    SectionTitle("Snapshots");
-    Toggle("Filter by current title",
+    SectionTitle(tr("Snapshots"));
+    Toggle(tr("Filter by current title"),
            &g_config.general.snapshots.filter_current_game,
-           "Only display snapshots created while running the currently running "
-           "XBE");
+           tr("Only display snapshots created while running the currently running "
+           "XBE"));
 
     if (g_config.general.snapshots.filter_current_game) {
         struct xbe *xbe = xemu_get_xbe_info();
@@ -1381,7 +1381,7 @@ void MainMenuSnapshotsView::Draw()
 
     ImGui::SetNextItemWidth(ImGui::GetColumnWidth() * 0.8);
     ImGui::PushFont(g_font_mgr.m_menu_font_small);
-    ImGui::InputTextWithHint("##search", "Search or name new snapshot...",
+    ImGui::InputTextWithHint("##search", tr("Search or name new snapshot..."),
                              &m_search_buf, ImGuiInputTextFlags_CallbackEdit,
                              &OnSearchTextUpdate, this);
 
@@ -1400,7 +1400,7 @@ void MainMenuSnapshotsView::Draw()
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1, 0, 0, 1));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1, 0, 0, 1));
     }
-    if (ImGui::Button(snapshot_with_create_name_exists ? "Replace" : "Create",
+    if (ImGui::Button(snapshot_with_create_name_exists ? tr("Replace") : tr("Create"),
                       ImVec2(-FLT_MIN, 0))) {
         xemu_snapshots_save(m_search_buf.empty() ? NULL : m_search_buf.c_str(),
                             NULL);
@@ -1411,8 +1411,8 @@ void MainMenuSnapshotsView::Draw()
     }
 
     if (snapshot_with_create_name_exists && ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("A snapshot with the name \"%s\" already exists. "
-                          "This button will overwrite the existing snapshot.",
+        ImGui::SetTooltip(tr("A snapshot with the name \"%s\" already exists. "
+                          "This button will overwrite the existing snapshot."),
                           m_search_buf.c_str());
     }
     ImGui::PopFont();
@@ -1512,11 +1512,11 @@ void MainMenuSnapshotsView::DrawSnapshotContextMenu(
         return;
     }
 
-    if (ImGui::MenuItem("Load")) {
+    if (ImGui::MenuItem(tr("Load"))) {
         ActionLoadSnapshotChecked(snapshot->name);
     }
 
-    if (ImGui::BeginMenu("Keybinding")) {
+    if (ImGui::BeginMenu(tr("Keybinding"))) {
         for (int i = 0; i < 4; ++i) {
             char *item_name = g_strdup_printf("Bind to F%d", i + 5);
 
@@ -1537,7 +1537,7 @@ void MainMenuSnapshotsView::DrawSnapshotContextMenu(
         }
 
         if (current_snapshot_binding >= 0) {
-            if (ImGui::MenuItem("Unbind")) {
+            if (ImGui::MenuItem(tr("Unbind"))) {
                 xemu_settings_set_string(
                     g_snapshot_shortcut_index_key_map[current_snapshot_binding],
                     "");
@@ -1551,11 +1551,11 @@ void MainMenuSnapshotsView::DrawSnapshotContextMenu(
 
     Error *err = NULL;
 
-    if (ImGui::MenuItem("Replace")) {
+    if (ImGui::MenuItem(tr("Replace"))) {
         xemu_snapshots_save(snapshot->name, &err);
     }
 
-    if (ImGui::MenuItem("Delete")) {
+    if (ImGui::MenuItem(tr("Delete"))) {
         xemu_snapshots_delete(snapshot->name, &err);
     }
 
@@ -1585,35 +1585,35 @@ void MainMenuSystemView::Draw()
 
     if (m_dirty) {
         ImGui::TextColored(ImVec4(1, 0, 0, 1),
-                           "Application restart required to apply settings");
+                           tr("Application restart required to apply settings"));
     }
 
     if ((int)g_config.sys.avpack == CONFIG_SYS_AVPACK_NONE) {
-        ImGui::TextColored(ImVec4(1,0,0,1), "Setting AV Pack to NONE disables video output.");
+        ImGui::TextColored(ImVec4(1,0,0,1), tr("Setting AV Pack to NONE disables video output."));
     }
 
-    SectionTitle("System Configuration");
+    SectionTitle(tr("System Configuration"));
 
     if (ChevronCombo(
-            "System Memory", &g_config.sys.mem_limit,
-            "64 MiB (Default)\0"
-            "128 MiB\0",
-            "Increase to 128 MiB for debug or homebrew applications")) {
+            tr("System Memory"), &g_config.sys.mem_limit,
+            tr_items("64 MiB (Default)\0"
+            "128 MiB\0"),
+            tr("Increase to 128 MiB for debug or homebrew applications"))) {
         m_dirty = true;
     }
 
     if (ChevronCombo(
-            "AV Pack", &g_config.sys.avpack,
-            "SCART\0HDTV (Default)\0VGA\0RFU\0S-Video\0Composite\0None\0",
-            "Select the attached AV pack")) {
+            tr("AV Pack"), &g_config.sys.avpack,
+            tr_items("SCART\0HDTV (Default)\0VGA\0RFU\0S-Video\0Composite\0None\0"),
+            tr("Select the attached AV pack"))) {
         m_dirty = true;
     }
 
     // The Xbox dashboard's video settings, kept in the console's EEPROM
-    SectionTitle("Video Modes");
+    SectionTitle(tr("Video Modes"));
     uint32_t video_flags = 0;
     if (!xbox_eeprom_get_video_flags(&video_flags)) {
-        ImGui::TextDisabled("Available once the console is running.");
+        ImGui::TextDisabled(tr("Available once the console is running."));
     } else {
         static const struct {
             const char *label;
@@ -1637,11 +1637,11 @@ void MainMenuSystemView::Draw()
                 if (xbox_eeprom_set_video_flags(flags)) {
                     video_flags = flags;
                     xemu_queue_notification(
-                        "Video modes saved. Games use them the next time "
-                        "they start.");
+                        tr("Video modes saved. Games use them the next time "
+                        "they start."));
                 } else {
                     xemu_queue_error_message(
-                        "Could not save the video modes to the EEPROM file");
+                        tr("Could not save the video modes to the EEPROM file"));
                 }
             }
         }
@@ -1649,31 +1649,31 @@ void MainMenuSystemView::Draw()
             (video_flags & (XBOX_EEPROM_VIDEO_480P | XBOX_EEPROM_VIDEO_720P |
                             XBOX_EEPROM_VIDEO_1080I))) {
             ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1),
-                               "480p, 720p and 1080i need the HDTV AV pack.");
+                               tr("480p, 720p and 1080i need the HDTV AV pack."));
         }
-        ImGui::TextDisabled("Same as the video settings in the Xbox dashboard. "
-                            "Patches can force these too.");
+        ImGui::TextDisabled(tr("Same as the video settings in the Xbox dashboard. "
+                            "Patches can force these too."));
     }
 
-    SectionTitle("Files");
-    FilePicker("MCPX Boot ROM", g_config.sys.files.bootrom_path,
+    SectionTitle(tr("Files"));
+    FilePicker(tr("MCPX Boot ROM"), g_config.sys.files.bootrom_path,
                rom_file_filters, 3, false, [this](const char *path) {
                    xemu_settings_set_string(&g_config.sys.files.bootrom_path, path);
                    m_dirty = true;
                    g_main_menu.UpdateAboutViewConfigInfo();
                });
-    FilePicker("Flash ROM (BIOS)", g_config.sys.files.flashrom_path,
+    FilePicker(tr("Flash ROM (BIOS)"), g_config.sys.files.flashrom_path,
                rom_file_filters, 3, false, [this](const char *path) {
                    xemu_settings_set_string(&g_config.sys.files.flashrom_path, path);
                    m_dirty = true;
                    g_main_menu.UpdateAboutViewConfigInfo();
                });
-    FilePicker("Hard Disk", g_config.sys.files.hdd_path,
+    FilePicker(tr("Hard Disk"), g_config.sys.files.hdd_path,
                qcow_file_filters, 2, false, [this](const char *path) {
                    xemu_settings_set_string(&g_config.sys.files.hdd_path, path);
                    m_dirty = true;
                });
-    FilePicker("EEPROM", g_config.sys.files.eeprom_path,
+    FilePicker(tr("EEPROM"), g_config.sys.files.eeprom_path,
                rom_file_filters, 3, false, [this](const char *path) {
                    xemu_settings_set_string(&g_config.sys.files.eeprom_path, path);
                    m_dirty = true;
@@ -1741,7 +1741,7 @@ void MainMenuAboutView::Draw()
 
     Logo();
 
-    SectionTitle("Build Information");
+    SectionTitle(tr("Build Information"));
     ImGui::PushFont(g_font_mgr.m_fixed_width_font);
     ImGui::InputTextMultiline("##build_info", (char *)build_info_text,
                               strlen(build_info_text) + 1,
@@ -1749,7 +1749,7 @@ void MainMenuAboutView::Draw()
                               ImGuiInputTextFlags_ReadOnly);
     ImGui::PopFont();
 
-    SectionTitle("System Information");
+    SectionTitle(tr("System Information"));
     ImGui::PushFont(g_font_mgr.m_fixed_width_font);
     ImGui::InputTextMultiline("###systeminformation", (char *)sys_info_text,
                               strlen(sys_info_text) + 1,
@@ -1757,7 +1757,7 @@ void MainMenuAboutView::Draw()
                               ImGuiInputTextFlags_ReadOnly);
     ImGui::PopFont();
 
-    SectionTitle("Config Information");
+    SectionTitle(tr("Config Information"));
     ImGui::PushFont(g_font_mgr.m_fixed_width_font);
     ImGui::InputTextMultiline("##config_info", (char *)m_config_info_text,
                               strlen(m_config_info_text) + 1,
@@ -1765,15 +1765,15 @@ void MainMenuAboutView::Draw()
                               ImGuiInputTextFlags_ReadOnly);
     ImGui::PopFont();
 
-    SectionTitle("Community");
+    SectionTitle(tr("Community"));
 
-    ImGui::Text("Visit");
+    ImGui::Text(tr("Visit"));
     ImGui::SameLine();
-    if (ImGui::SmallButton("https://xemu.app")) {
+    if (ImGui::SmallButton(tr("https://xemu.app"))) {
         SDL_OpenURL("https://xemu.app");
     }
     ImGui::SameLine();
-    ImGui::Text("for more information");
+    ImGui::Text(tr("for more information"));
 }
 
 MainMenuTabButton::MainMenuTabButton(std::string text, std::string icon)

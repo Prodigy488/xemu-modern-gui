@@ -49,6 +49,7 @@ struct PerfFinding {
     int severity = 0;     // 2 likely cause, 1 worth a look, 0 info
     std::string title;
     std::string detail;
+    std::string how; // how it was worked out, with the numbers
 };
 
 struct PerfReport {
@@ -56,6 +57,7 @@ struct PerfReport {
     double avg_fps = 0, low1_fps = 0; // game fps: average, 1% low
     int median_work = 0, p99_work = 0, worst_work = 0;
     int slow_frames = 0, slow_threshold = 0;
+    int windows = 0; // one-second windows used for the trend check
     float host_fps_avg = 0;
     std::vector<PerfCounterDiff> slow_diffs;     // biggest differences first
     std::vector<PerfFinding> findings;           // most important first
@@ -63,6 +65,7 @@ struct PerfReport {
         double t_ms = 0;
         std::vector<PerfCounterDiff> unusual;    // near the mark vs overall
         std::vector<std::string> notes;
+        std::string how;
     };
     std::vector<Mark> marks;
 };

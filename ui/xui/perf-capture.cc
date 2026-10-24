@@ -245,6 +245,16 @@ void DrawReport()
                            f.title.c_str());
         ImGui::Indent();
         ImGui::TextWrapped("%s", f.detail.c_str());
+        if (!f.how.empty()) {
+            ImGui::PushID(&f);
+            if (ImGui::TreeNode("How this was worked out")) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::TextWrapped("%s", f.how.c_str());
+                ImGui::PopStyleColor();
+                ImGui::TreePop();
+            }
+            ImGui::PopID();
+        }
         ImGui::Unindent();
     }
     if (!r.slow_diffs.empty() &&
@@ -280,6 +290,16 @@ void DrawReport()
         }
         for (auto &n : m.notes) {
             ImGui::TextWrapped("%s", n.c_str());
+        }
+        if (!m.how.empty()) {
+            ImGui::PushID((int)i);
+            if (ImGui::TreeNode("How this was worked out")) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::TextWrapped("%s", m.how.c_str());
+                ImGui::PopStyleColor();
+                ImGui::TreePop();
+            }
+            ImGui::PopID();
         }
     }
     if (!r.marks.empty()) {

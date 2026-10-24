@@ -211,8 +211,21 @@ PerfReport AnalyzePerf(const PerfCapture &cap)
         }
         return best;
     };
-    auto add = [&](int sev, const std::string &t, const std::string &d) {
-        r.findings.push_back({ sev, t, d });
+    auto add = [&](int sev, const std::string &t, const std::string &d,
+                   const std::string &how = "") {
+        r.findings.push_back({ sev, t, d, how });
+    };
+    // How a slow-frame comparison was made
+    auto slow_how = [&](const PerfCounterDiff *d) {
+        return Fmt("Took the %d frames that needed more than %d ms to render "
+                   "(1.5 times the typical %d ms, and never under 17 ms) and "
+                   "compared their average counters with the other %d frames. "
+                   "%s averaged %.1f per slow frame and %.1f per other frame; "
+                   "a counter only counts as different when it is at least "
+                   "1.5 times higher and up by at least 1 per frame.",
+                   r.slow_frames, r.slow_threshold, r.median_work,
+                   r.frames - r.slow_frames, d->name.c_str(), d->slow_avg,
+                   d->normal_avg);
     };
     if (r.frames < 10) {
         add(0, "Not enough frames recorded",
@@ -226,7 +239,8 @@ PerfReport AnalyzePerf(const PerfCapture &cap)
                 "on, playing the same part again should be smoother. If it "
                 "is, this was the cause.",
                 d->slow_avg, d->name == "SHADER_GEN" ? "shaders" : "pipelines",
-                d->normal_avg));
+                d->normal_avg),
+            slow_how(d));
     }
     if (const PerfCounterDiff *d = diff({ "SURF_DOWNLOAD", "FINISH_SURFACE_DOWN" })) {
         add(2, "Rendered images read back from the GPU",
@@ -234,7 +248,8 @@ PerfReport AnalyzePerf(const PerfCapture &cap)
                 "frames %.1f). The game reads what it drew, which makes "
                 "xemu wait for your GPU, and costs more at higher resolution "
                 "scales. Compare at 1x.",
-                d->slow_avg, d->normal_avg));
+                d->slow_avg, d->normal_avg),
+            slow_how(d));
     }
     // (FINISH_SURFACE_DOWN/CREATE are covered by their own findings)
     if (const PerfCounterDiff *d = diff(
@@ -246,13 +261,15 @@ PerfReport AnalyzePerf(const PerfCapture &cap)
                 Fmt("Slow frames ran %.1f visibility queries each (other frames "
                     "%.1f). Each one waits for your GPU's answer, a known "
                     "source of slowdown in xemu.",
-                    d->slow_avg, d->normal_avg));
+                    d->slow_avg, d->normal_avg),
+                slow_how(d));
         } else {
             add(2, "Waiting for the GPU",
                 Fmt("Slow frames waited for your GPU to finish more often "
                     "(%s: %.1f per frame vs %.1f). Emulation stops while it "
                     "waits.",
-                    d->name.c_str(), d->slow_avg, d->normal_avg));
+                    d->name.c_str(), d->slow_avg, d->normal_avg),
+                slow_how(d));
         }
     }
     if (const PerfCounterDiff *d = diff({ "TEX_UPLOAD", "SURF_UPLOAD", "SURF_SWIZZLE" })) {
@@ -260,18 +277,21 @@ PerfReport AnalyzePerf(const PerfCapture &cap)
             Fmt("%s: %.1f per slow frame vs %.1f (%s). Typical when a new area, "
                 "video or streamed textures load.",
                 d->name.c_str(), d->slow_avg, d->normal_avg,
-                PerfCounterMeaning(d->name)));
+                PerfCounterMeaning(d->name)),
+            slow_how(d));
     }
     if (const PerfCounterDiff *d = diff({ "SURF_CREATE", "FINISH_SURFACE_CREATE" })) {
         add(1, "New render targets",
             Fmt("Slow frames created %.1f render targets each (other frames "
                 "%.1f).",
-                d->slow_avg, d->normal_avg));
+                d->slow_avg, d->normal_avg),
+            slow_how(d));
     }
     if (const PerfCounterDiff *d = diff({}, { "INLINE_" })) {
         add(1, "Vertices sent the slow way",
             Fmt("%s: %.1f per slow frame vs %.1f.", d->name.c_str(), d->slow_avg,
-                d->normal_avg));
+                d->normal_avg),
+            slow_how(d));
     }
     if (const PerfCounterDiff *d =
             diff({ "BEGIN_ENDS", "DRAW_ARRAYS", "CLEAR", "PIPELINE_BIND",
@@ -280,13 +300,280 @@ PerfReport AnalyzePerf(const PerfCapture &cap)
         add(1, "More graphics work in the slow frames",
             Fmt("%s: %.1f per slow frame vs %.1f (%s). A busier scene.",
                 d->name.c_str(), d->slow_avg, d->normal_avg,
-                PerfCounterMeaning(d->name)));
+                PerfCounterMeaning(d->name)),
+            slow_how(d));
     }
-    if (r.slow_frames > 0 && r.slow_diffs.empty()) {
+    // Trend: the frame rate over time against each counter. Slowdown that
+    // builds up over many ordinary frames (a heavier scene) never makes
+    // single frames "slow", but shows here.
+    bool trend_found = false;
+    std::set<std::string> rising; // counters that rose with the slowdown
+    {
+        struct Win {
+            int frames = 0;
+            double work = 0;
+            std::vector<double> c;
+        };
+        std::map<long, Win> wins;
+        for (auto &f : cap.frames) {
+            Win &w = wins[(long)(f.t_ms / 1000)];
+            if (w.c.empty()) {
+                w.c.assign(nc, 0);
+            }
+            w.frames++;
+            w.work += f.work_ms;
+            for (size_t c = 0; c < nc && c < f.counters.size(); c++) {
+                w.c[c] += f.counters[c];
+            }
+        }
+        // Whole seconds only: drop the first and last (partial) windows
+        std::vector<Win> ws;
+        long first = wins.empty() ? 0 : wins.begin()->first;
+        long last = wins.empty() ? 0 : wins.rbegin()->first;
+        for (auto &kv : wins) {
+            if (kv.first != first && kv.first != last && kv.second.frames > 0) {
+                Win w = kv.second;
+                w.work /= w.frames;
+                for (auto &v : w.c) {
+                    v /= w.frames;
+                }
+                ws.push_back(std::move(w));
+            }
+        }
+        r.windows = (int)ws.size();
+        std::vector<double> fps;
+        for (auto &w : ws) {
+            fps.push_back(w.frames);
+        }
+        double fmax = fps.empty() ? 0 : *std::max_element(fps.begin(), fps.end());
+        double fmin = fps.empty() ? 0 : *std::min_element(fps.begin(), fps.end());
+        auto corr = [](const std::vector<double> &x, const std::vector<double> &y) {
+            double mx = 0, my = 0;
+            for (size_t i = 0; i < x.size(); i++) {
+                mx += x[i];
+                my += y[i];
+            }
+            mx /= x.size();
+            my /= y.size();
+            double sxy = 0, sx = 0, sy = 0;
+            for (size_t i = 0; i < x.size(); i++) {
+                sxy += (x[i] - mx) * (y[i] - my);
+                sx += (x[i] - mx) * (x[i] - mx);
+                sy += (y[i] - my) * (y[i] - my);
+            }
+            return sx > 0 && sy > 0 ? sxy / std::sqrt(sx * sy) : 0.0;
+        };
+        // Worth a look when the frame rate varies by over 12%
+        if (ws.size() >= 8 && fmax - fmin >= std::max(4.0, fmax * 0.12)) {
+            // "Smooth": within 5% of the best; "slow": 15% or more below it
+            double smooth_at = fmax * 0.95, slow_at = fmax * 0.85;
+            int n_slow = 0, n_smooth = 0;
+            double work_slow = 0, work_smooth = 0;
+            for (auto &w : ws) {
+                if (w.frames <= slow_at) {
+                    n_slow++;
+                    work_slow += w.work;
+                } else if (w.frames >= smooth_at) {
+                    n_smooth++;
+                    work_smooth += w.work;
+                }
+            }
+            if (n_slow >= 2 && n_smooth >= 2) {
+                work_slow /= n_slow;
+                work_smooth /= n_smooth;
+                struct Cand {
+                    double r, slow, smooth, slope;
+                    size_t c;
+                };
+                std::vector<Cand> cands;
+                for (size_t c = 0; c < nc; c++) {
+                    std::vector<double> v, work;
+                    double vs = 0, vm = 0;
+                    for (auto &w : ws) {
+                        v.push_back(w.c[c]);
+                        work.push_back(w.work);
+                        if (w.frames <= slow_at) {
+                            vs += w.c[c];
+                        } else if (w.frames >= smooth_at) {
+                            vm += w.c[c];
+                        }
+                    }
+                    vs /= n_slow;
+                    vm /= n_smooth;
+                    double rc = corr(v, fps);
+                    // Must fall as fps rises, clearly, and by a real amount
+                    if (rc <= -0.6 && vs >= vm * 1.15 + 1.0) {
+                        // ms of render time per extra item (least squares)
+                        double mx = 0, my = 0, sxy = 0, sxx = 0;
+                        for (size_t i = 0; i < v.size(); i++) {
+                            mx += v[i];
+                            my += work[i];
+                        }
+                        mx /= v.size();
+                        my /= v.size();
+                        for (size_t i = 0; i < v.size(); i++) {
+                            sxy += (v[i] - mx) * (work[i] - my);
+                            sxx += (v[i] - mx) * (v[i] - mx);
+                        }
+                        cands.push_back({ rc, vs, vm, sxx > 0 ? sxy / sxx : 0, c });
+                    }
+                }
+                std::sort(cands.begin(), cands.end(),
+                          [](const Cand &a, const Cand &b) { return a.r < b.r; });
+                // Report the strongest, preferring the counter that names
+                // the work over its side effects
+                const Cand *best = nullptr;
+                for (const char *pref : { "BEGIN_ENDS", "DRAW_ARRAYS" }) {
+                    for (auto &cd : cands) {
+                        if (!best && cap.counter_names[cd.c] == pref &&
+                            cd.r <= cands[0].r + 0.1) {
+                            best = &cd;
+                        }
+                    }
+                }
+                if (!best && !cands.empty()) {
+                    best = &cands[0];
+                }
+                for (auto &cd : cands) {
+                    rising.insert(cap.counter_names[cd.c]);
+                }
+                if (best) {
+                    trend_found = true;
+                    const std::string &name = cap.counter_names[best->c];
+                    std::string also;
+                    for (auto &cd : cands) {
+                        if (&cd != best && also.size() < 160) {
+                            also += Fmt("%s%s (%.0f vs %.0f, r %.2f)",
+                                        also.empty() ? "" : ", ",
+                                        cap.counter_names[cd.c].c_str(), cd.slow,
+                                        cd.smooth, cd.r);
+                        }
+                    }
+                    // Is nearly all of it inline vertex data?
+                    std::string inline_note;
+                    double inl = 0, batches = 0;
+                    for (size_t c = 0; c < nc; c++) {
+                        if (Starts(cap.counter_names[c], "INLINE_")) {
+                            inl += all[c];
+                        }
+                        if (cap.counter_names[c] == "BEGIN_ENDS") {
+                            batches = all[c];
+                        }
+                    }
+                    if (batches > 100 && inl >= batches * 0.8) {
+                        inline_note = Fmt(
+                            " Nearly all of them (%.0f of %.0f per frame) send "
+                            "their vertices inline, the slower path, rather than "
+                            "from vertex buffers.",
+                            inl, batches);
+                    }
+                    double per_item_us = best->slope * 1000;
+                    std::string cost =
+                        per_item_us > 0.05
+                            ? Fmt(" Each extra one costs about %.1f microseconds of "
+                                  "render time.",
+                                  per_item_us)
+                            : std::string();
+                    add(2, "Frame rate drops when " +
+                               std::string(PerfCounterMeaning(name)[0]
+                                               ? PerfCounterMeaning(name)
+                                               : name.c_str()) +
+                               " go up",
+                        Fmt("In the slower stretches the game did %.0f %s per "
+                            "frame against %.0f when it ran smoothly, and the "
+                            "frame rate followed it closely.%s%s The slowdown "
+                            "comes from the amount of this work, not from one "
+                            "expensive event.",
+                            best->slow, name.c_str(), best->smooth, cost.c_str(),
+                            inline_note.c_str()),
+                        Fmt("Split the %.0f s recording into %d one-second "
+                            "windows and counted the frames finished in each "
+                            "(the frame rate), from %.0f to %.0f fps. Windows "
+                            "within 5%% of the best (%.0f fps or more, %d of "
+                            "them) count as smooth; windows 15%% or more below "
+                            "it (%.0f fps or less, %d of them) as slow. %s "
+                            "averaged %.0f per frame in the slow windows and "
+                            "%.0f in the smooth ones. Across all windows it moves "
+                            "against the frame rate with a correlation of %.2f "
+                            "(-1 means they always move in opposite directions, "
+                            "0 means unrelated; only -0.6 or stronger counts). "
+                            "A straight-line fit of each window's average render "
+                            "time against %s gives %.2f ms per 1000. Render time "
+                            "averaged %.1f ms in slow windows and %.1f ms in "
+                            "smooth ones.%s",
+                            cap.duration_ms / 1000, r.windows, fmin, fmax,
+                            smooth_at, n_smooth, slow_at, n_slow, name.c_str(),
+                            best->slow, best->smooth, best->r, name.c_str(),
+                            best->slope * 1000, work_slow, work_smooth,
+                            also.empty() ? ""
+                                         : (" Also rising with it: " + also + ".")
+                                               .c_str()));
+                } else if (work_slow < work_smooth * 1.15 + 1) {
+                    trend_found = true;
+                    add(2, "Frame rate drops but the graphics work doesn't change",
+                        Fmt("The frame rate fell to %.0f fps in places while "
+                            "render time stayed about the same (%.1f ms vs "
+                            "%.1f ms), so the extra time is going to the "
+                            "emulated Xbox CPU (game logic, physics, audio), "
+                            "not graphics.",
+                            fmin, work_slow, work_smooth),
+                        Fmt("Split the recording into %d one-second windows and "
+                            "compared the %d slow ones (%.0f fps or less) with "
+                            "the %d smooth ones (%.0f fps or more). No graphics "
+                            "counter rose with the slowdown (none moved against "
+                            "the frame rate with a correlation of -0.6 or "
+                            "stronger), and the average render time barely "
+                            "changed.",
+                            r.windows, n_slow, slow_at, n_smooth, smooth_at));
+                }
+            }
+        }
+    }
+    if (r.slow_frames > 0 && r.slow_diffs.empty() && !trend_found) {
         add(2, "Graphics look the same in the slow frames",
             "None of the graphics counters went up when frames were slow, so "
             "the time is probably going to the emulated Xbox CPU (game logic, "
-            "physics, audio) rather than graphics.");
+            "physics, audio) rather than graphics.",
+            Fmt("Compared the %d frames over %d ms with the other %d: no counter "
+                "was at least 1.5 times higher and up by at least 1 per frame.",
+                r.slow_frames, r.slow_threshold, r.frames - r.slow_frames));
+    }
+    // What can be ruled out: big costs that stayed flat or never happened
+    {
+        std::string none, flat;
+        for (const char *n : { "SHADER_GEN", "PIPELINE_GEN", "SURF_DOWNLOAD", "QUERY",
+                               "SURF_TO_TEX_FALLBACK" }) {
+            for (size_t c = 0; c < nc; c++) {
+                if (cap.counter_names[c] != n) {
+                    continue;
+                }
+                bool in_diffs = false;
+                for (auto &d : r.slow_diffs) {
+                    in_diffs |= d.name == n;
+                }
+                if (all[c] == 0) {
+                    none += std::string(none.empty() ? "" : ", ") + n;
+                } else if (!in_diffs && !rising.count(n)) {
+                    flat += Fmt("%s%s (%.1f)", flat.empty() ? "" : ", ", n, all[c]);
+                }
+            }
+        }
+        if (!none.empty()) {
+            add(0, "Ruled out",
+                "These never happened during the recording, so they aren't the "
+                "cause: " + none + ".",
+                "Checked the per-frame counters of every recorded frame; each "
+                "of these was zero throughout.");
+        }
+        if (!flat.empty()) {
+            add(0, "Present but not behind the slowdown",
+                "These happened (average per frame in brackets) but didn't rise "
+                "enough with the slowdown to explain it: " + flat + ".",
+                "Each was compared both ways: slow frames against the rest, and "
+                "the one-second frame rate against the counter. Neither showed a "
+                "clear rise (at least 1.15 times higher and up by at least 1 "
+                "per frame).");
+        }
     }
     if (r.median_work > 34) {
         // Everything is slow: what each frame does on average
@@ -305,7 +592,11 @@ PerfReport AnalyzePerf(const PerfCapture &cap)
         add(2, "Every frame is slow",
             Fmt("A typical frame takes %d ms (over 33 ms means under 30 fps), "
                 "so this isn't a spike. Most frequent work per frame: %s.",
-                r.median_work, list.empty() ? "none recorded" : list.c_str()));
+                r.median_work, list.empty() ? "none recorded" : list.c_str()),
+            Fmt("The median render time of all %d frames is %d ms; anything over "
+                "34 ms counts as slow throughout. The list is each counter's "
+                "average per frame across the whole recording.",
+                r.frames, r.median_work));
     }
     if (r.host_fps_avg > 0 && r.avg_fps > 0 && r.host_fps_avg < 50 &&
         r.host_fps_avg < r.avg_fps * 0.9) {
@@ -313,11 +604,18 @@ PerfReport AnalyzePerf(const PerfCapture &cap)
             Fmt("xemu drew %.0f frames a second on your PC while the game made "
                 "%.0f. The upscaling filter, resolution scale or a large window "
                 "may be too much for your GPU.",
-                r.host_fps_avg, r.avg_fps));
+                r.host_fps_avg, r.avg_fps),
+            "Averaged the two frame rates sampled four times a second: the "
+            "game's (frames the emulated Xbox finished) and xemu's (frames "
+            "drawn on your PC). xemu's was under 50 and under 90% of the "
+            "game's.");
     }
-    if (r.slow_frames == 0 && r.median_work <= 34) {
+    if (r.slow_frames == 0 && r.median_work <= 34 && !trend_found) {
         add(0, "No slowdown in this recording",
-            Fmt("No frame took longer than %d ms.", r.slow_threshold));
+            Fmt("No frame took longer than %d ms.", r.slow_threshold),
+            Fmt("Render time of every frame compared with %d ms (1.5 times the "
+                "typical %d ms, and never under 17 ms).",
+                r.slow_threshold, r.median_work));
     }
     std::stable_sort(r.findings.begin(), r.findings.end(),
                      [](const PerfFinding &a, const PerfFinding &b) {
@@ -391,6 +689,12 @@ PerfReport AnalyzePerf(const PerfCapture &cap)
                                "rather than what. A RenderDoc capture (Debug "
                                "menu, where available) shows the draw calls.");
         }
+        mk.how = Fmt("Averaged the counters of the %d frames within half a "
+                     "second of the mark and compared them with the whole "
+                     "recording's averages. A counter is listed when it was at "
+                     "least twice its usual level and up by at least 0.5 per "
+                     "frame, or appeared only here.",
+                     n);
         r.marks.push_back(std::move(mk));
     }
     return r;
@@ -423,6 +727,9 @@ std::string PerfReportText(const PerfCapture &cap, const PerfReport &r)
     for (auto &f : r.findings) {
         o += std::string(f.severity == 2 ? "[likely] " : f.severity == 1 ? "[maybe]  " : "[info]   ") +
              f.title + "\n    " + f.detail + "\n";
+        if (!f.how.empty()) {
+            o += "    How this was worked out: " + f.how + "\n";
+        }
     }
     if (!r.slow_diffs.empty()) {
         o += "\nCounters per frame: slow frames vs the rest\n";
@@ -442,6 +749,9 @@ std::string PerfReportText(const PerfCapture &cap, const PerfReport &r)
         }
         for (auto &n : m.notes) {
             o += "  - " + n + "\n";
+        }
+        if (!m.how.empty()) {
+            o += "  How this was worked out: " + m.how + "\n";
         }
     }
     if (!r.marks.empty()) {

@@ -16,8 +16,8 @@
 
 This fork is based on xemu 0.8.139. Emulation is unchanged except where noted
 under Performance and stability; the work here is on the interface: a
-console-style dashboard, a homebrew tab, upscaling options and
-quality-of-life features.
+console-style dashboard, a homebrew tab, upscaling options, tools for
+finding out why a game is slow, and quality-of-life features.
 
 > **Agent Declaration**: These changes were created with assistance from
 > Claude Code (Anthropic, Claude Opus 5.5).
@@ -32,7 +32,11 @@ quality-of-life features.
 |---|---|---|---|
 | ![Insignia](docs/screenshots/insignia.jpg) | ![Blades](docs/screenshots/blades.jpg) | ![Metro](docs/screenshots/metro.jpg) | ![Classic](docs/screenshots/classic.jpg) |
 
-<sub>Screenshots use original placeholder cover art (not the real box art), example compatibility ratings and invented example homebrew.</sub>
+| Performance Capture | Settings |
+|---|---|
+| ![Performance Capture](docs/screenshots/perf-capture.jpg) | ![Settings](docs/screenshots/settings.jpg) |
+
+<sub>Screenshots use original placeholder cover art (not the real box art), example compatibility ratings and invented example homebrew. The Performance Capture screenshot shows a real recording of Project Gotham Racing.</sub>
 
 ## Download
 
@@ -46,20 +50,25 @@ shared.
 
 ## What's added
 
-- **New in v1.6: Performance Capture.** Find out why a game slows down or
-  glitches: press Shift+F9 while playing, Shift+F12 when a glitch shows,
-  Shift+F9 to stop. The report graphs every frame and says what was
-  different in the slow frames (new shaders, images read back from the GPU,
-  GPU waits, occlusion queries, uploads, or nothing graphical, pointing at
-  the emulated CPU) and what was unusual around each glitch. Saved as
-  `report.txt`, `frames.csv` and a `trace.json` for
-  [Perfetto](https://ui.perfetto.dev). Every finding says how it was worked
-  out. Also new: **dynamic resolution (experimental)**, which lowers the
-  resolution during slowdowns and checks that it helps, a **"Preparing
-  shaders" indicator** that fades away when
-  done, OpenGL reusing saved shaders even after a crash, **Clear shader
-  cache** per game (right-click a game), and game names next to title-ID
-  folders in the Drive tab.
+- **New in v1.6: performance tools.**
+  - **Performance Capture:** find out why a game slows down or glitches.
+    Press Shift+F9 while playing, Shift+F12 when a glitch shows, Shift+F9
+    to stop. The report graphs every frame and says, in plain words, what
+    changed when the game slowed down (draw calls, new shaders, images read
+    back from the GPU, GPU waits, occlusion queries, uploads, or nothing
+    graphical, pointing at the emulated CPU), tells real causes from things
+    that only come along with them, and explains how it worked each one
+    out. Saved as `report.txt`, `frames.csv` and a `trace.json` for
+    [Perfetto](https://ui.perfetto.dev).
+  - **Dynamic resolution (experimental):** lowers the internal resolution
+    while a game runs below its usual frame rate and raises it again when
+    there's room. It checks that each change helps and undoes it if not.
+  - **Shaders:** a "Preparing shaders" indicator in the lower-left corner
+    that fades away when done, OpenGL reusing saved shaders even after a
+    crash, and **Clear shader cache** per game (right-click a game) or for
+    all games (Settings tab).
+  - **Drive tab:** game names next to title-ID folders in `TDATA` and
+    `UDATA`.
 - **New in v1.5: Homebrew tab.**
   - **Play** the homebrew on your Xbox hard disk image (`E:\Games`,
     `E:\Apps`, `E:\Emulators`) straight from the dashboard, no homebrew
@@ -138,6 +147,9 @@ shared.
   - A larger CPU code cache.
   - Windows power throttling turned off.
   - A performance overlay (F9) and Performance Capture (Shift+F9).
+  - OpenGL loads saved shaders from disk when they aren't in memory, so the
+    shader cache still works after a crash or forced close.
+  - Experimental dynamic resolution.
   - Fixes for some Vulkan and audio crashes.
 
 Every change is a separate commit on the `enhanced` branch, based on the

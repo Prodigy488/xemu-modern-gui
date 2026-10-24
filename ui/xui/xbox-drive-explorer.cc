@@ -1370,6 +1370,7 @@ bool XboxExplorerFindHomebrew(std::vector<XboxHomebrewApp> *out, std::string *er
                 app.dir = "/" + t.name + "/" + a.name;
                 app.folder = a.name;
                 app.section = section;
+                app.installed = (int64_t)a.modified;
                 app.title = a.name;
                 // default.xbe, whatever its case
                 std::vector<XboxFileInfo> files;

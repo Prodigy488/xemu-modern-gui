@@ -55,6 +55,7 @@ struct XboxHomebrewApp {
     std::string title;   // from the XBE, or the folder name
     uint32_t title_id = 0;
     uint64_t xbe_size = 0;
+    int64_t installed = 0;   // the folder's date (when it was copied on)
     std::vector<uint8_t> title_image; // the XBE's $$XTIMAGE (XPR), if any
 };
 bool XboxExplorerFindHomebrew(std::vector<XboxHomebrewApp> *out, std::string *err);

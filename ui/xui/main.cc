@@ -51,6 +51,7 @@
 #include "menubar.hh"
 #include "compat.hh"
 #include "xbox-drive-explorer.hh"
+#include "perf-capture.hh"
 #include "game-library.hh"
 #include "perf-overlay.hh"
 #if defined(_WIN32)
@@ -208,6 +209,7 @@ void xemu_hud_update(void)
 
     game_library_window.Update();
     XboxExplorerUpdate();
+    PerfCaptureUpdate();
     static bool library_startup_checked = false;
     if (!library_startup_checked) {
         library_startup_checked = true;
@@ -328,6 +330,7 @@ void xemu_hud_update(void)
     compatibility_reporter_window.Draw();
     game_library_window.Draw();
     XboxExplorerWindowDraw();
+    PerfCaptureDraw();
 #if defined(_WIN32)
     update_window.Draw();
 #endif

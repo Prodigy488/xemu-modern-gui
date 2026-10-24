@@ -10,6 +10,8 @@ xemu_ss.add(files(
   'game-compat.cc',
   'game-store.cc',
   'xiso.cc',
+  'perf-analysis.cc',
+  'perf-capture.cc',
   'game-preview.cc',
   'perf-overlay.cc',
   'game-shortcut.cc',

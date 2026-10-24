@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
+#include "perf-capture.hh"
 #include "ui/xemu-notifications.h"
 #include "common.hh"
 #include "main-menu.hh"
@@ -80,7 +81,11 @@ void ProcessKeyboardShortcuts(void)
     }
 
     if (ImGui::IsKeyPressed(ImGuiKey_F12)) {
-        ActionScreenshot();
+        if (ImGui::GetIO().KeyShift) {
+            PerfCaptureMarkGlitch(); // also takes a screenshot
+        } else {
+            ActionScreenshot();
+        }
     }
 
     if (ImGui::IsKeyPressed(ImGuiKey_F11)) {
@@ -88,8 +93,12 @@ void ProcessKeyboardShortcuts(void)
     }
 
     if (ImGui::IsKeyPressed(ImGuiKey_F9)) {
-        g_config.display.ui.show_perf_overlay =
-            !g_config.display.ui.show_perf_overlay;
+        if (ImGui::GetIO().KeyShift) {
+            PerfCaptureToggleRecording();
+        } else {
+            g_config.display.ui.show_perf_overlay =
+                !g_config.display.ui.show_perf_overlay;
+        }
     }
 
 #ifdef CONFIG_RENDERDOC
@@ -326,6 +335,10 @@ void ShowMainMenu()
             ImGui::MenuItem("Monitor", "~", &monitor_window.is_open);
             ImGui::MenuItem("Audio", NULL, &apu_window.m_is_open);
             ImGui::MenuItem("Video", NULL, &video_window.m_is_open);
+            ImGui::Separator();
+            if (ImGui::MenuItem("Performance Capture...", "Shift+F9")) {
+                PerfCaptureOpenWindow();
+            }
 #ifdef CONFIG_RENDERDOC
             if (nv2a_dbg_renderdoc_available()) {
                 ImGui::MenuItem("RenderDoc: Capture", NULL, &g_capture_renderdoc_frame);

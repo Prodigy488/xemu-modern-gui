@@ -59,3 +59,5 @@ bool GameLibraryInterceptEject(void);
 void GameLibraryAfterSettingsSave(void);
 // A dialog used Esc / B this frame, so the library shouldn't also close
 void GameLibraryConsumeBack(void);
+// Name of the game in the DVD drive ("" if none)
+std::string GameLibraryCurrentTitle(void);

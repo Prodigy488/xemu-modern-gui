@@ -31,6 +31,7 @@
 #include "game-library-scan.hh"
 #include "rtx-video.hh"
 #include "xbox-drive-explorer.hh"
+#include "perf-capture.hh"
 #include "xbox-drive.hh"
 #include "game-patches.hh"
 #include "game-compat.hh"
@@ -7493,6 +7494,13 @@ void DrawDashSettingsTab()
         ImGui::Dummy(ImVec2(0, 8 * s));
         ImGui::Checkbox("Performance overlay (F9)",
                         &g_config.display.ui.show_perf_overlay);
+        if (DashButton(ICON_FA_GAUGE_HIGH "  Performance capture...", T().glass,
+                       T().white, ImVec2(0, 32 * s))) {
+            PerfCaptureOpenWindow();
+            game_library_window.is_open = false;
+        }
+        ImGui::SetItemTooltip("Record a slow or glitchy part of a game and see "
+                              "why (Shift+F9 while playing)");
 
         ImGui::Dummy(ImVec2(0, 14 * s));
         DashLabel("Console");
@@ -8796,6 +8804,15 @@ void GameLibraryWindow::Draw()
     ImGui::PopStyleColor(theme_count);
     ImGui::PopStyleVar(theme_vars);
     ImGui::PopStyleVar();
+}
+
+std::string GameLibraryCurrentTitle(void)
+{
+    if (LibraryEntry *e = CurrentGame()) {
+        return e->DisplayName();
+    }
+    const char *dvd = g_config.sys.files.dvd_path;
+    return dvd && dvd[0] ? fs::u8path(dvd).stem().u8string() : std::string();
 }
 
 void GameLibraryConsumeBack(void)

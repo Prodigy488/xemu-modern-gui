@@ -54,6 +54,7 @@
 #include "../xemu-notifications.h"
 #include "../xemu-settings.h"
 #include "../xemu-snapshots.h"
+#include "xemu-xbe.h"
 #include "qemu/http.h"
 #include "snapshot-manager.hh"
 extern "C" {
@@ -337,6 +338,14 @@ std::string g_settings_shader_msg;
 GameOverrides g_settings_edit;
 bool g_open_settings_popup = false;
 bool g_focus_requested = false;
+// Minimized: the dashboard is hidden but a small tab at the bottom of the
+// screen brings it back
+bool g_collapsed = false;
+double g_collapsed_t = 0;
+
+// Close, Back or B: back to the game when one is in; with no disc (the
+// Xbox dashboard is behind) minimize instead, so it's easy to come back
+void CloseDashboard();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -3799,6 +3808,7 @@ const char *InsigniaSetupLabel(bool *busy);
 void InsigniaRunSetupAssistant();
 void InsigniaSetupDownload();
 bool InsigniaSetupInstalled();
+bool InsigniaSetupReturned();
 const std::string &InsigniaSetupMessage(bool *err);
 void InsigniaStartDashboard();
 
@@ -5181,6 +5191,8 @@ void DrawDashTopBar()
     const char *close_label = (dvd && dvd[0]) ? tr(ICON_FA_XMARK "  Back to game")
                                               : tr(ICON_FA_XMARK "  Close");
     float close_w = ImGui::CalcTextSize(close_label).x + 28 * s;
+    const char *min_label = ICON_FA_WINDOW_MINIMIZE "##minimize";
+    float min_w = 40 * s;
     char clock[32] = "";
     time_t now = time(NULL);
     struct tm *tm = localtime(&now);
@@ -5223,7 +5235,7 @@ void DrawDashTopBar()
     float clock_w = text_w(clock);
     float scan_w = scan.empty() ? 0 : ImGui::CalcTextSize(scan.c_str()).x + gap;
     float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
-    float x = right - close_w - gap - clock_w - gap - ins_w - scan_w;
+    float x = right - close_w - 8 * s - min_w - gap - clock_w - gap - ins_w - scan_w;
     float min_x = ImGui::GetItemRectMax().x + gap;
     if (x >= min_x) {
         float ty = y_mid - hsz / 2;
@@ -5252,9 +5264,16 @@ void DrawDashTopBar()
         dl->AddText(hud, hsz, ImVec2(x, ty),
                     th.neon ? th.accent : IM_COL32(183, 196, 180, 255), clock);
     }
+    ImGui::SetCursorScreenPos(ImVec2(right - close_w - 8 * s - min_w, y_mid - 16 * s));
+    if (DashButton(min_label, th.glass, th.white, ImVec2(min_w, 32 * s))) {
+        game_library_window.Collapse();
+    }
+    ImGui::SetItemTooltip("%s", tr("Minimize: a small tab at the bottom of the screen "
+                                   "brings the dashboard back (or Ctrl+L, or the "
+                                   "Guide button menu)"));
     ImGui::SetCursorScreenPos(ImVec2(right - close_w, y_mid - 16 * s));
     if (DashButton(close_label, th.glass, th.white, ImVec2(close_w, 32 * s))) {
-        game_library_window.is_open = false;
+        CloseDashboard();
     }
     ImGui::SetItemTooltip(tr("Esc or B"));
     if (th.neon) {
@@ -6245,7 +6264,7 @@ void DrawInsigniaTab(int &tex_budget)
         // Register this Xbox: Insignia's Setup Assistant, fetched and started
         bool busy = false;
         const char *label = InsigniaSetupLabel(&busy);
-        step(3, false, tr("Register this Xbox"),
+        step(3, InsigniaSetupReturned(), tr("Register this Xbox"),
              tr("The Insignia Setup Assistant registers the Xbox with Insignia: "
                 "press Register in it, then come back here"));
         ImGui::Indent(40 * s);
@@ -7564,16 +7583,61 @@ const char *const kInsigniaSetupUrl =
     "download/default.xbe";
 const char *const kInsigniaSetupDir = "InsigniaSetup"; // in E:\Apps
 
+const uint32_t kInsigniaSetupTitleId = 0xFFFF0002; // if the file doesn't say
+
 struct InsigniaSetup {
     int phase = 0; // 0 idle, 1 downloading, 2 copying to the Xbox, 3 starting
     std::string msg;
     bool msg_err = false;
     std::shared_ptr<StoreTransfer> xfer;
+    // Watching it run, to come back to the library when it's closed:
+    // 0 off, 1 waiting for it to start, 2 running
+    int watch = 0;
+    uint64_t watch_start = 0, next_check = 0, gone_since = 0;
+    std::string iso;      // its disc image
+    bool returned = false; // it ran and was closed (this session)
+    uint32_t downloaded_id = 0; // title ID of the file just downloaded
 } g_isa;
+
+bool InsigniaSetupReturned()
+{
+    return g_isa.returned;
+}
+
+// The title ID in an XBE file's certificate, or 0
+uint32_t XbeFileTitleId(const std::string &x)
+{
+    auto rd = [&](size_t off) {
+        uint32_t v = 0;
+        if (off + 4 <= x.size()) {
+            memcpy(&v, x.data() + off, 4); // little-endian, like the PC
+        }
+        return v;
+    };
+    uint32_t base = rd(0x104), cert = rd(0x118);
+    if (x.size() < 0x200 || cert < base || cert - base + 12 > x.size()) {
+        return 0;
+    }
+    return rd(cert - base + 8);
+}
 
 fs::path InsigniaSetupMarker()
 {
     return IconCacheDir() / "insignia-setup-installed";
+}
+
+// The installed Setup Assistant's title ID (kept in the marker file)
+uint32_t InsigniaSetupTitleId()
+{
+    std::ifstream f(InsigniaSetupMarker());
+    std::string line;
+    if (std::getline(f, line)) {
+        unsigned long v = strtoul(line.c_str(), nullptr, 16);
+        if (v > 1) {
+            return (uint32_t)v;
+        }
+    }
+    return kInsigniaSetupTitleId;
 }
 
 bool InsigniaSetupInstalled()
@@ -7616,6 +7680,7 @@ void InsigniaSetupDownload()
     g_store_dl->Post([xfer, stage] {
         std::string body, err;
         int code = StoreGet(kInsigniaSetupUrl, &body, xfer.get());
+        uint32_t title_id = XbeFileTitleId(body);
         fs::path content = stage / "content";
         std::error_code ec;
         fs::remove_all(stage, ec);
@@ -7630,7 +7695,7 @@ void InsigniaSetupDownload()
         } else if (!WriteFileAtomic(content / "default.xbe", body)) {
             err = tr("Couldn't save the download (is the disk full?)");
         }
-        StoreOnMain([err, content] {
+        StoreOnMain([err, content, title_id] {
             if (!err.empty()) {
                 g_isa.phase = 0;
                 g_isa.msg = err;
@@ -7649,6 +7714,8 @@ void InsigniaSetupDownload()
                 return;
             }
             g_isa.phase = 2;
+            // Written to the marker once it's on the Xbox drive
+            g_isa.downloaded_id = title_id;
         });
     });
 }
@@ -7666,6 +7733,72 @@ void InsigniaRunSetupAssistant()
     }
 }
 
+// While the Setup Assistant runs: when it's closed (the Xbox moves on to
+// another program, or restarts), take its disc out and come back to the
+// Insignia tab for the next step
+void InsigniaSetupWatch()
+{
+    if (!g_isa.watch) {
+        return;
+    }
+    uint64_t now = SDL_GetTicks();
+    const char *dvd = g_config.sys.files.dvd_path;
+    std::error_code ec;
+    std::string cur = (dvd && dvd[0]) ? OriginalDiscPath(dvd) : "";
+    bool our_disc = !cur.empty() &&
+                    (g_isa.iso == cur ||
+                     fs::equivalent(fs::u8path(g_isa.iso), fs::u8path(cur), ec));
+    if (g_isa.watch == 1 && now - g_isa.watch_start > 120000) {
+        g_isa.watch = 0; // never seen starting: stop looking
+        return;
+    }
+    if (!our_disc) {
+        // Another disc (or none) put in from here: the player moved on,
+        // so don't pull them back. (Starting can take a moment while a
+        // resume point is saved first.)
+        if (g_isa.watch == 2 || now - g_isa.watch_start > 60000) {
+            g_isa.watch = 0;
+        }
+        return;
+    }
+    if (!runstate_is_running() || now < g_isa.next_check) {
+        return; // paused, or checked recently
+    }
+    g_isa.next_check = now + 500;
+    struct xbe *xbe = xemu_get_xbe_info();
+    uint32_t id = 0;
+    if (xbe && xbe->cert) {
+        memcpy(&id, &xbe->cert->m_titleid, 4);
+    }
+    bool running = id == InsigniaSetupTitleId();
+    if (g_isa.watch == 1) {
+        if (running) {
+            g_isa.watch = 2;
+        }
+        return;
+    }
+    if (running) {
+        g_isa.gone_since = 0;
+        return;
+    }
+    // Something else is running (it went to the dashboard), or nothing for
+    // a moment (the Xbox restarted)
+    if (!xbe) {
+        if (!g_isa.gone_since) {
+            g_isa.gone_since = now;
+        }
+        if (now - g_isa.gone_since < 1500) {
+            return;
+        }
+    }
+    g_isa.watch = 0;
+    g_isa.returned = true;
+    ActionEjectDiscNow(); // so it doesn't start again
+    g_isa.msg = tr("The Setup Assistant was closed. Next: get an invite code.");
+    g_isa.msg_err = false;
+    game_library_window.OpenInsignia();
+}
+
 // Every frame, from StorePump()
 void InsigniaSetupPump()
 {
@@ -7678,7 +7811,10 @@ void InsigniaSetupPump()
             g_isa.msg_err = true;
             return;
         }
-        std::ofstream(InsigniaSetupMarker()) << "1\n";
+        char id[16];
+        snprintf(id, sizeof(id), "%08X\n",
+                 g_isa.downloaded_id ? g_isa.downloaded_id : kInsigniaSetupTitleId);
+        std::ofstream(InsigniaSetupMarker()) << id;
         g_hb.loaded = false; // the Homebrew tab lists it now
         InsigniaSetupStart();
         return;
@@ -7694,10 +7830,21 @@ void InsigniaSetupPump()
                                              "it again.");
             g_isa.msg_err = true;
         } else {
-            g_isa.msg = tr("Started. In the Setup Assistant, press Register.");
+            g_isa.msg = tr("Started. In the Setup Assistant, press Register. "
+                           "When you close it, you'll come back here.");
             g_isa.msg_err = false;
+            if (!game_library_window.is_open) {
+                game_library_window.Collapse(); // the tab brings it back
+            }
+            // Watch for it to close
+            g_isa.watch = 1;
+            g_isa.watch_start = SDL_GetTicks();
+            g_isa.next_check = 0;
+            g_isa.gone_since = 0;
+            g_isa.iso = g_hb.iso;
         }
     }
+    InsigniaSetupWatch();
 }
 
 // What the button says and whether it's busy
@@ -7727,12 +7874,13 @@ const std::string &InsigniaSetupMessage(bool *err)
 // Back to the Xbox dashboard (no disc), to create the Xbox Live account
 void InsigniaStartDashboard()
 {
+    g_isa.watch = 0;
     ActionEjectDiscNow();
     ActionReset();
     if (!runstate_is_running()) {
         vm_start();
     }
-    game_library_window.is_open = false;
+    game_library_window.Collapse();
 }
 
 bool HomebrewCard(const XboxHomebrewApp &a, float w)
@@ -8437,8 +8585,15 @@ void DrawClassicHeader()
     ImGui::SetItemTooltip(tr("Switch to the tabbed dashboard (also in Games > "
                           "Library Style)"));
     ImGui::SameLine();
+    if (ImGui::Button(ICON_FA_WINDOW_MINIMIZE "##minimize")) {
+        game_library_window.Collapse();
+    }
+    ImGui::SetItemTooltip("%s", tr("Minimize: a small tab at the bottom of the screen "
+                                   "brings the dashboard back (or Ctrl+L, or the "
+                                   "Guide button menu)"));
+    ImGui::SameLine();
     if (ImGui::Button(close_label)) {
-        game_library_window.is_open = false;
+        CloseDashboard();
     }
     ImGui::SetItemTooltip(tr("Esc or B"));
     ImGui::Dummy(ImVec2(0, 2 * s));
@@ -8670,6 +8825,7 @@ static std::vector<RecentGame> GetRecentGamesUncached(int max_count);
 void GameLibraryWindow::Open()
 {
     is_open = true;
+    g_collapsed = false;
     g_focus_requested = true;
     g_home_focus_play = !ClassicStyle() && g_dash_tab == kTabHome;
     if (ImGui::GetCurrentContext()) {
@@ -8719,7 +8875,30 @@ void GameLibraryWindow::OpenFolderManager()
 
 void GameLibraryWindow::ToggleOpen()
 {
-    is_open = !is_open;
+    if (is_open) {
+        is_open = false;
+    } else {
+        Open();
+    }
+}
+
+namespace {
+void CloseDashboard()
+{
+    const char *dvd = g_config.sys.files.dvd_path;
+    if (dvd && dvd[0]) {
+        game_library_window.is_open = false;
+    } else {
+        game_library_window.Collapse();
+    }
+}
+} // namespace
+
+void GameLibraryWindow::Collapse()
+{
+    is_open = false;
+    g_collapsed = true;
+    g_collapsed_t = ImGui::GetCurrentContext() ? ImGui::GetTime() : 0;
 }
 
 void GameLibraryWindow::Rescan()
@@ -9005,9 +9184,17 @@ void DrawStyleStatus(float right, float y)
                                               : tr(ICON_FA_XMARK "  Close");
     float close_w = ImGui::CalcTextSize(close_label).x + 28 * s;
     float bh = 32 * s;
+    ImGui::SetCursorScreenPos(ImVec2(right - close_w - 8 * s - 40 * s, y));
+    if (DashButton(ICON_FA_WINDOW_MINIMIZE "##minimize", T().glass, T().white,
+                   ImVec2(40 * s, bh))) {
+        game_library_window.Collapse();
+    }
+    ImGui::SetItemTooltip("%s", tr("Minimize: a small tab at the bottom of the screen "
+                                   "brings the dashboard back (or Ctrl+L, or the "
+                                   "Guide button menu)"));
     ImGui::SetCursorScreenPos(ImVec2(right - close_w, y));
     if (DashButton(close_label, T().glass, T().white, ImVec2(close_w, bh))) {
-        game_library_window.is_open = false;
+        CloseDashboard();
     }
     char clock[32] = "";
     time_t now = time(NULL);
@@ -9017,7 +9204,7 @@ void DrawStyleStatus(float right, float y)
     }
     float fh = ImGui::GetFontSize();
     float ty = y + (bh - fh) / 2;
-    float x = right - close_w - 18 * s - ImGui::CalcTextSize(clock).x;
+    float x = right - close_w - 8 * s - 40 * s - 18 * s - ImGui::CalcTextSize(clock).x;
     dl->AddText(ImVec2(x, ty), IM_COL32(230, 230, 230, 255), clock);
     const char *word;
     ImU32 col;
@@ -9437,11 +9624,83 @@ void DrawMetroFrame(int &tex_budget)
     DrawDashHints(ImGui::GetCursorScreenPos(), ws.x - 2 * pad);
 }
 
+// The minimized dashboard: a small tab at the bottom middle of the screen.
+// It rises in, then fades to see-through so it stays out of the way, and
+// lights up again under the mouse. Click it to bring the dashboard back.
+void DrawCollapsedTab()
+{
+    const float s = g_viewport_mgr.m_scale;
+    const LibTheme &th = T();
+    ImGuiViewport *vp = ImGui::GetMainViewport();
+    double age = ImGui::GetTime() - g_collapsed_t;
+    float in = Animations() ? std::min(1.0f, (float)age / 0.25f) : 1.0f;
+    in = 1 - (1 - in) * (1 - in) * (1 - in);
+    std::string label = std::string(ICON_FA_CHEVRON_UP "  ") + tr("Dashboard");
+    ImFont *font = ImGui::GetFont();
+    ImVec2 ts = ImGui::CalcTextSize(label.c_str());
+    float close = 26 * s;
+    ImVec2 size(ts.x + 36 * s + close, ts.y + 18 * s);
+    ImVec2 pos(vp->WorkPos.x + (vp->WorkSize.x - size.x) / 2,
+               vp->WorkPos.y + vp->WorkSize.y - size.y - 10 * s + (1 - in) * 30 * s);
+    ImGui::SetNextWindowPos(pos);
+    ImGui::SetNextWindowSize(size);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
+    ImGui::Begin("##dashboard-tab", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav |
+                     ImGuiWindowFlags_NoFocusOnAppearing |
+                     ImGuiWindowFlags_NoBringToFrontOnFocus);
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 a = pos, b(pos.x + size.x, pos.y + size.y);
+    ImGui::SetCursorScreenPos(a);
+    bool open = ImGui::InvisibleButton("##restore", ImVec2(size.x - close, size.y));
+    bool hov = ImGui::IsItemHovered();
+    ImGui::SetItemTooltip("%s", tr("Bring back the dashboard (Ctrl+L, or the Guide "
+                                   "button menu)"));
+    ImGui::SetCursorScreenPos(ImVec2(b.x - close, a.y));
+    bool dismiss = ImGui::InvisibleButton("##hide", ImVec2(close, size.y));
+    bool hov_x = ImGui::IsItemHovered();
+    ImGui::SetItemTooltip("%s", tr("Hide this tab"));
+    // Fully visible for a few seconds, then see-through unless pointed at
+    float alpha = 1.0f;
+    if (age > 4 && !hov && !hov_x) {
+        alpha = std::max(0.35f, 1.0f - (float)(age - 4) / 0.6f * 0.65f);
+    }
+    alpha *= in;
+    float r = 10 * s;
+    ShapeFill(dl, a, b, Alpha(th.neon ? IM_COL32(10, 11, 24, 255) : IM_COL32(20, 26, 20, 255),
+                              (int)(235 * alpha)),
+              r);
+    ShapeStroke(dl, a, b, Alpha(th.accent, (int)((hov ? 255 : 160) * alpha)), r, 1.5f * s);
+    dl->AddText(font, font->FontSize,
+                ImVec2(a.x + 16 * s, a.y + (size.y - ts.y) / 2),
+                Alpha(hov ? th.accent : th.text, (int)(255 * alpha)), label.c_str());
+    // The x to hide the tab
+    ImVec2 xc(b.x - close / 2 - 4 * s, a.y + size.y / 2);
+    float xr = 4 * s;
+    ImU32 xcol = Alpha(hov_x ? th.text : th.dim, (int)(255 * alpha));
+    dl->AddLine(ImVec2(xc.x - xr, xc.y - xr), ImVec2(xc.x + xr, xc.y + xr), xcol, 1.5f * s);
+    dl->AddLine(ImVec2(xc.x - xr, xc.y + xr), ImVec2(xc.x + xr, xc.y - xr), xcol, 1.5f * s);
+    dl->AddLine(ImVec2(b.x - close, a.y + 7 * s), ImVec2(b.x - close, b.y - 7 * s),
+                Alpha(th.dim, (int)(90 * alpha)), 1.0f * s);
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    if (open) {
+        game_library_window.Open();
+    } else if (dismiss) {
+        g_collapsed = false;
+    }
+}
+
 void GameLibraryWindow::Draw()
 {
     if (!is_open) {
         if (g_preview->IsOpen() && !PreviewStopping()) {
             RequestPreviewStop();
+        }
+        if (g_collapsed) {
+            DrawCollapsedTab();
         }
         return;
     }
@@ -9681,7 +9940,7 @@ void GameLibraryWindow::Draw()
         g_back_consumed_frame != ImGui::GetFrameCount() &&
         (ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
          ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))) {
-        is_open = false;
+        CloseDashboard();
     }
     ImGui::End();
     ImGui::PopStyleColor(theme_count);

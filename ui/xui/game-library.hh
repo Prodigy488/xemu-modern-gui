@@ -26,6 +26,9 @@ public:
 
     void Open();
     void ToggleOpen();
+    // Hide it, leaving a small tab at the bottom of the screen to bring it
+    // back
+    void Collapse();
 
     // Called once per frame from the HUD update, before Draw(). Tracks the
     // loaded disc for play time and applies per-game settings.

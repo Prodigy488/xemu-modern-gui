@@ -48,6 +48,11 @@ You still need your **own** MCPX boot ROM, BIOS (flash ROM) and hard disk
 image, the same as with official xemu. They are not included and must not be
 shared.
 
+**Updating:** from v1.4 on, **Help > Check for Updates** finds new releases
+of this fork (not official xemu) and installs them in place; it also checks
+at startup if "Check for updates" is on. New users get a **setup check** on
+the Home tab that points out any missing files.
+
 ## What's added
 
 - **New in v1.7: setup and everyday polish.**

@@ -188,6 +188,9 @@ time_t fatx_ts_to_time_t(const struct fatx_ts *in)
 {
     struct tm t;
 
+    /* xemu: the other fields (tm_isdst) were left uninitialized */
+    memset(&t, 0, sizeof(t));
+    t.tm_isdst = -1;
     t.tm_sec  = in->second;
     t.tm_min  = in->minute;
     t.tm_hour = in->hour;

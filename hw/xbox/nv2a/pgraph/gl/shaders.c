@@ -379,10 +379,14 @@ static char *shader_get_binary_path(const char *shader_bin_dir, uint64_t hash)
     return g_strdup_printf("%s/%012" PRIx64, shader_bin_dir, hash & ~bin_mask);
 }
 
-static void shader_load_from_disk(PGRAPHState *pg, uint64_t hash)
+/*
+ * Read a cached program binary. Files from another xemu version or GL
+ * driver, or that can't be read, are deleted so they aren't tried again.
+ */
+static bool shader_read_binary_from_disk(uint64_t hash, ShaderState *state,
+                                         GLenum *program_binary_format,
+                                         void **program, size_t *program_size)
 {
-    PGRAPHGLState *r = pg->gl_renderer_state;
-
     char *shader_bin_dir = shader_get_bin_directory(hash);
     char *shader_path = shader_get_binary_path(shader_bin_dir, hash);
     char *cached_xemu_version = NULL;
@@ -393,22 +397,14 @@ static void shader_load_from_disk(PGRAPHState *pg, uint64_t hash)
     uint64_t cached_xemu_version_len;
     uint64_t gl_vendor_len;
     uint64_t gl_version_len;
-    GLenum program_binary_format;
-    ShaderState state;
     size_t shader_size;
 
     g_free(shader_bin_dir);
 
-    qemu_mutex_lock(&r->shader_cache_lock);
-    if (lru_contains_hash(&r->shader_cache, hash)) {
-        qemu_mutex_unlock(&r->shader_cache_lock);
-        return;
-    }
-    qemu_mutex_unlock(&r->shader_cache_lock);
-
     FILE *shader_file = qemu_fopen(shader_path, "rb");
     if (!shader_file) {
-        goto error;
+        g_free(shader_path);
+        return false; /* not cached: nothing to delete */
     }
 
     size_t nread;
@@ -422,35 +418,54 @@ static void shader_load_from_disk(PGRAPHState *pg, uint64_t hash)
         } while (0)
 
     READ_OR_ERR(&cached_xemu_version_len, sizeof(cached_xemu_version_len));
+    if (cached_xemu_version_len > 4096) {
+        fclose(shader_file);
+        goto error;
+    }
 
     cached_xemu_version = g_malloc(cached_xemu_version_len +1);
     READ_OR_ERR(cached_xemu_version, cached_xemu_version_len);
+    cached_xemu_version[cached_xemu_version_len] = '\0';
     if (strcmp(cached_xemu_version, xemu_version) != 0) {
         fclose(shader_file);
         goto error;
     }
 
     READ_OR_ERR(&gl_vendor_len, sizeof(gl_vendor_len));
+    if (gl_vendor_len == 0 || gl_vendor_len > 4096) {
+        fclose(shader_file);
+        goto error;
+    }
 
     cached_gl_vendor = g_malloc(gl_vendor_len);
     READ_OR_ERR(cached_gl_vendor, gl_vendor_len);
+    cached_gl_vendor[gl_vendor_len - 1] = '\0';
     if (strcmp(cached_gl_vendor, shader_gl_vendor) != 0) {
         fclose(shader_file);
         goto error;
     }
 
     READ_OR_ERR(&gl_version_len, sizeof(gl_version_len));
+    if (gl_version_len == 0 || gl_version_len > 4096) {
+        fclose(shader_file);
+        goto error;
+    }
 
     cached_gl_version = g_malloc(gl_version_len);
     READ_OR_ERR(cached_gl_version, gl_version_len);
+    cached_gl_version[gl_version_len - 1] = '\0';
     if (strcmp(cached_gl_version, shader_gl_version) != 0) {
         fclose(shader_file);
         goto error;
     }
 
-    READ_OR_ERR(&program_binary_format, sizeof(program_binary_format));
-    READ_OR_ERR(&state, sizeof(state));
+    READ_OR_ERR(program_binary_format, sizeof(*program_binary_format));
+    READ_OR_ERR(state, sizeof(*state));
     READ_OR_ERR(&shader_size, sizeof(shader_size));
+    if (shader_size == 0 || shader_size > 64 * 1024 * 1024) {
+        fclose(shader_file);
+        goto error;
+    }
 
     program_buffer = g_malloc(shader_size);
     READ_OR_ERR(program_buffer, shader_size);
@@ -464,22 +479,9 @@ static void shader_load_from_disk(PGRAPHState *pg, uint64_t hash)
     g_free(cached_gl_vendor);
     g_free(cached_gl_version);
 
-    qemu_mutex_lock(&r->shader_cache_lock);
-    LruNode *node = lru_lookup(&r->shader_cache, hash, &state);
-    ShaderBinding *binding = container_of(node, ShaderBinding, node);
-
-    /* If we happened to regenerate this shader already, then we may as well use the new one */
-    if (binding->initialized) {
-        qemu_mutex_unlock(&r->shader_cache_lock);
-        return;
-    }
-
-    binding->program_format = program_binary_format;
-    binding->program_size = shader_size;
-    binding->program = program_buffer;
-    binding->cached = true;
-    qemu_mutex_unlock(&r->shader_cache_lock);
-    return;
+    *program = program_buffer;
+    *program_size = shader_size;
+    return true;
 
 error:
     /* Delete the shader so it won't be loaded again */
@@ -489,6 +491,84 @@ error:
     g_free(cached_xemu_version);
     g_free(cached_gl_vendor);
     g_free(cached_gl_version);
+    return false;
+}
+
+static void shader_load_from_disk(PGRAPHState *pg, uint64_t hash)
+{
+    PGRAPHGLState *r = pg->gl_renderer_state;
+
+    qemu_mutex_lock(&r->shader_cache_lock);
+    if (lru_contains_hash(&r->shader_cache, hash)) {
+        qemu_mutex_unlock(&r->shader_cache_lock);
+        return;
+    }
+    qemu_mutex_unlock(&r->shader_cache_lock);
+
+    ShaderState state;
+    GLenum program_binary_format;
+    void *program_buffer = NULL;
+    size_t shader_size = 0;
+    if (!shader_read_binary_from_disk(hash, &state, &program_binary_format,
+                                      &program_buffer, &shader_size)) {
+        return;
+    }
+
+    qemu_mutex_lock(&r->shader_cache_lock);
+    LruNode *node = lru_lookup(&r->shader_cache, hash, &state);
+    ShaderBinding *binding = container_of(node, ShaderBinding, node);
+
+    /* If we happened to regenerate this shader already, then we may as well use the new one */
+    if (binding->initialized) {
+        qemu_mutex_unlock(&r->shader_cache_lock);
+        g_free(program_buffer);
+        return;
+    }
+
+    g_free(binding->program);
+    binding->program_format = program_binary_format;
+    binding->program_size = shader_size;
+    binding->program = program_buffer;
+    binding->cached = true;
+    qemu_mutex_unlock(&r->shader_cache_lock);
+}
+
+/*
+ * A shader that isn't in memory may still be on disk: the list of shaders
+ * to preload is only written when xemu closes normally, so after a crash
+ * (or for shaders that dropped out of the list) the binaries would
+ * otherwise be ignored and every shader compiled again. Called with
+ * shader_cache_lock held.
+ */
+static bool shader_load_binding_from_disk(ShaderBinding *binding, uint64_t hash)
+{
+    if (!g_config.perf.cache_shaders || binding->program) {
+        return false;
+    }
+    ShaderState state;
+    GLenum program_binary_format;
+    void *program_buffer = NULL;
+    size_t shader_size = 0;
+    if (!shader_read_binary_from_disk(hash, &state, &program_binary_format,
+                                      &program_buffer, &shader_size)) {
+        return false;
+    }
+    if (memcmp(&state, &binding->state, sizeof(state)) != 0) {
+        g_free(program_buffer); /* hash collision: a different shader */
+        return false;
+    }
+    binding->program_format = program_binary_format;
+    binding->program_size = shader_size;
+    binding->program = program_buffer;
+    binding->cached = true;
+    if (pgraph_gl_shader_load_from_memory(binding)) {
+        return true;
+    }
+    /* The driver didn't take it: compile, and write a fresh binary */
+    g_free(binding->program);
+    binding->program = NULL;
+    binding->cached = false;
+    return false;
 }
 
 static void *shader_reload_lru_from_disk(void *arg)
@@ -818,7 +898,8 @@ void pgraph_gl_bind_shaders(PGRAPHState *pg)
     LruNode *node = lru_lookup(&r->shader_cache, shader_state_hash, &state);
     ShaderBinding *binding = container_of(node, ShaderBinding, node);
 
-    if (!binding->initialized && !pgraph_gl_shader_load_from_memory(binding)) {
+    if (!binding->initialized && !pgraph_gl_shader_load_from_memory(binding) &&
+        !shader_load_binding_from_disk(binding, shader_state_hash)) {
         nv2a_profile_inc_counter(NV2A_PROF_SHADER_GEN);
         generate_shaders(r, binding);
         if (g_config.perf.cache_shaders) {

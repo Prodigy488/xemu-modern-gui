@@ -54,7 +54,9 @@ shared.
   the emulated CPU) and what was unusual around each glitch. Saved as
   `report.txt`, `frames.csv` and a `trace.json` for
   [Perfetto](https://ui.perfetto.dev). Every finding says how it was worked
-  out. Also new: a **"Preparing shaders" indicator** that fades away when
+  out. Also new: **dynamic resolution (experimental)**, which lowers the
+  resolution during slowdowns and checks that it helps, a **"Preparing
+  shaders" indicator** that fades away when
   done, OpenGL reusing saved shaders even after a crash, **Clear shader
   cache** per game (right-click a game), and game names next to title-ID
   folders in the Drive tab.

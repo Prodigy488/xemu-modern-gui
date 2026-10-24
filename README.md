@@ -13,15 +13,15 @@ quality-of-life features on top of the official release.
 
 ![Home tab, Neon theme](docs/screenshots/home.jpg)
 
-| Library | Homebrew store | Drive (hard drive explorer) |
-|---|---|---|
-| ![Library](docs/screenshots/library.jpg) | ![Store](docs/screenshots/store.jpg) | ![Drive](docs/screenshots/drive.jpg) |
+| Library | Homebrew | Homebrew store | Drive |
+|---|---|---|---|
+| ![Library](docs/screenshots/library.jpg) | ![Homebrew](docs/screenshots/homebrew.jpg) | ![Store](docs/screenshots/store.jpg) | ![Drive](docs/screenshots/drive.jpg) |
 
-| Insignia | Blades style | Metro style |
-|---|---|---|
-| ![Insignia](docs/screenshots/insignia.jpg) | ![Blades](docs/screenshots/blades.jpg) | ![Metro](docs/screenshots/metro.jpg) |
+| Insignia | Blades style | Metro style | Classic style |
+|---|---|---|---|
+| ![Insignia](docs/screenshots/insignia.jpg) | ![Blades](docs/screenshots/blades.jpg) | ![Metro](docs/screenshots/metro.jpg) | ![Classic](docs/screenshots/classic.jpg) |
 
-<sub>Screenshots use original placeholder cover art (not the real box art), example compatibility ratings and invented example store listings.</sub>
+<sub>Screenshots use original placeholder cover art (not the real box art), example compatibility ratings and invented example homebrew.</sub>
 
 ## Download
 
@@ -39,13 +39,14 @@ shared.
   the game you're playing, with its cover, title ID, play time and an Insignia
   badge for online-capable games. Turn it off in Settings > General > Discord
   status. Requires the Discord app running on the same PC.
-- **New in v1.5: homebrew store.** A Store tab lists the homebrew on
+- **New in v1.5: Homebrew tab.** Play the homebrew on your Xbox hard disk
+  image (`E:\Games`, `E:\Apps`, `E:\Emulators`) straight from the
+  dashboard, no homebrew dashboard needed: xemu turns the app's folder into a
+  disc image and boots it. Get more from
   [XboxHomebrew.store](https://xboxhomebrew.store) (run by Team Resurgent):
   search, browse by category, read about an app and its versions, then
-  **Install to Xbox** to download it and copy it to your hard disk image
-  (`E:\Games`, `E:\Emulators` or `E:\Apps`), ready for a homebrew dashboard
-  such as XBMC4Gamers. Only homebrew is listed; firmware and Microsoft's dashboards
-  are left out.
+  **Install to Xbox**. Only homebrew is listed; firmware and Microsoft's
+  dashboards are left out.
 - **New in v1.4: compatibility ratings.** Each game shows its rating from
   xemu's community [compatibility list](https://xemu.app/#compatibility):
   a coloured dot on its cover, a badge on Home and a row in its details with
@@ -83,7 +84,7 @@ shared.
   - **Insignia:** online status, your online-capable games and setup steps.
   - **Media:** save states and screenshots.
   - **Drive:** the Xbox hard drive explorer.
-  - **Store:** homebrew from XboxHomebrew.store.
+  - **Homebrew:** play installed homebrew, or get more from XboxHomebrew.store.
   - **Patches** and **Settings.**
 - **Upscaling filters:** AMD FidelityFX FSR 1.0, NVIDIA RTX Video (AI),
   NVIDIA Image Scaling (NIS),

@@ -35,18 +35,19 @@ shared.
 
 ## What's added
 
-- **New in v1.1: Discord status.** While you play, your Discord profile shows
-  the game you're playing, with its cover, title ID, play time and an Insignia
-  badge for online-capable games. Turn it off in Settings > General > Discord
-  status. Requires the Discord app running on the same PC.
-- **New in v1.5: Homebrew tab.** Play the homebrew on your Xbox hard disk
-  image (`E:\Games`, `E:\Apps`, `E:\Emulators`) straight from the
-  dashboard, no homebrew dashboard needed: xemu turns the app's folder into a
-  disc image and boots it. Get more from
-  [XboxHomebrew.store](https://xboxhomebrew.store) (run by Team Resurgent):
-  search, browse by category, read about an app and its versions, then
-  **Install to Xbox**. Only homebrew is listed; firmware and Microsoft's
-  dashboards are left out.
+- **New in v1.5: Homebrew tab.**
+  - **Play** the homebrew on your Xbox hard disk image (`E:\Games`,
+    `E:\Apps`, `E:\Emulators`) straight from the dashboard, no homebrew
+    dashboard needed: xemu turns the app's folder into a disc image and boots
+    it.
+  - **Covers** from the store (also for apps you copied on yourself), your
+    own `covers\<title ID>.png`, or the app's built-in title image.
+  - **Right-click (or Y)** to delete an app or show it in the Drive tab.
+  - **Get more** from [XboxHomebrew.store](https://xboxhomebrew.store) (run
+    by Team Resurgent): search, browse by category, read about an app and its
+    versions, then **Install to Xbox**. Games go to `E:\Games`, emulators to
+    `E:\Emulators`, the rest to `E:\Apps`. Only homebrew is listed; firmware
+    and Microsoft's dashboards are left out.
 - **New in v1.4: compatibility ratings.** Each game shows its rating from
   xemu's community [compatibility list](https://xemu.app/#compatibility):
   a coloured dot on its cover, a badge on Home and a row in its details with
@@ -75,6 +76,10 @@ shared.
 - **New in v1.3: Neon theme.** A dark, cyberpunk look for the dashboard:
   near-black backgrounds, cyan and magenta accents, cut-corner panels and HUD
   labels. The previous green look stays available (Games > Library Style).
+- **New in v1.1: Discord status.** While you play, your Discord profile shows
+  the game you're playing, with its cover, title ID, play time and an Insignia
+  badge for online-capable games. Turn it off in Settings > General > Discord
+  status. Requires the Discord app running on the same PC.
 - **Four library styles**, switchable any time from Games > Library Style or
   Settings: the tabbed **Dashboard**, **Blades**, **Metro**, or the
   **Classic** single library window.
@@ -84,7 +89,7 @@ shared.
   - **Insignia:** online status, your online-capable games and setup steps.
   - **Media:** save states and screenshots.
   - **Drive:** the Xbox hard drive explorer.
-  - **Homebrew:** play installed homebrew, or get more from XboxHomebrew.store.
+  - **Homebrew:** play, delete or get more homebrew (XboxHomebrew.store).
   - **Patches** and **Settings.**
 - **Upscaling filters:** AMD FidelityFX FSR 1.0, NVIDIA RTX Video (AI),
   NVIDIA Image Scaling (NIS),

@@ -42,8 +42,9 @@ shared.
 - **New in v1.5: homebrew store.** A Store tab lists the homebrew on
   [XboxHomebrew.store](https://xboxhomebrew.store) (run by Team Resurgent):
   search, browse by category, read about an app and its versions, then
-  **Install to Xbox** to download it and copy it to `E:\Apps` on your hard
-  disk image. Only homebrew is listed; firmware and Microsoft's dashboards
+  **Install to Xbox** to download it and copy it to your hard disk image
+  (`E:\Games`, `E:\Emulators` or `E:\Apps`), ready for a homebrew dashboard
+  such as XBMC4Gamers. Only homebrew is listed; firmware and Microsoft's dashboards
   are left out.
 - **New in v1.4: compatibility ratings.** Each game shows its rating from
   xemu's community [compatibility list](https://xemu.app/#compatibility):

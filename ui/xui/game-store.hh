@@ -72,6 +72,11 @@ std::string StoreSafeFolderName(const std::string &name);
 
 std::string StoreUrlEncode(const std::string &s);
 
+// Where an app of this category goes on E:, following the usual homebrew
+// layout that dashboards such as XBMC4Gamers scan: "Games", "Emulators",
+// otherwise "Apps"
+std::string StoreInstallFolder(const std::string &category);
+
 // Unpack a zip file into dest_dir (created). Entries that would land outside
 // it ("..", absolute paths) are refused. False with *err on failure.
 bool StoreExtractZip(const std::string &zip_path, const std::string &dest_dir,

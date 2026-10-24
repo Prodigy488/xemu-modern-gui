@@ -290,6 +290,18 @@ std::string StoreDriveConfirmUrl(const std::string &html)
     return q.empty() ? "" : action + q;
 }
 
+std::string StoreInstallFolder(const std::string &category)
+{
+    std::string c = Lower(category);
+    if (c == "games" || c == "homebrew games") {
+        return "Games";
+    }
+    if (c == "emulators") {
+        return "Emulators";
+    }
+    return "Apps";
+}
+
 std::string StoreSafeFolderName(const std::string &name)
 {
     std::string out;

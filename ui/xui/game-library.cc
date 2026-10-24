@@ -6083,6 +6083,7 @@ struct StoreState {
     enum Phase { Idle, Downloading, Copying, Done, Failed } phase = Idle;
     std::shared_ptr<StoreTransfer> xfer;
     std::string inst_app, inst_name, inst_msg;
+    std::string inst_dir; // "Games", "Apps"... on E:
     fs::path staging;
     bool confirm = false;
 } g_store;
@@ -6260,9 +6261,10 @@ void StoreDownloadDone(const std::string &err, const fs::path &content)
         return;
     }
     std::string e;
-    if (!XboxExplorerInstallFolder(content.u8string(), 'E', "/Apps", g_store.inst_name,
-                                   "Installing " + g_store.inst_app +
-                                       " to E:\\Apps\\" + g_store.inst_name,
+    if (!XboxExplorerInstallFolder(content.u8string(), 'E', "/" + g_store.inst_dir,
+                                   g_store.inst_name,
+                                   "Installing " + g_store.inst_app + " to E:\\" +
+                                       g_store.inst_dir + "\\" + g_store.inst_name,
                                    &e)) {
         g_store.phase = StoreState::Failed;
         g_store.inst_msg = e;
@@ -6279,6 +6281,7 @@ void StoreInstall(const StoreApp &app, const StoreVersion &v)
         return;
     }
     g_store.inst_app = app.name;
+    g_store.inst_dir = StoreInstallFolder(app.category);
     g_store.inst_name =
         StoreSafeFolderName(v.folder_name.empty() ? app.name : v.folder_name);
     g_store.inst_msg.clear();
@@ -6392,9 +6395,11 @@ void StorePump()
         g_store.phase = error ? StoreState::Failed : StoreState::Done;
         g_store.inst_msg =
             error ? status
-                  : g_store.inst_app + " is in E:\\Apps\\" + g_store.inst_name +
-                        ". Start it from a dashboard that lists apps, such as "
-                        "XBMC4Gamers, or from the Drive tab's E: drive.";
+                  : "Installed to E:\\" + g_store.inst_dir + "\\" +
+                        g_store.inst_name +
+                        ". The Microsoft dashboard doesn't list homebrew: start "
+                        "it from a homebrew dashboard such as XBMC4Gamers, which "
+                        "finds E:\\Games, E:\\Apps and E:\\Emulators.";
         std::error_code ec;
         fs::remove_all(g_store.staging, ec);
     }
@@ -6614,7 +6619,8 @@ void DrawStoreDetails(const StoreApp &app, float w)
             ImGui::SameLine(0, 12 * s);
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() +
                                  (38 * s - ImGui::GetFontSize()) / 2);
-            ImGui::TextDisabled("to E:\\Apps\\%s",
+            ImGui::TextDisabled("to E:\\%s\\%s",
+                                StoreInstallFolder(app.category).c_str(),
                                 StoreSafeFolderName(v->folder_name.empty()
                                                         ? app.name
                                                         : v->folder_name)
@@ -6631,6 +6637,11 @@ void DrawStoreDetails(const StoreApp &app, float w)
                                    : ICON_FA_CHECK,
                                g_store.inst_msg.c_str());
             ImGui::PopTextWrapPos();
+            if (g_store.phase == StoreState::Done &&
+                DashButton(ICON_FA_HARD_DRIVE "  Show on the Xbox drive", T().glass,
+                           T().white, ImVec2(0, 32 * s))) {
+                SwitchTab(kTabDrive); // the explorer is already in that folder
+            }
         }
     }
     ImGui::Dummy(ImVec2(0, 8 * s));
@@ -6658,7 +6669,8 @@ void DrawStoreDetails(const StoreApp &app, float w)
                                : "";
         ImGui::Text("Install %s%s?", app.name.c_str(),
                     v ? (" " + v->version).c_str() : "");
-        ImGui::TextDisabled("Goes to E:\\Apps\\%s%s", folder.c_str(),
+        ImGui::TextDisabled("Goes to E:\\%s\\%s%s",
+                            StoreInstallFolder(app.category).c_str(), folder.c_str(),
                             v && v->size ? ("  (" + StoreSize(v->size) + ")").c_str()
                                          : "");
         ImGui::Spacing();
@@ -6688,8 +6700,8 @@ void DrawStoreTab()
     StoreStart();
     DashLabel("Homebrew store");
     DashTitle("Homebrew apps and games from XboxHomebrew.store");
-    ImGui::TextDisabled("Run by Team Resurgent. Installs go to E:\\Apps on the "
-                        "Xbox hard drive.");
+    ImGui::TextDisabled("Run by Team Resurgent. Installs go to E:\\Games, "
+                        "E:\\Emulators or E:\\Apps on the Xbox hard drive.");
     ImGui::Dummy(ImVec2(0, 4 * s));
 
     // Search and categories

@@ -18,6 +18,7 @@
  */
 
 #include "ui/xemu-settings.h"
+#include "ui/xemu-shader-cache.h"
 #include "qemu/fast-hash.h"
 #include "renderer.h"
 
@@ -352,6 +353,7 @@ GByteArray *pgraph_vk_compile_glsl_to_spv(PGRAPHVkState *r,
             g_byte_array_append(spv, (guint8 *)contents + sizeof(have),
                                 have.spv_len);
             g_free(contents);
+            xemu_shader_cache_note(path);
             g_free(path);
             g_free(dir);
             return spv;
@@ -366,7 +368,10 @@ GByteArray *pgraph_vk_compile_glsl_to_spv(PGRAPHVkState *r,
         g_byte_array_append(out, (const guint8 *)&want, sizeof(want));
         g_byte_array_append(out, spv->data, spv->len);
         g_mkdir_with_parents(dir, 0755);
-        g_file_set_contents(path, (const gchar *)out->data, out->len, NULL);
+        if (g_file_set_contents(path, (const gchar *)out->data, out->len,
+                                NULL)) {
+            xemu_shader_cache_note(path);
+        }
         g_byte_array_unref(out);
     }
     g_free(path);

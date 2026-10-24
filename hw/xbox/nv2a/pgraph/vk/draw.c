@@ -20,6 +20,7 @@
 #include "qemu/osdep.h"
 #include "qemu/fast-hash.h"
 #include "ui/xemu-settings.h"
+#include "ui/xemu-shader-cache.h"
 #include "renderer.h"
 #include <math.h>
 
@@ -179,7 +180,8 @@ static void save_pipeline_cache(PGRAPHVkState *r)
     r->pipelines_since_cache_save = 0;
     r->pipeline_cache_last_save_ms = g_get_monotonic_time() / 1000;
     if (!g_config.perf.cache_shaders ||
-        r->vk_pipeline_cache == VK_NULL_HANDLE) {
+        r->vk_pipeline_cache == VK_NULL_HANDLE ||
+        xemu_shader_cache_pipelines_discarded()) {
         return;
     }
     size_t size = 0;

@@ -12,6 +12,7 @@ xemu_ss.add(files(
   'xiso.cc',
   'perf-analysis.cc',
   'perf-capture.cc',
+  'shader-cache.cc',
   'game-preview.cc',
   'perf-overlay.cc',
   'game-shortcut.cc',

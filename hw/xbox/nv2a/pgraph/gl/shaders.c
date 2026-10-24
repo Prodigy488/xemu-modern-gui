@@ -25,6 +25,7 @@
 
 #include "xemu-version.h"
 #include "ui/xemu-settings.h"
+#include "ui/xemu-shader-cache.h"
 #include "hw/xbox/nv2a/debug_gl.h"
 #include "hw/xbox/nv2a/pgraph/util.h"
 #include "debug.h"
@@ -457,6 +458,7 @@ static void shader_load_from_disk(PGRAPHState *pg, uint64_t hash)
     #undef READ_OR_ERR
 
     fclose(shader_file);
+    xemu_shader_cache_note(shader_path);
     g_free(shader_path);
     g_free(cached_xemu_version);
     g_free(cached_gl_vendor);
@@ -669,6 +671,7 @@ static void *shader_write_to_disk(void *arg)
     #undef WRITE_OR_ERR
 
     fclose(shader_file);
+    xemu_shader_cache_note(shader_path);
 
     g_free(shader_path);
     g_free(binding->program);

@@ -9,6 +9,7 @@ xemu_ss.add(files(
   'game-patches.cc',
   'game-compat.cc',
   'game-store.cc',
+  'xiso.cc',
   'game-preview.cc',
   'perf-overlay.cc',
   'game-shortcut.cc',

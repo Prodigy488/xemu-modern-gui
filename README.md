@@ -13,15 +13,15 @@ quality-of-life features on top of the official release.
 
 ![Home tab, Neon theme](docs/screenshots/home.jpg)
 
-| Library | Insignia | Drive (hard drive explorer) |
+| Library | Homebrew store | Drive (hard drive explorer) |
 |---|---|---|
-| ![Library](docs/screenshots/library.jpg) | ![Insignia](docs/screenshots/insignia.jpg) | ![Drive](docs/screenshots/drive.jpg) |
+| ![Library](docs/screenshots/library.jpg) | ![Store](docs/screenshots/store.jpg) | ![Drive](docs/screenshots/drive.jpg) |
 
-| Blades style | Metro style | Classic style |
+| Insignia | Blades style | Metro style |
 |---|---|---|
-| ![Blades](docs/screenshots/blades.jpg) | ![Metro](docs/screenshots/metro.jpg) | ![Classic](docs/screenshots/classic.jpg) |
+| ![Insignia](docs/screenshots/insignia.jpg) | ![Blades](docs/screenshots/blades.jpg) | ![Metro](docs/screenshots/metro.jpg) |
 
-<sub>Screenshots use original placeholder cover art (not the real box art) and example compatibility ratings.</sub>
+<sub>Screenshots use original placeholder cover art (not the real box art), example compatibility ratings and invented example store listings.</sub>
 
 ## Download
 
@@ -39,6 +39,12 @@ shared.
   the game you're playing, with its cover, title ID, play time and an Insignia
   badge for online-capable games. Turn it off in Settings > General > Discord
   status. Requires the Discord app running on the same PC.
+- **New in v1.5: homebrew store.** A Store tab lists the homebrew on
+  [XboxHomebrew.store](https://xboxhomebrew.store) (run by Team Resurgent):
+  search, browse by category, read about an app and its versions, then
+  **Install to Xbox** to download it and copy it to `E:\Apps` on your hard
+  disk image. Only homebrew is listed; firmware and Microsoft's dashboards
+  are left out.
 - **New in v1.4: compatibility ratings.** Each game shows its rating from
   xemu's community [compatibility list](https://xemu.app/#compatibility):
   a coloured dot on its cover, a badge on Home and a row in its details with
@@ -75,6 +81,8 @@ shared.
   - **Library:** your full game collection.
   - **Insignia:** online status, your online-capable games and setup steps.
   - **Media:** save states and screenshots.
+  - **Drive:** the Xbox hard drive explorer.
+  - **Store:** homebrew from XboxHomebrew.store.
   - **Patches** and **Settings.**
 - **Upscaling filters:** AMD FidelityFX FSR 1.0, NVIDIA RTX Video (AI),
   NVIDIA Image Scaling (NIS),

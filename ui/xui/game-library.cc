@@ -5109,6 +5109,8 @@ void DrawDashTopBar()
 }
 
 // Controller hints along the bottom
+bool HomebrewInstalledView();
+
 void DrawDashHints(ImVec2 a, float w)
 {
     const float s = g_viewport_mgr.m_scale;
@@ -5128,6 +5130,14 @@ void DrawDashHints(ImVec2 a, float w)
         break;
     case kTabInsignia:
         hints = { { "A", ka, "Play online" }, { "B", kb, "Back to game" } };
+        break;
+    case kTabStore:
+        if (HomebrewInstalledView()) {
+            hints = { { "A", ka, "Play" }, { "Y", ky, "Options" },
+                      { "B", kb, "Back to game" } };
+        } else {
+            hints = { { "A", ka, "Select" }, { "B", kb, "Back to game" } };
+        }
         break;
     default:
         hints = { { "A", ka, "Select" }, { "B", kb, "Back to game" } };
@@ -6717,6 +6727,11 @@ struct HomebrewState {
     bool preparing = false;
     std::string iso, title, msg;
     bool msg_err = false;
+    // Options menu and delete
+    XboxHomebrewApp menu_app;
+    ImVec2 menu_pos;
+    bool open_menu = false, open_delete = false, deleting = false;
+    std::set<std::string> searched; // store lookups tried this session
 } g_hb;
 
 fs::path StoreInstalledPath()
@@ -6751,14 +6766,113 @@ std::string HomebrewKey(char vol, const std::string &dir)
     return k;
 }
 
-void StoreRememberInstall(const std::string &dir, const std::string &app_id)
+void SaveStoreInstalled()
 {
-    StoreInstalled()[HomebrewKey('E', dir)] = app_id;
     json j = json::object();
     for (auto &kv : StoreInstalled()) {
         j[kv.first] = kv.second;
     }
     WriteFileAtomic(StoreInstalledPath(), j.dump(1));
+}
+
+void StoreRememberInstall(const std::string &dir, const std::string &app_id)
+{
+    StoreInstalled()[HomebrewKey('E', dir)] = app_id;
+    SaveStoreInstalled();
+}
+
+// Letters and digits only, lower case: "Abbaye X" == "abbaye_x"
+std::string LooseName(const std::string &n)
+{
+    std::string o;
+    for (unsigned char c : n) {
+        if (isalnum(c)) {
+            o += (char)tolower(c);
+        }
+    }
+    return o;
+}
+
+// Homebrew copied on by hand: find it in the store by name for its cover
+void StoreLookUpCover(const XboxHomebrewApp &a)
+{
+    std::string key = HomebrewKey(a.vol, a.dir);
+    if (StoreInstalled().count(key) || !g_hb.searched.insert(key).second) {
+        return;
+    }
+    std::vector<std::string> names = { a.title };
+    if (LooseName(a.folder) != LooseName(a.title)) {
+        names.push_back(a.folder);
+    }
+    g_store_api->Post([key, names] {
+        for (auto &n : names) {
+            std::string body;
+            std::vector<StoreApp> apps;
+            if (LooseName(n).empty() ||
+                StoreGet(StoreUrlApps(0, 20, "", n), &body) != 200 ||
+                !ParseStoreApps(body, &apps)) {
+                continue;
+            }
+            for (auto &app : apps) {
+                if (StoreAppAllowed(app) && LooseName(app.name) == LooseName(n)) {
+                    std::string id = app.id;
+                    StoreOnMain([key, id] {
+                        StoreInstalled()[key] = id;
+                        SaveStoreInstalled();
+                    });
+                    return;
+                }
+            }
+        }
+    });
+}
+
+// Covers for one installed app: the store's, one of yours in a covers
+// folder (by title ID, like games), and the XBE's own title image
+void HomebrewLoadArt(const XboxHomebrewApp &a)
+{
+    std::string key = HomebrewKey(a.vol, a.dir);
+    StoreLookUpCover(a);
+    if (a.title_id) {
+        std::vector<fs::path> cands;
+        for (auto &folder : AllFolders()) {
+            fs::path covers = fs::u8path(folder.path) / "covers";
+            for (const char *ext : { ".png", ".jpg", ".jpeg" }) {
+                cands.push_back(covers / (TitleIdHex(a.title_id) + ext));
+                cands.push_back(covers / (FormatTitleId(a.title_id) + ext));
+            }
+        }
+        StoreImage &h = g_store_images["h:" + key];
+        if (!h.requested) {
+            h.requested = true;
+            ImageJob job{ "store:h:" + key, cands, 336 };
+            std::lock_guard<std::mutex> lock(g_img_mutex);
+            if (!g_img_quit) {
+                g_img_jobs.push_back(std::move(job));
+            }
+        }
+    }
+    if (!g_img_thread.joinable()) {
+        g_img_thread = std::thread(ImageWorker);
+    }
+    g_img_cv.notify_one();
+    StoreImage &x = g_store_images["x:" + key];
+    if (!x.requested && !a.title_image.empty()) {
+        x.requested = true;
+        int w = 0, h = 0;
+        std::vector<uint8_t> rgba;
+        if (DecodeXprImage(a.title_image.data(), a.title_image.size(), w, h, rgba) &&
+            !rgba.empty()) {
+            x.tex = UploadTexture(rgba.data(), w, h);
+            x.w = w;
+            x.h = h;
+        }
+    }
+}
+
+bool HomebrewInstalledView()
+{
+    return g_hb.view == 0;
 }
 
 void HomebrewMarkDirty()
@@ -6772,6 +6886,9 @@ void HomebrewRefresh()
     g_hb.err.clear();
     if (!XboxExplorerFindHomebrew(&g_hb.apps, &g_hb.err)) {
         g_hb.apps.clear();
+    }
+    for (auto &a : g_hb.apps) {
+        HomebrewLoadArt(a);
     }
     if (g_hb.view < 0) {
         g_hb.view = g_hb.apps.empty() ? 1 : 0;
@@ -6810,9 +6927,47 @@ void HomebrewPlay(const XboxHomebrewApp &a)
     g_hb.preparing = true;
 }
 
+void HomebrewDelete(const XboxHomebrewApp &a)
+{
+    std::string err;
+    g_hb.msg.clear();
+    if (!XboxExplorerDeleteFolder(a.vol, a.dir, a.title, &err)) {
+        g_hb.msg = err;
+        g_hb.msg_err = true;
+        return;
+    }
+    g_hb.deleting = true;
+    g_hb.title = a.title;
+    // Its disc image and remembered store cover go too
+    std::string key = HomebrewKey(a.vol, a.dir);
+    std::error_code ec;
+    fs::remove_all(IconCacheDir() / "homebrew" /
+                       StoreFileId(std::string(1, a.vol) + a.dir),
+                   ec);
+    if (StoreInstalled().erase(key)) {
+        SaveStoreInstalled();
+    }
+    g_hb.searched.erase(key);
+    for (const char *p : { "h:", "x:" }) {
+        auto it = g_store_images.find(p + key);
+        if (it != g_store_images.end()) {
+            DeleteTextureLater(it->second.tex);
+            g_store_images.erase(it);
+        }
+    }
+}
+
 // Every frame, from StorePump()
 void HomebrewPump()
 {
+    if (g_hb.deleting && !XboxExplorerBusy()) {
+        g_hb.deleting = false;
+        bool error = false;
+        std::string status = XboxExplorerStatus(&error);
+        g_hb.msg = error ? status : g_hb.title + " was deleted.";
+        g_hb.msg_err = error;
+        g_hb.loaded = false;
+    }
     if (!g_hb.preparing || XboxExplorerBusy()) {
         return;
     }
@@ -6838,7 +6993,18 @@ bool HomebrewCard(const XboxHomebrewApp &a, float w)
     bool pressed = ImGui::InvisibleButton("##hb", ImVec2(w, h), ImGuiButtonFlags_EnableNav);
     bool hovered = ImGui::IsItemHovered() || ImGui::IsItemFocused();
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("%s\n%s", a.title.c_str(), HomebrewDisplayDir(a).c_str());
+        ImGui::SetTooltip("%s\n%s\nRight-click for more", a.title.c_str(),
+                          HomebrewDisplayDir(a).c_str());
+    }
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Right) ||
+        (ImGui::IsItemFocused() &&
+         ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false))) {
+        g_hb.menu_app = a;
+        g_hb.open_menu = true;
+        // Beside the mouse, or over the card when opened with Y
+        g_hb.menu_pos = ImGui::IsItemHovered()
+                            ? ImGui::GetMousePos()
+                            : ImVec2(p.x + w * 0.2f, p.y + w * 0.4f);
     }
     ImGui::PopID();
     if (!ImGui::IsRectVisible(p, ImVec2(p.x + w, p.y + h))) {
@@ -6847,11 +7013,25 @@ bool HomebrewCard(const XboxHomebrewApp &a, float w)
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImVec2 cb(p.x + w, p.y + cover_h);
     float r = 10 * s;
-    auto it = StoreInstalled().find(HomebrewKey(a.vol, a.dir));
+    std::string key = HomebrewKey(a.vol, a.dir);
+    auto it = StoreInstalled().find(key);
     const StoreImage *img =
         it != StoreInstalled().end() ? GetStoreImage(it->second, false) : nullptr;
+    auto own = g_store_images.find("h:" + key);
+    auto icon = g_store_images.find("x:" + key);
     if (img && img->tex) {
         StoreImageFill(dl, img, p, cb, r);
+    } else if (own != g_store_images.end() && own->second.tex) {
+        StoreImageFill(dl, &own->second, p, cb, r);
+    } else if (icon != g_store_images.end() && icon->second.tex) {
+        // The XBE's square title image on its own blurred, darkened copy
+        StoreImageFill(dl, &icon->second, p, cb, r);
+        dl->AddRectFilled(p, cb, IM_COL32(0, 0, 0, 150), r);
+        float side = w * 0.86f;
+        ImVec2 ia((p.x + cb.x - side) / 2, p.y + (cover_h - side) / 2);
+        ShapeImage(dl, (ImTextureID)(intptr_t)icon->second.tex, ia,
+                   ImVec2(ia.x + side, ia.y + side), ImVec2(0, 0), ImVec2(1, 1),
+                   IM_COL32_WHITE, 6 * s);
     } else {
         StorePlaceholder(dl, a.title, p, cb, r);
     }
@@ -6892,13 +7072,17 @@ void DrawMyHomebrew()
     if (g_hb.preparing) {
         ImGui::ProgressBar(XboxExplorerProgress(), ImVec2(320 * s, 0),
                            ("Getting " + g_hb.title + " ready...").c_str());
+    } else if (g_hb.deleting) {
+        ImGui::ProgressBar(XboxExplorerProgress(), ImVec2(320 * s, 0),
+                           ("Deleting " + g_hb.title + "...").c_str());
     } else if (!g_hb.msg.empty()) {
         ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(g_hb.msg_err ? T().bad
                                                                        : T().dim),
                            "%s", g_hb.msg.c_str());
     } else {
-        ImGui::TextDisabled("Pick one to play. It starts from the DVD drive, so "
-                            "anything it saves to its own folder isn't kept.");
+        ImGui::TextDisabled("Pick one to play; right-click (or Y) to delete. It "
+                            "runs from the DVD drive, so anything it saves to its "
+                            "own folder isn't kept.");
     }
     ImGui::Dummy(ImVec2(0, 6 * s));
     ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -6936,6 +7120,56 @@ void DrawMyHomebrew()
         if (i % cols == (size_t)cols - 1) {
             ImGui::Dummy(ImVec2(0, 4 * s));
         }
+    }
+
+    // Options for one app (right-click or Y)
+    if (g_hb.open_menu) {
+        g_hb.open_menu = false;
+        ImGui::OpenPopup("##hbmenu");
+        ImGui::SetNextWindowPos(g_hb.menu_pos);
+    }
+    if (ImGui::BeginPopup("##hbmenu")) {
+        const XboxHomebrewApp &m = g_hb.menu_app;
+        ImGui::TextDisabled("%s", m.title.c_str());
+        ImGui::Separator();
+        bool busy = g_hb.preparing || g_hb.deleting || XboxExplorerBusy();
+        if (ImGui::MenuItem(ICON_FA_PLAY "  Play", nullptr, false, !busy)) {
+            HomebrewPlay(m);
+        }
+        if (ImGui::MenuItem(ICON_FA_HARD_DRIVE "  Show on the Xbox drive")) {
+            SwitchTab(kTabDrive);
+            XboxExplorerShowFolder(m.vol, m.dir);
+        }
+        if (ImGui::MenuItem(ICON_FA_TRASH "  Delete...", nullptr, false, !busy)) {
+            g_hb.open_delete = true;
+        }
+        ImGui::EndPopup();
+    }
+    if (g_hb.open_delete) {
+        g_hb.open_delete = false;
+        ImGui::OpenPopup("##hbdelete");
+    }
+    if (ImGui::BeginPopupModal("##hbdelete", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        const XboxHomebrewApp &m = g_hb.menu_app;
+        ImGui::Text("Delete %s?", m.title.c_str());
+        ImGui::TextDisabled("Removes %s and everything in it.",
+                            HomebrewDisplayDir(m).c_str());
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30);
+        ImGui::TextWrapped("This can't be undone. The Xbox pauses and restarts "
+                           "to make the change, so save your game first.");
+        ImGui::PopTextWrapPos();
+        if (ImGui::Button(ICON_FA_TRASH " Delete")) {
+            ImGui::CloseCurrentPopup();
+            HomebrewDelete(m);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+            ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
+            GameLibraryConsumeBack();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
     ImGui::EndChild();
     ImGui::PopStyleVar();

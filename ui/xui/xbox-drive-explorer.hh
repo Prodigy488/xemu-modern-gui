@@ -27,6 +27,8 @@ void XboxExplorerUpdate(void);
 void XboxExplorerWindowDraw(void);
 void XboxExplorerOpenWindow(void);
 bool XboxExplorerBusy(void);
+// Open <vol>:<path> in the explorer
+void XboxExplorerShowFolder(char vol, const std::string &path);
 
 // Copy the contents of host_dir onto the Xbox as <vol>:<parent>/<name>,
 // creating parent if needed and replacing an existing folder of that name.
@@ -53,8 +55,13 @@ struct XboxHomebrewApp {
     std::string title;   // from the XBE, or the folder name
     uint32_t title_id = 0;
     uint64_t xbe_size = 0;
+    std::vector<uint8_t> title_image; // the XBE's $$XTIMAGE (XPR), if any
 };
 bool XboxExplorerFindHomebrew(std::vector<XboxHomebrewApp> *out, std::string *err);
+
+// Delete <vol>:<dir> and everything in it (the Xbox pauses and restarts)
+bool XboxExplorerDeleteFolder(char vol, const std::string &dir,
+                              const std::string &title, std::string *err);
 
 // Last status line ("Copying...", "... - done.", an error), and progress 0-1
 std::string XboxExplorerStatus(bool *is_error);

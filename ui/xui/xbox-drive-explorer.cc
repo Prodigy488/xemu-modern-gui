@@ -935,6 +935,14 @@ bool XboxExplorerBusy(void)
     return g_job != nullptr;
 }
 
+void XboxExplorerShowFolder(char vol, const std::string &path)
+{
+    if (g_job) {
+        return;
+    }
+    Navigate(vol, path);
+}
+
 bool XboxExplorerInstallFolder(const std::string &host_dir, char vol,
                                const std::string &parent, const std::string &name,
                                const std::string &title, std::string *err)
@@ -1111,26 +1119,32 @@ std::string Utf16Le(const uint8_t *p, size_t max_chars)
     return out;
 }
 
-// Title name and ID from an XBE's certificate
+// Title name, ID and title image from an XBE
 void ReadXbeTitle(char vol, const std::string &xbe, XboxHomebrewApp *app)
 {
-    uint8_t hdr[0x180];
-    if (g_drive.ReadAt(vol, xbe, 0, hdr, sizeof(hdr)) != (int64_t)sizeof(hdr) ||
-        memcmp(hdr, "XBEH", 4) != 0) {
-        return;
-    }
     auto le32 = [](const uint8_t *p) {
         return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 |
                (uint32_t)p[3] << 24;
     };
-    uint32_t base = le32(hdr + 0x104), cert = le32(hdr + 0x118);
-    if (cert < base || cert - base > 0x100000) {
+    uint8_t h0[0x180];
+    if (g_drive.ReadAt(vol, xbe, 0, h0, sizeof(h0)) != (int64_t)sizeof(h0) ||
+        memcmp(h0, "XBEH", 4) != 0) {
         return;
     }
-    uint8_t c[0x5C];
-    if (g_drive.ReadAt(vol, xbe, cert - base, c, sizeof(c)) != (int64_t)sizeof(c)) {
+    uint32_t base = le32(h0 + 0x104), hsize = le32(h0 + 0x108);
+    if (hsize < sizeof(h0) || hsize > 4 * 1024 * 1024 || hsize > app->xbe_size) {
+        // Odd header size: the certificate is still near the start
+        hsize = (uint32_t)std::min<uint64_t>(app->xbe_size, 0x10000);
+    }
+    std::vector<uint8_t> hdr(hsize);
+    if (g_drive.ReadAt(vol, xbe, 0, hdr.data(), hsize) != (int64_t)hsize) {
         return;
     }
+    uint32_t cert = le32(&hdr[0x118]);
+    if (cert < base || (uint64_t)cert - base + 0x5C > hsize) {
+        return;
+    }
+    const uint8_t *c = &hdr[cert - base];
     app->title_id = le32(c + 8);
     std::string t = Utf16Le(c + 0x0C, 40);
     while (!t.empty() && (t.back() == ' ' || t.back() == '\t')) {
@@ -1138,6 +1152,28 @@ void ReadXbeTitle(char vol, const std::string &xbe, XboxHomebrewApp *app)
     }
     if (!t.empty()) {
         app->title = t;
+    }
+    // $$XTIMAGE section: the title image dashboards show
+    uint32_t n = le32(&hdr[0x11C]), secs = le32(&hdr[0x120]);
+    if (secs < base || n > 1024 || (uint64_t)secs - base + (uint64_t)n * 56 > hsize) {
+        return;
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        const uint8_t *s = &hdr[secs - base + i * 56];
+        uint32_t raw = le32(s + 12), size = le32(s + 16), name = le32(s + 20);
+        const char want[] = "$$XTIMAGE";
+        if (name < base || (uint64_t)name - base + sizeof(want) > hsize ||
+            memcmp(&hdr[name - base], want, sizeof(want)) != 0) {
+            continue;
+        }
+        if (size && size < 4 * 1024 * 1024 && (uint64_t)raw + size <= app->xbe_size) {
+            app->title_image.resize(size);
+            if (g_drive.ReadAt(vol, xbe, raw, app->title_image.data(), size) !=
+                (int64_t)size) {
+                app->title_image.clear();
+            }
+        }
+        break;
     }
 }
 } // namespace
@@ -1215,6 +1251,44 @@ bool XboxExplorerMakeXiso(char vol, const std::string &dir,
     }
     StartJob(std::move(job));
     return g_job != nullptr;
+}
+
+bool XboxExplorerDeleteFolder(char vol, const std::string &dir,
+                              const std::string &title, std::string *err)
+{
+    if (g_job) {
+        *err = "The Xbox hard drive is busy with another copy";
+        return false;
+    }
+    if (XboxIsRunning() && g_drive.IsOpen()) {
+        Reopen();
+    }
+    if (!EnsureOpen()) {
+        *err = g_open_err.empty() ? "Can't open the Xbox hard drive" : g_open_err;
+        return false;
+    }
+    if (!XboxDiskEmulatedWritable()) {
+        *err = "The hard disk image is read-only";
+        return false;
+    }
+    XboxFileInfo fi;
+    if (dir.empty() || dir == "/" || !g_drive.Stat(vol, dir, &fi) || !fi.dir) {
+        *err = "It's no longer on the drive";
+        return false;
+    }
+    auto job = std::make_unique<Job>();
+    job->writes = true;
+    job->vol = vol;
+    job->title = "Deleting " + title;
+    if (!DeleteSteps(vol, dir, fi, job.get(), err)) {
+        return false;
+    }
+    StartJob(std::move(job));
+    if (!g_job) {
+        *err = g_status;
+        return false;
+    }
+    return true;
 }
 
 bool XboxExplorerFindHomebrew(std::vector<XboxHomebrewApp> *out, std::string *err)

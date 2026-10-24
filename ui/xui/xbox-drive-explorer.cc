@@ -871,6 +871,130 @@ bool XboxExplorerBusy(void)
     return g_job != nullptr;
 }
 
+bool XboxExplorerInstallFolder(const std::string &host_dir, char vol,
+                               const std::string &parent, const std::string &name,
+                               const std::string &title, std::string *err)
+{
+    if (g_job) {
+        *err = "Another copy to the Xbox is still running";
+        return false;
+    }
+    std::string why;
+    if (!XboxValidName(name, &why)) {
+        *err = "\"" + name + "\": " + why;
+        return false;
+    }
+    if (!EnsureOpen()) {
+        *err = g_open_err.empty() ? "Can't open the Xbox hard drive" : g_open_err;
+        return false;
+    }
+    if (!g_drive.Volume(vol)) {
+        *err = std::string("This hard disk image has no ") + vol + ": drive";
+        return false;
+    }
+    if (!XboxDiskEmulatedWritable()) {
+        *err = "The hard disk image is read-only";
+        return false;
+    }
+    // Plan everything before pausing, so a problem leaves the Xbox running
+    auto job = std::make_unique<Job>();
+    job->writes = true;
+    job->vol = vol;
+    job->title = title;
+    // The Xbox ignores case but libfatx doesn't: reuse "apps" if that's
+    // what's there rather than making a second "Apps"
+    auto same_case = [vol](const std::string &dir, const std::string &leaf) {
+        std::vector<XboxFileInfo> list;
+        std::string e, want = leaf;
+        std::transform(want.begin(), want.end(), want.begin(), ::tolower);
+        if (g_drive.List(vol, dir, &list, &e)) {
+            for (auto &f : list) {
+                std::string n = f.name;
+                std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+                if (n == want) {
+                    return f.name;
+                }
+            }
+        }
+        return leaf;
+    };
+    std::string parent_path = XboxParent(parent);
+    std::string resolved_parent =
+        parent == "/" ? parent
+                      : XboxJoin(parent_path,
+                                 same_case(parent_path,
+                                           parent.substr(parent.find_last_of('/') + 1)));
+    std::string resolved_name = same_case(resolved_parent, name);
+    std::string target = XboxJoin(resolved_parent, resolved_name);
+    XboxFileInfo fi;
+    if (!g_drive.Stat(vol, resolved_parent, &fi)) {
+        job->steps.push_back({ Step::XMkDir, "", resolved_parent, 0 });
+    } else if (!fi.dir) {
+        *err = parent + " on " + std::string(1, vol) + ": is a file";
+        return false;
+    } else if (g_drive.Stat(vol, target, &fi)) {
+        // An update: the old version goes first
+        fi.name = resolved_name;
+        if (!DeleteSteps(vol, target, fi, job.get(), err)) {
+            return false;
+        }
+    }
+    job->steps.push_back({ Step::XMkDir, host_dir, target, 0 });
+    std::error_code ec;
+    std::vector<fs::path> children;
+    for (auto &e : fs::directory_iterator(fs::u8path(host_dir), ec)) {
+        children.push_back(e.path());
+    }
+    std::sort(children.begin(), children.end());
+    if (children.empty()) {
+        *err = "There's nothing to copy";
+        return false;
+    }
+    for (auto &c : children) {
+        if (!HostToXboxSteps(c, target, job.get(), err)) {
+            return false;
+        }
+    }
+    const XboxVolume *v = g_drive.Volume(vol);
+    if (v && !v->free_known) {
+        g_drive.UpdateFreeSpace(vol);
+        v = g_drive.Volume(vol);
+    }
+    if (v && v->free_known && job->total > v->free) {
+        *err = "Not enough space on " + std::string(1, vol) + ": (" +
+               FormatSize(job->total) + " needed, " + FormatSize(v->free) +
+               " free)";
+        return false;
+    }
+    // Planned against the disk as it was; StartJob re-reads it after pausing
+    StartJob(std::move(job));
+    if (!g_job) {
+        *err = g_status;
+        return false;
+    }
+    // Show where it went (not Navigate: that would re-read the disk mid-job)
+    g_vol = vol;
+    g_path = resolved_parent;
+    g_list_dirty = true;
+    return true;
+}
+
+std::string XboxExplorerStatus(bool *is_error)
+{
+    if (is_error) {
+        *is_error = g_status_error;
+    }
+    return g_status;
+}
+
+float XboxExplorerProgress(void)
+{
+    if (!g_job || !g_job->total) {
+        return 0;
+    }
+    return std::min(1.0f, (float)((double)g_job->done / g_job->total));
+}
+
 void XboxExplorerDraw(void)
 {
     const float s = g_viewport_mgr.m_scale;

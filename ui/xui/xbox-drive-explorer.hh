@@ -26,3 +26,14 @@ void XboxExplorerUpdate(void);
 void XboxExplorerWindowDraw(void);
 void XboxExplorerOpenWindow(void);
 bool XboxExplorerBusy(void);
+
+// Copy the contents of host_dir onto the Xbox as <vol>:<parent>/<name>,
+// creating parent if needed and replacing an existing folder of that name.
+// Starts right away (the caller has asked the user): the Xbox pauses and
+// restarts when done. False with *err if it can't start.
+bool XboxExplorerInstallFolder(const std::string &host_dir, char vol,
+                               const std::string &parent, const std::string &name,
+                               const std::string &title, std::string *err);
+// Last status line ("Copying...", "... - done.", an error), and progress 0-1
+std::string XboxExplorerStatus(bool *is_error);
+float XboxExplorerProgress(void);

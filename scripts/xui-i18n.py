@@ -30,8 +30,9 @@ def load_macros():
     """ICON_* string macros, so tr(ICON_FA_PLAY " Play") can be read."""
     macros = {}
     paths = [os.path.join(ROOT, 'ui', 'thirdparty', 'fa', 'IconsFontAwesome6.h'),
-             os.path.join(XUI, 'font-manager.hh')]
-    rx = re.compile(r'#define\s+(ICON_\w+)\s+((?:"(?:[^"\\]|\\.)*"\s*)+)')
+             os.path.join(XUI, 'font-manager.hh'),
+             os.path.join(ROOT, 'ui', 'xemu-net.h')]
+    rx = re.compile(r'#define\s+((?:ICON|XEMU)_\w+)\s+((?:"(?:[^"\\]|\\.)*"\s*)+)')
     for p in paths:
         with open(p, encoding='utf-8', errors='replace') as f:
             for m in rx.finditer(f.read()):
@@ -168,7 +169,9 @@ def extract_file(path, macros):
             else [text]
         for it in items:
             core = split_core(it)
-            if core and re.search(rb'[A-Za-z]', core):
+            # Only text: "1280x720" and "4x" aren't worth translating
+            letters = re.sub(rb'%[-+ #0-9.*]*[a-zA-Z]+', b'', core)
+            if core and re.search(rb'[A-Za-z]{2}', letters):
                 found.append((core.decode('utf-8'), '%s:%d' % (
                     os.path.relpath(path, ROOT), line)))
     return found

@@ -264,10 +264,10 @@ public:
             ImGui::NextColumn();
 
             ImGui::PushFont(g_font_mgr.m_menuFont);
-            ImGui::Text(tr("Halo: Combat Evolved"));
+            ImGui::TextUnformatted("Halo: Combat Evolved");
             ImGui::PopFont();
             ImGui::PushFont(g_font_mgr.m_menuFontSmall);
-            ImGui::Text(tr("NTSC MS-004"));
+            ImGui::TextUnformatted("NTSC MS-004");
             ImGui::PopFont();
             ImGui::Columns(1);
         }

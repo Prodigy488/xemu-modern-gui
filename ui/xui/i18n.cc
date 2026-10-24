@@ -378,6 +378,34 @@ const uint16_t *XuiLanguageGlyphRanges()
     return r.data();
 }
 
+bool XuiLanguageFitsLatin1()
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_cur) {
+        return true;
+    }
+    static std::map<std::string, bool> known;
+    auto it = known.find(g_code);
+    if (it != known.end()) {
+        return it->second;
+    }
+    bool fits = true;
+    for (const auto &kv : g_cur->table) {
+        for (const unsigned char *p = (const unsigned char *)kv.second; *p && fits;
+             p++) {
+            // UTF-8 lead bytes above U+00FF: 0xC4 and up
+            if (*p >= 0xC4 && *p != 0xE2) { // E2: punctuation like ’ – …
+                fits = false;
+            }
+        }
+        if (!fits) {
+            break;
+        }
+    }
+    known[g_code] = fits;
+    return fits;
+}
+
 std::string XuiLanguageFontPath(int *font_no)
 {
     struct Candidate { const char *file; int index; };
@@ -474,6 +502,69 @@ const char *XuiLanguageLabel()
     }
     return label.c_str();
 }
+
+static uint32_t CaseMap(uint32_t c, bool upper)
+{
+    if (upper) {
+        if (c >= 'a' && c <= 'z') return c - 32;
+        if ((c >= 0xE0 && c <= 0xFE && c != 0xF7)) return c - 0x20;
+        if (c == 0xFF) return 0x178;
+        if (c >= 0x430 && c <= 0x44F) return c - 0x20;
+        if (c >= 0x450 && c <= 0x45F) return c - 0x50;
+        if ((c >= 0x100 && c <= 0x137) || (c >= 0x14A && c <= 0x177)) {
+            return c & ~1u;
+        }
+        if ((c >= 0x139 && c <= 0x148) || (c >= 0x179 && c <= 0x17E)) {
+            return (c & 1) ? c : c - 1;
+        }
+        return c;
+    }
+    if (c >= 'A' && c <= 'Z') return c + 32;
+    if ((c >= 0xC0 && c <= 0xDE && c != 0xD7)) return c + 0x20;
+    if (c == 0x178) return 0xFF;
+    if (c >= 0x410 && c <= 0x42F) return c + 0x20;
+    if (c >= 0x400 && c <= 0x40F) return c + 0x50;
+    if ((c >= 0x100 && c <= 0x137) || (c >= 0x14A && c <= 0x177)) {
+        return c | 1u;
+    }
+    if ((c >= 0x139 && c <= 0x148) || (c >= 0x179 && c <= 0x17E)) {
+        return (c & 1) ? c + 1 : c;
+    }
+    return c;
+}
+
+static std::string ChangeCase(const std::string &in, bool upper)
+{
+    std::string out;
+    out.reserve(in.size());
+    for (size_t i = 0; i < in.size();) {
+        unsigned char b = in[i];
+        if (b < 0x80) {
+            out.push_back((char)CaseMap(b, upper));
+            i++;
+            continue;
+        }
+        if ((b & 0xE0) == 0xC0 && i + 1 < in.size() &&
+            ((unsigned char)in[i + 1] & 0xC0) == 0x80) {
+            uint32_t c = ((b & 0x1F) << 6) | (in[i + 1] & 0x3F);
+            uint32_t m = CaseMap(c, upper);
+            if (m < 0x800 && m >= 0x80) {
+                out.push_back((char)(0xC0 | (m >> 6)));
+                out.push_back((char)(0x80 | (m & 0x3F)));
+            } else {
+                out.append(in, i, 2);
+            }
+            i += 2;
+            continue;
+        }
+        out.push_back((char)b); // other sequences unchanged
+        i++;
+    }
+    return out;
+}
+
+std::string XuiUpper(const std::string &text) { return ChangeCase(text, true); }
+std::string XuiLower(const std::string &text) { return ChangeCase(text, false); }
 
 float XuiLanguageCoverage(const char *code)
 {

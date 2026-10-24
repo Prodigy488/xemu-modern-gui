@@ -40,6 +40,8 @@
 #include "game-store.hh"
 #include "game-preview.hh"
 #include "insignia-titles.hh"
+#include "insignia-net.hh"
+#include "../xemu-net.h"
 #include "jmp-index.hh"
 #include "game-shortcut.hh"
 #include "discord-presence.hh"
@@ -1764,16 +1766,14 @@ ImFont *FontOr(ImFont *f)
 // Neon's small HUD labels use xemu's pixel font
 ImFont *HudFont()
 {
-    return T().neon ? FontOr(g_font_mgr.m_fixed_width_font) : ImGui::GetFont();
+    // The small fixed-width font only has Latin-1
+    return T().neon && XuiLanguageFitsLatin1() ? FontOr(g_font_mgr.m_fixed_width_font)
+                                               : ImGui::GetFont();
 }
 
 std::string Upper(const std::string &t)
 {
-    std::string u;
-    for (char c : t) {
-        u += (char)toupper((unsigned char)c);
-    }
-    return u;
+    return XuiUpper(t); // display only; handles ä, é, я...
 }
 
 // Animation state (all driven by ImGui::GetTime)
@@ -3781,6 +3781,27 @@ void CheckInsigniaStatus(bool force)
     });
 }
 
+// Networking on with the NAT backend and Insignia's DNS (all xemu needs for
+// Insignia; the Xbox's network settings stay on automatic)
+void InsigniaSetUpNetwork()
+{
+    g_config.net.nat.insignia_dns = true;
+    if (g_config.net.backend != CONFIG_NET_BACKEND_NAT) {
+        if (xemu_net_is_enabled()) {
+            xemu_net_disable();
+        }
+        g_config.net.backend = CONFIG_NET_BACKEND_NAT;
+    }
+    if (!xemu_net_is_enabled()) {
+        xemu_net_enable();
+    }
+    xemu_net_sync_dns();
+    xemu_settings_save();
+    xemu_queue_notification(xemu_net_is_enabled()
+                                ? tr("Networking is set up for Insignia")
+                                : tr("Couldn't turn on networking"));
+}
+
 // Colored dot + label; returns the label
 const char *DrawInsigniaStatusDot()
 {
@@ -4490,7 +4511,9 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
         char when[48] = "";
         struct tm *tm = localtime(&t);
         if (tm) {
-            strftime(when, sizeof(when), "%b %d, %H:%M", tm);
+            strftime(when, sizeof(when),
+                     strcmp(XuiLanguageCode(), "en") ? "%Y-%m-%d %H:%M" : "%b %d, %H:%M",
+                     tm);
         }
         std::string label = std::string(tr(ICON_FA_PLAY "  Resume")) + "  " + when;
         const bool neon = T().neon;
@@ -5682,7 +5705,8 @@ void DrawHomeShelf(int &tex_budget)
     DashLabel(string_format(tr("Your library  -  %d games"), (int)g_entries.size()).c_str());
     ImGui::SameLine();
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 12 * s);
-    if (ImGui::SmallButton(tr("See all  " ICON_FA_CHEVRON_RIGHT))) {
+    std::string see_all = std::string(tr("See all")) + "  " ICON_FA_CHEVRON_RIGHT;
+    if (ImGui::SmallButton(see_all.c_str())) {
         SwitchTab(kTabLibrary);
     }
     // Recently played first, then favorites, then the rest by title
@@ -6110,7 +6134,9 @@ void DrawInsigniaTab(int &tex_budget)
     ImGui::Dummy(ImVec2(0, 6 * s));
     bool net_ok = g_config.net.enable &&
                   g_config.net.backend == CONFIG_NET_BACKEND_NAT;
-    auto step = [&](int n, bool done, const char *title, const char *sub) {
+    auto step = [&](int n, bool done, const char *title, const char *sub,
+                    const char *fix = nullptr) -> bool {
+        bool clicked = false;
         ImVec2 p = ImGui::GetCursorScreenPos();
         float r = 13 * s;
         ImVec2 c(p.x + r, p.y + r);
@@ -6140,14 +6166,56 @@ void DrawInsigniaTab(int &tex_budget)
         ImGui::BeginGroup();
         ImGui::TextUnformatted(title);
         ImGui::TextDisabled("%s", sub);
+        if (fix && !done) {
+            ImGui::PushID(n);
+            clicked = ImGui::SmallButton(fix);
+            ImGui::PopID();
+        }
         ImGui::EndGroup();
         ImGui::SetCursorScreenPos(ImVec2(p.x, ImGui::GetItemRectMax().y + 12 * s));
+        return clicked;
     };
-    step(1, net_ok, tr("Turn on networking"),
-         tr("Settings > Network: Enable, with the NAT backend"));
-    step(2, false, tr("Point the Xbox at Insignia"),
-         tr("Set the DNS from Insignia's Connect guide in the dashboard's network "
-            "settings"));
+    bool dns_ok = g_config.net.nat.insignia_dns;
+    if (!net_ok || !dns_ok) {
+        // Everything xemu can do, in one go
+        if (DashButton(tr(ICON_FA_WAND_MAGIC_SPARKLES "  Set up xemu for Insignia"),
+                       T().primary, T().on_primary, ImVec2(0, 34 * s))) {
+            InsigniaSetUpNetwork();
+        }
+        ImGui::SetItemTooltip("%s", tr("Turns on networking with the NAT backend and "
+                                       "Insignia's DNS. The Xbox's own network "
+                                       "settings can stay on automatic."));
+        ImGui::Dummy(ImVec2(0, 6 * s));
+    }
+    if (step(1, net_ok, tr("Networking on, NAT backend"),
+             tr("The Xbox's network cable, connected through your PC"),
+             tr("Turn on"))) {
+        InsigniaSetUpNetwork();
+    }
+    if (step(2, net_ok && dns_ok, tr("Insignia's DNS"),
+             tr("xemu answers the Xbox's DNS lookups with Insignia's DNS "
+                "(" XEMU_INSIGNIA_DNS "), so the Xbox dashboard's network "
+                "settings can stay on automatic"),
+             tr("Turn on"))) {
+        InsigniaSetUpNetwork();
+    }
+    {
+        // Check from this PC that Insignia's DNS answers
+        std::string msg;
+        int ts = InsigniaDnsTestState(&msg);
+        ImGui::Indent(40 * s);
+        ImGui::BeginDisabled(ts == 1);
+        if (ImGui::SmallButton(ts == 1 ? tr("Testing...") : tr("Test connection"))) {
+            InsigniaDnsTestStart();
+        }
+        ImGui::EndDisabled();
+        if (ts >= 2) {
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ts == 2 ? T().ok : T().warn),
+                               "%s", msg.c_str());
+        }
+        ImGui::Unindent(40 * s);
+        ImGui::Dummy(ImVec2(0, 6 * s));
+    }
     step(3, false, tr("Create your account"),
          tr("Register with the Insignia Setup Assistant, then run the network test"));
     step(4, false, tr("Play"), tr("Start a supported game and sign in to Xbox Live"));
@@ -8784,7 +8852,7 @@ void DrawBladesFrame(int &tex_budget)
         ShapeStroke(dl, p, q, Alpha(col, hov ? 200 : 120), 10 * s, 1.0f * s);
         dl->AddRectFilled(ImVec2(p.x + 6 * s, p.y + 10 * s),
                           ImVec2(p.x + 9 * s, p.y + 40 * s), col);
-        std::string name = Lower(tr(kTabNames[i]));
+        std::string name = XuiLower(tr(kTabNames[i]));
         float fs = label_font->FontSize;
         AddTextVertical(dl, label_font, fs,
                         ImVec2(p.x + (sw - fs) / 2, q.y - 16 * s),
@@ -8805,7 +8873,7 @@ void DrawBladesFrame(int &tex_budget)
     ShapeStroke(dl, p, q, Alpha(col, 170), 12 * s, 1.2f * s);
     dl->AddRectFilled(ImVec2(p.x, p.y + 12 * s), ImVec2(p.x + 4 * s, q.y - 12 * s),
                       col);
-    std::string title = Lower(tr(kTabNames[g_dash_tab]));
+    std::string title = XuiLower(tr(kTabNames[g_dash_tab]));
     ImFont *tf = FontOr(g_font_mgr.m_menu_font);
     dl->AddText(tf, tf->FontSize, ImVec2(p.x + 22 * s, p.y + 10 * s),
                 IM_COL32(245, 245, 245, 255), title.c_str());
@@ -9047,7 +9115,7 @@ void DrawMetroFrame(int &tex_budget)
     float xs[kTabCount], x = 0;
     std::string names[kTabCount];
     for (int i = 0; i < kTabCount; i++) {
-        names[i] = Lower(tr(kTabNames[i]));
+        names[i] = XuiLower(tr(kTabNames[i]));
         xs[i] = x;
         x += hf->CalcTextSizeA(hsz, FLT_MAX, 0, names[i].c_str()).x + hgap;
     }

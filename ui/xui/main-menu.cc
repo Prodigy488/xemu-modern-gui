@@ -1784,7 +1784,7 @@ void MainMenuAboutView::Draw()
 
     ImGui::Text(tr("Visit"));
     ImGui::SameLine();
-    if (ImGui::SmallButton(tr("https://xemu.app"))) {
+    if (ImGui::SmallButton("https://xemu.app")) {
         SDL_OpenURL("https://xemu.app");
     }
     ImGui::SameLine();

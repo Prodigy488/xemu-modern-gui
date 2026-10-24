@@ -386,6 +386,9 @@ net:
       type: string
       default: 1.2.3.4:9368
   nat:
+    insignia_dns:
+      type: bool
+      default: false
     forward_ports:
       type: array
       items:
@@ -413,6 +416,9 @@ sys:
     dvd_path: string
 
 perf:
+  capture_voice:
+    type: bool
+    default: false
   hard_fpu:
     type: bool
     default: true

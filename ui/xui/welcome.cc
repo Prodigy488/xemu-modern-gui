@@ -21,6 +21,8 @@
 #include "imgui.h"
 #include "viewport-manager.hh"
 #include "welcome.hh"
+#include <algorithm>
+#include <string>
 #include "game-library.hh"
 #include "widgets.hh"
 #include "misc.hh"
@@ -55,10 +57,41 @@ void FirstBootWindow::Draw()
     ImGui::SetCursorPosX((ImGui::GetWindowWidth()-ImGui::CalcTextSize(msg).x)/2);
     ImGui::Text("%s", msg);
 
-    ImGui::Dummy(ImVec2(0,20*g_viewport_mgr.m_scale));
+    ImGui::Dummy(ImVec2(0,14*g_viewport_mgr.m_scale));
+
+    // Language first: it starts in Windows' language, and each one is
+    // listed by its own name so it can be found from any other
+    {
+        float cw = 260*g_viewport_mgr.m_scale;
+        const char *label = XuiLanguageLabel();
+        ImGui::SetCursorPosX((ImGui::GetWindowWidth()-ImGui::CalcTextSize(label).x)/2);
+        ImGui::TextDisabled("%s", label);
+        ImGui::SetCursorPosX((ImGui::GetWindowWidth()-cw)/2);
+        ImGui::SetNextItemWidth(cw);
+        int lang = XuiLanguageSettingIndex();
+        std::string cur = XuiLanguageItemName(lang);
+        if (ImGui::BeginCombo("##welcome-language", cur.c_str())) {
+            for (int i = 0; i < (int)XuiLanguages().size(); i++) {
+                std::string name = XuiLanguageItemName(i);
+                if (ImGui::Selectable(name.c_str(), i == lang)) {
+                    XuiLanguageChoose(i);
+                }
+                if (i == lang) {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }
+
+    ImGui::Dummy(ImVec2(0,16*g_viewport_mgr.m_scale));
 
     // Guided setup on the dashboard, or xemu's own settings
-    float bw = 120*g_viewport_mgr.m_scale, gap = 10*g_viewport_mgr.m_scale;
+    float gap = 10*g_viewport_mgr.m_scale;
+    float bw = std::max(120*g_viewport_mgr.m_scale,
+                        std::max(ImGui::CalcTextSize(tr("Guided setup")).x,
+                                 ImGui::CalcTextSize(tr("Settings")).x) +
+                            ImGui::GetStyle().FramePadding.x * 4);
     ImGui::SetCursorPosX((ImGui::GetWindowWidth()-2*bw-gap)/2);
     if (ImGui::Button(tr("Guided setup"), ImVec2(bw, 0))) {
         GameLibraryOpenSetup();
@@ -73,7 +106,7 @@ void FirstBootWindow::Draw()
 
     ImGui::Dummy(ImVec2(0,50*g_viewport_mgr.m_scale));
 
-    msg = "Visit https://xemu.app for more information";
+    msg = tr("Visit https://xemu.app for more information");
     ImGui::SetCursorPosX((ImGui::GetWindowWidth()-ImGui::CalcTextSize(msg).x)/2);
     Hyperlink(msg, "https://xemu.app");
 

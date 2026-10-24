@@ -60,6 +60,9 @@ char XuiLanguageScript();
 // top of Latin: every character its translations use, plus kana for
 // Japanese.
 const uint16_t *XuiLanguageGlyphRanges();
+// True when every translation fits in Latin-1 (what the small fixed-width
+// "HUD" font has); otherwise the regular font is used for that text
+bool XuiLanguageFitsLatin1();
 // A system font with the script's characters ("" if none was found), and
 // the font's index in a .ttc collection
 std::string XuiLanguageFontPath(int *font_no);
@@ -75,6 +78,11 @@ const char *XuiLanguageLabel();
 
 // How much of the interface the language covers, 0..1 (for the picker)
 float XuiLanguageCoverage(const char *code);
+
+// Upper and lower case for display, including accented Latin and
+// Cyrillic letters (other characters are left alone)
+std::string XuiUpper(const std::string &text);
+std::string XuiLower(const std::string &text);
 
 // For tests: use translations from a table instead of the built-in ones
 struct XuiTrPair { const char *en, *tr; };

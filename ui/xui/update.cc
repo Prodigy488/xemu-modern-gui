@@ -19,6 +19,7 @@
 #include "common.hh"
 #include "qemu/http.h"
 #include "update.hh"
+#include "update-logic.hh"
 #include "viewport-manager.hh"
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,38 +36,7 @@ using json = nlohmann::json;
 // This unofficial build updates from its own releases, so updating never
 // replaces it with official xemu (which doesn't have its features)
 const char *releases_url = "https://api.github.com/repos/Prodigy488/xemu-modern-gui/releases/latest";
-const char *const kModernGuiVersion = "1.6";
-
-// "v1.10" > "1.9": compare the numbers; anything after them ("-classic")
-// marks a different edition and is never offered
-static bool IsNewerVersion(const std::string &release, const std::string &current)
-{
-    auto parse = [](const std::string &v, std::vector<int> *out) {
-        size_t i = (!v.empty() && (v[0] == 'v' || v[0] == 'V')) ? 1 : 0;
-        while (i < v.size()) {
-            if (!isdigit((unsigned char)v[i])) {
-                return false;
-            }
-            int n = 0;
-            while (i < v.size() && isdigit((unsigned char)v[i])) {
-                n = n * 10 + (v[i++] - '0');
-            }
-            out->push_back(n);
-            if (i < v.size()) {
-                if (v[i] != '.') {
-                    return false;
-                }
-                i++;
-            }
-        }
-        return !out->empty();
-    };
-    std::vector<int> r, c;
-    if (!parse(release, &r) || !parse(current, &c)) {
-        return false;
-    }
-    return r > c;
-}
+const char *const kModernGuiVersion = "1.7";
 
 #if defined(__x86_64__)
 #define PACKAGE_ARCH "x86_64"
@@ -181,12 +151,18 @@ Updater::Updater()
     m_update_percentage = 0;
     m_release_version = "Unknown";
     m_should_cancel = false;
+    m_thread_started = false;
 }
 
 void Updater::check_for_update(UpdaterCallback on_complete)
 {
     if (m_status == UPDATER_IDLE || m_status == UPDATER_ERROR) {
+        if (m_thread_started) {
+            qemu_thread_join(&m_thread); // the last one has finished
+        }
         m_on_complete = on_complete;
+        m_status = UPDATER_CHECKING_FOR_UPDATE;
+        m_thread_started = true;
         qemu_thread_create(&m_thread, "update_worker",
                            &Updater::checker_thread_worker_func,
                            this, QEMU_THREAD_JOINABLE);
@@ -213,43 +189,23 @@ void Updater::check_for_update_internal()
         goto finished;
     }
 
-    try {
-        json release = json::parse(std::string((const char *)data->data, data->len));
-        m_release_url = release.value("html_url", "https://github.com/Prodigy488/xemu-modern-gui/releases/latest");
-        m_release_version = release["tag_name"].get<std::string>();
-        if (!m_release_version.empty() &&
-            (m_release_version[0] == 'v' || m_release_version[0] == 'V')) {
-            m_release_version = m_release_version.substr(1);
-        }
-
-        // The Windows build: xemu-<xemu version>-custom-windows-x86_64.zip
-        // (GitHub may add ".1" to a re-uploaded name)
-        m_release_package_url.clear();
-        for (const auto &asset : release["assets"]) {
-            std::string name = asset["name"].get<std::string>();
-            if (name.rfind("xemu-", 0) == 0 &&
-                name.find("-custom-windows-" PACKAGE_ARCH) != std::string::npos &&
-                name.size() > 4 && name.compare(name.size() - 4, 4, ".zip") == 0) {
-                m_release_package_url = asset["browser_download_url"].get<std::string>();
-                break;
-            }
-        }
-
-        if (m_release_package_url.empty()) {
-            DPRINTF("No Windows build in release %s\n", m_release_version.c_str());
+    {
+        UpdateRelease rel;
+        std::string err;
+        if (!UpdateParseRelease(std::string((const char *)data->data, data->len),
+                                PACKAGE_ARCH, &rel, &err)) {
+            DPRINTF("Update check: %s\n", err.c_str());
             m_status = UPDATER_ERROR;
             goto finished;
         }
-
-        if (IsNewerVersion(m_release_version, kModernGuiVersion)) {
-            m_update_availability = UPDATE_AVAILABLE;
-        } else {
-            m_update_availability = UPDATE_NOT_AVAILABLE;
-        }
-    } catch (const json::exception &e) {
-        DPRINTF("JSON parse error: %s\n", e.what());
-        m_status = UPDATER_ERROR;
-        goto finished;
+        m_release_version = rel.version;
+        m_release_url = rel.url.empty()
+            ? "https://github.com/Prodigy488/xemu-modern-gui/releases/latest"
+            : rel.url;
+        m_release_package_url = rel.package_url;
+        m_update_availability = UpdateIsNewer(m_release_version, kModernGuiVersion)
+                                    ? UPDATE_AVAILABLE
+                                    : UPDATE_NOT_AVAILABLE;
     }
 
     m_status = UPDATER_IDLE;
@@ -262,7 +218,11 @@ finished:
 void Updater::update()
 {
     if (m_status == UPDATER_IDLE || m_status == UPDATER_ERROR) {
+        if (m_thread_started) {
+            qemu_thread_join(&m_thread);
+        }
         m_status = UPDATER_UPDATING;
+        m_thread_started = true;
         qemu_thread_create(&m_thread, "update_worker",
                            &Updater::update_thread_worker_func,
                            this, QEMU_THREAD_JOINABLE);
@@ -329,18 +289,36 @@ void Updater::update_internal()
             goto errored;
         }
 
+        // Wide paths: the folder may have characters outside the ANSI
+        // code page
         char *dst_path = g_strdup_printf("%s%s", SDL_GetBasePath(), fstat.m_filename);
         DPRINTF("extracting %s to %s\n", fstat.m_filename, dst_path);
+        gunichar2 *dst_w = g_utf8_to_utf16(dst_path, -1, NULL, NULL, NULL);
 
         if (!strcmp(fstat.m_filename, "xemu.exe")) {
             // We cannot overwrite current executable, but we can move it
             char *renamed_path = g_strdup_printf("%s%s", SDL_GetBasePath(), "xemu-previous.exe");
-            MoveFileExA(dst_path, renamed_path, MOVEFILE_REPLACE_EXISTING);
+            gunichar2 *renamed_w = g_utf8_to_utf16(renamed_path, -1, NULL, NULL, NULL);
+            if (dst_w && renamed_w) {
+                MoveFileExW((LPCWSTR)dst_w, (LPCWSTR)renamed_w,
+                            MOVEFILE_REPLACE_EXISTING);
+            }
+            g_free(renamed_w);
             g_free(renamed_path);
         }
 
-        if (!mz_zip_reader_extract_to_file(&zip, file_idx, dst_path, 0)) {
-            DPRINTF("mz_zip_reader_extract_to_file failed to create %s\n", dst_path);
+        size_t out_size = 0;
+        void *out_data = mz_zip_reader_extract_to_heap(&zip, file_idx, &out_size, 0);
+        FILE *out = dst_w ? _wfopen((const wchar_t *)dst_w, L"wb") : NULL;
+        bool written = out_data && out &&
+                       (out_size == 0 || fwrite(out_data, 1, out_size, out) == out_size);
+        if (out) {
+            written = (fclose(out) == 0) && written;
+        }
+        mz_free(out_data);
+        g_free(dst_w);
+        if (!written) {
+            DPRINTF("Couldn't write %s\n", dst_path);
             g_free(dst_path);
             goto errored;
         }
@@ -356,15 +334,28 @@ cleanup_zip:
     mz_zip_reader_end(&zip);
 }
 
-extern "C" {
-extern char **gArgv;
-}
-
 void Updater::restart_to_updated()
 {
+    // Start the new xemu.exe with the original command line (properly
+    // quoted, unlike _execv with paths containing spaces), then exit
     char *target_exec = g_strdup_printf("%s%s", SDL_GetBasePath(), "xemu.exe");
     DPRINTF("Restarting to updated executable %s\n", target_exec);
-    _execv(target_exec, gArgv);
+    gunichar2 *exe_w = g_utf8_to_utf16(target_exec, -1, NULL, NULL, NULL);
+    std::wstring cmd = GetCommandLineW();
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    if (exe_w && CreateProcessW((LPCWSTR)exe_w, &cmd[0], NULL, NULL, FALSE, 0,
+                                NULL, NULL, &si, &pi)) {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        g_free(exe_w);
+        g_free(target_exec);
+        exit(0);
+    }
     DPRINTF("Launching updated executable failed\n");
+    g_free(exe_w);
+    g_free(target_exec);
     exit(1);
 }

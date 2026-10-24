@@ -15,6 +15,7 @@ xemu_ss.add(files(
   'shader-cache.cc',
   'dynamic-res.cc',
   'dynamic-res-logic.cc',
+  'update-logic.cc',
   'game-preview.cc',
   'perf-overlay.cc',
   'game-shortcut.cc',

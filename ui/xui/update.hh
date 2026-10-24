@@ -55,6 +55,7 @@ private:
     bool                m_should_cancel;
     UpdateStatus        m_status;
     UpdaterCallback     m_on_complete;
+    bool                m_thread_started;
 
 protected:
     int progress_cb(http_progress_cb_info *progress_info);

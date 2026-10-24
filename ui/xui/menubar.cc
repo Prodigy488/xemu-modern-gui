@@ -223,11 +223,11 @@ void ShowMainMenu()
                             (**(g_snapshot_shortcut_index_key_map[i]) != 0);
 
                     if (bound) {
-                        load_name = g_strdup_printf("Load '%s'", *(g_snapshot_shortcut_index_key_map[i]));
-                        save_name = g_strdup_printf("Save '%s'", *(g_snapshot_shortcut_index_key_map[i]));
+                        load_name = g_strdup_printf(tr("Load '%s'"), *(g_snapshot_shortcut_index_key_map[i]));
+                        save_name = g_strdup_printf(tr("Save '%s'"), *(g_snapshot_shortcut_index_key_map[i]));
                     } else {
-                        load_name = g_strdup_printf("Load F%d (Unbound)", i + 5);
-                        save_name = g_strdup_printf("Save F%d (Unbound)", i + 5);
+                        load_name = g_strdup_printf(tr("Load F%d (Unbound)"), i + 5);
+                        save_name = g_strdup_printf(tr("Save F%d (Unbound)"), i + 5);
                     }
 
                     ImGui::Separator();
@@ -287,12 +287,12 @@ void ShowMainMenu()
             }
 
             ImGui::Combo(tr("Backend"), &g_config.display.renderer,
-                 "Null\0"
-                 "OpenGL\0"
+                 tr_items("Null\0"
+                          "OpenGL\0"
 #ifdef CONFIG_VULKAN
-                 "Vulkan\0"
+                          "Vulkan\0"
 #endif
-                );
+                          ));
 
             int rendering_scale = nv2a_get_surface_scale_factor() - 1;
             if (ImGui::Combo(tr("Int. Resolution Scale"), &rendering_scale,

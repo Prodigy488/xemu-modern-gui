@@ -2284,15 +2284,15 @@ void MergePatchResults()
     if (index_failed) {
         msg = tr("Could not check GitHub for new patches (try again later). ");
     } else if (!new_index.empty() || g_patchdl_total == 0) {
-        msg = new_count ? string_format(tr("Found %d new patch%s online. "), new_count,
-                                        new_count == 1 ? "" : "es")
-                        : std::string(tr("No new patches online. "));
+        msg = new_count == 1 ? std::string(tr("Found 1 new patch online. "))
+              : new_count   ? string_format(tr("Found %d new patches online. "),
+                                            new_count)
+                            : std::string(tr("No new patches online. "));
     }
     if (added) {
-        msg += string_format(tr("Downloaded %d patch%s for %d game%s, switched off "
-                             "until you enable them in Patches."),
-                             added, added == 1 ? "" : "es", (int)games.size(),
-                             games.size() == 1 ? "" : "s");
+        msg += string_format(tr("Patches downloaded: %d, for %d game(s). They're "
+                                "off until you turn them on in Patches."),
+                             added, (int)games.size());
     } else if (g_patchdl_total) {
         msg += tr("No new patches that fit your copies.");
     }
@@ -2640,9 +2640,8 @@ void DrawPatchesPopup()
         g_patch_check_ok = PrepareLaunchImage(*e, load, error);
         g_patch_check_msg =
             g_patch_check_ok
-                ? string_format(tr("Ready: %d patch%s will be applied on Play."),
-                                EnabledPatchCount(id),
-                                EnabledPatchCount(id) == 1 ? "" : "es")
+                ? string_format(tr("Ready. Patches applied on Play: %d."),
+                                EnabledPatchCount(id))
                 : error;
     }
     ImGui::EndDisabled();
@@ -3381,12 +3380,12 @@ void DrawRecentRow(int &tex_budget)
 void DrawSettingsPopup()
 {
     if (g_open_settings_popup) {
-        ImGui::OpenPopup("Game Settings");
+        ImGui::OpenPopup(trid("Game Settings"));
         g_open_settings_popup = false;
     }
     const float s = g_viewport_mgr.m_scale;
     ImGui::SetNextWindowSize(ImVec2(460 * s, 0), ImGuiCond_Appearing);
-    if (!ImGui::BeginPopupModal("Game Settings", NULL,
+    if (!ImGui::BeginPopupModal(trid("Game Settings"), NULL,
                                 ImGuiWindowFlags_AlwaysAutoResize)) {
         return;
     }
@@ -3632,8 +3631,7 @@ void MergeCoverResults()
     }
     if (finished) {
         std::string msg = string_format(
-            tr("Downloaded %d cover%s (%d not in the database)"), (int)g_covers_found,
-            g_covers_found == 1 ? "" : "s",
+            tr("Covers downloaded: %d (%d not in the database)"), (int)g_covers_found,
             (int)g_covers_total - (int)g_covers_found);
         xemu_queue_notification(msg.c_str());
         g_dirty = true;
@@ -3786,22 +3784,22 @@ void CheckInsigniaStatus(bool force)
 // Colored dot + label; returns the label
 const char *DrawInsigniaStatusDot()
 {
-    const char *label = "Website status unknown";
+    const char *label = tr("Website status unknown");
     ImU32 col = IM_COL32(140, 140, 140, 255);
     switch ((InsigniaStatus)(int)g_insignia_status) {
     case InsigniaStatus::Checking:
-        label = "Checking website...";
+        label = tr("Checking website...");
         break;
     case InsigniaStatus::Up:
-        label = "Website online";
+        label = tr("Website online");
         col = IM_COL32(70, 200, 70, 255);
         break;
     case InsigniaStatus::Maintenance:
-        label = "Website under maintenance";
+        label = tr("Website under maintenance");
         col = IM_COL32(235, 180, 40, 255);
         break;
     case InsigniaStatus::Down:
-        label = "Website unreachable";
+        label = tr("Website unreachable");
         col = IM_COL32(230, 70, 60, 255);
         break;
     default:
@@ -3820,19 +3818,19 @@ const char *DrawInsigniaStatusDot()
 void DrawResumeWarningPopup()
 {
     if (g_open_resume_warning) {
-        ImGui::OpenPopup("Different BIOS");
+        ImGui::OpenPopup(trid("Different BIOS"));
         g_open_resume_warning = false;
     }
     const float s = g_viewport_mgr.m_scale;
     ImGui::SetNextWindowSize(ImVec2(520 * s, 0), ImGuiCond_Appearing);
-    if (!ImGui::BeginPopupModal("Different BIOS", NULL,
+    if (!ImGui::BeginPopupModal(trid("Different BIOS"), NULL,
                                 ImGuiWindowFlags_AlwaysAutoResize)) {
         return;
     }
     auto file = [](const std::string &sig, bool flash) {
         size_t bar = sig.find('|');
         std::string p = flash ? sig.substr(0, bar) : sig.substr(bar + 1);
-        return p.empty() ? std::string("(none)")
+        return p.empty() ? std::string(tr("(none)"))
                          : fs::u8path(p).filename().u8string();
     };
     std::string now = MachineSignature();
@@ -3871,12 +3869,12 @@ void DrawResumeWarningPopup()
 void DrawInsigniaPopup()
 {
     if (g_open_insignia_popup) {
-        ImGui::OpenPopup("Insignia");
+        ImGui::OpenPopup(trid("Insignia"));
         g_open_insignia_popup = false;
     }
     const float s = g_viewport_mgr.m_scale;
     ImGui::SetNextWindowSize(ImVec2(560 * s, 0), ImGuiCond_Appearing);
-    if (!ImGui::BeginPopupModal("Insignia", NULL,
+    if (!ImGui::BeginPopupModal(trid("Insignia"), NULL,
                                 ImGuiWindowFlags_AlwaysAutoResize)) {
         return;
     }
@@ -3943,12 +3941,12 @@ bool g_open_folders_popup = false;
 void DrawFoldersPopup()
 {
     if (g_open_folders_popup) {
-        ImGui::OpenPopup("Game Folders");
+        ImGui::OpenPopup(trid("Game Folders"));
         g_open_folders_popup = false;
     }
     const float s = g_viewport_mgr.m_scale;
     ImGui::SetNextWindowSize(ImVec2(640 * s, 0), ImGuiCond_Appearing);
-    if (!ImGui::BeginPopupModal("Game Folders", NULL,
+    if (!ImGui::BeginPopupModal(trid("Game Folders"), NULL,
                                 ImGuiWindowFlags_AlwaysAutoResize)) {
         return;
     }
@@ -4494,7 +4492,7 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
         if (tm) {
             strftime(when, sizeof(when), "%b %d, %H:%M", tm);
         }
-        std::string label = std::string(ICON_FA_PLAY "  Resume  ") + when;
+        std::string label = std::string(tr(ICON_FA_PLAY "  Resume")) + "  " + when;
         const bool neon = T().neon;
         ImGui::PushStyleColor(ImGuiCol_Button, neon ? ImVec4(0.75f, 0.10f, 0.42f, 1)
                                                     : ImVec4(0.16f, 0.42f, 0.78f, 1));
@@ -4533,7 +4531,7 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
     }
     int npatch = e.valid ? EnabledPatchCount(e.title_id) : 0;
     std::string patch_label =
-        npatch ? string_format(tr("Patches (%d on)"), npatch) : std::string("Patches");
+        npatch ? string_format(tr("Patches (%d on)"), npatch) : std::string(tr("Patches"));
     if (ImGui::Button(patch_label.c_str(), ImVec2(w, 0))) {
         OpenPatchesFor(e);
     }
@@ -4658,9 +4656,9 @@ void UpdateDiscordPresence()
 
 enum DashTab { kTabHome, kTabLibrary, kTabInsignia, kTabMedia, kTabDrive,
                kTabStore, kTabPatches, kTabSettings, kTabCount };
-const char *const kTabNames[kTabCount] = { "Home",  "Library", "Insignia",
-                                           "Media", "Drive",   "Homebrew",
-                                           "Patches", "Settings" };
+const char *const kTabNames[kTabCount] = { N_("Home"),  N_("Library"), N_("Insignia"),
+                                           N_("Media"), N_("Drive"),   N_("Homebrew"),
+                                           N_("Patches"), N_("Settings") };
 int g_dash_tab = kTabHome;
 
 std::string g_home_path;        // game shown in the Home hero
@@ -5059,7 +5057,7 @@ void DrawDashTopBar()
         ImGui::PushID(t);
         if (th.neon) {
             ImGui::SameLine(0, t ? 4 * s : 14 * s);
-            std::string name = Upper(kTabNames[t]);
+            std::string name = Upper(tr(kTabNames[t]));
             char num[16];
             snprintf(num, sizeof(num), "%02d", t + 1);
             ImVec2 ts = ImGui::CalcTextSize(name.c_str());
@@ -5084,7 +5082,7 @@ void DrawDashTopBar()
             }
         } else {
             ImGui::SameLine(0, t ? 6 * s : 12 * s);
-            ImVec2 ts = ImGui::CalcTextSize(kTabNames[t]);
+            ImVec2 ts = ImGui::CalcTextSize(tr(kTabNames[t]));
             ImVec2 size(ts.x + 34 * s, ts.y + 14 * s);
             ImGui::SetCursorScreenPos(
                 ImVec2(ImGui::GetCursorScreenPos().x, y_mid - size.y / 2));
@@ -5102,7 +5100,7 @@ void DrawDashTopBar()
                                   on ? ImVec4(0, 0, 0, 0) : ImVec4(1, 1, 1, 0.14f));
             ImGui::PushStyleColor(ImGuiCol_Text,
                                   on ? th.on_primary : ImVec4(0.60f, 0.66f, 0.59f, 1));
-            if (ImGui::Button(kTabNames[t], size)) {
+            if (ImGui::Button(tr(kTabNames[t]), size)) {
                 SwitchTab(t);
             }
             ImGui::PopStyleColor(4);
@@ -5136,8 +5134,8 @@ void DrawDashTopBar()
 
     // Right side: scan progress, Insignia status, clock, close
     const char *dvd = g_config.sys.files.dvd_path;
-    const char *close_label = (dvd && dvd[0]) ? ICON_FA_XMARK "  Back to game"
-                                              : ICON_FA_XMARK "  Close";
+    const char *close_label = (dvd && dvd[0]) ? tr(ICON_FA_XMARK "  Back to game")
+                                              : tr(ICON_FA_XMARK "  Close");
     float close_w = ImGui::CalcTextSize(close_label).x + 28 * s;
     char clock[32] = "";
     time_t now = time(NULL);
@@ -5150,15 +5148,15 @@ void DrawDashTopBar()
     ImU32 ins_col = IM_COL32(140, 140, 140, 255);
     switch ((InsigniaStatus)(int)g_insignia_status) {
     case InsigniaStatus::Up:
-        ins = "Insignia online";
+        ins = tr("Insignia online");
         ins_col = th.ok;
         break;
     case InsigniaStatus::Maintenance:
-        ins = "Insignia maintenance";
+        ins = tr("Insignia maintenance");
         ins_col = th.warn;
         break;
     case InsigniaStatus::Down:
-        ins = "Insignia unreachable";
+        ins = tr("Insignia unreachable");
         ins_col = th.bad;
         break;
     default:
@@ -5244,22 +5242,22 @@ void DrawDashHints(ImVec2 a, float w)
     switch (g_dash_tab) {
     case kTabHome:
     case kTabLibrary:
-        hints = { { "A", ka, "Play" }, { "Y", ky, "Favorite" },
-                  { "B", kb, "Back to game" } };
+        hints = { { "A", ka, tr("Play") }, { "Y", ky, tr("Favorite") },
+                  { "B", kb, tr("Back to game") } };
         break;
     case kTabInsignia:
-        hints = { { "A", ka, "Play online" }, { "B", kb, "Back to game" } };
+        hints = { { "A", ka, tr("Play online") }, { "B", kb, tr("Back to game") } };
         break;
     case kTabStore:
         if (HomebrewInstalledView()) {
-            hints = { { "A", ka, "Play" }, { "Y", ky, "Options" },
-                      { "B", kb, "Back to game" } };
+            hints = { { "A", ka, tr("Play") }, { "Y", ky, tr("Options") },
+                      { "B", kb, tr("Back to game") } };
         } else {
-            hints = { { "A", ka, "Select" }, { "B", kb, "Back to game" } };
+            hints = { { "A", ka, tr("Select") }, { "B", kb, tr("Back to game") } };
         }
         break;
     default:
-        hints = { { "A", ka, "Select" }, { "B", kb, "Back to game" } };
+        hints = { { "A", ka, tr("Select") }, { "B", kb, tr("Back to game") } };
         break;
     }
     const bool neon = T().neon;
@@ -5287,7 +5285,8 @@ void DrawDashHints(ImVec2 a, float w)
                     label.c_str());
         x += r * 2 + 8 * s + f->CalcTextSizeA(fs, FLT_MAX, 0, label.c_str()).x + 26 * s;
     }
-    std::string tabs = neon ? "LB / RB  SWITCH TAB" : "LB / RB  Switch tab";
+    std::string tabs = std::string("LB / RB  ") +
+                       (neon ? Upper(tr("Switch tab")) : std::string(tr("Switch tab")));
     ImFont *f = neon ? HudFont() : ImGui::GetFont();
     float fs = neon ? f->FontSize : fh;
     if (x + f->CalcTextSizeA(fs, FLT_MAX, 0, tabs.c_str()).x < a.x + w) {
@@ -5406,9 +5405,10 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
     if (e.valid) {
         meta(FormatTitleId(e.title_id));
     }
-    meta(FormatPlayTime(st.play_seconds) + " played");
+    meta(string_format(tr("%s played"), FormatPlayTime(st.play_seconds).c_str()));
     if (!IsCurrentDisc(e) && st.last_played > 0) {
-        meta("Last played " + FormatLastPlayed(st.last_played));
+        meta(string_format(tr("Last played %s"),
+                           FormatLastPlayed(st.last_played).c_str()));
     }
     ImGui::PopStyleColor();
     if (SupportsOnline(e)) {
@@ -5425,8 +5425,7 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
     if (npatch) {
         ImGui::SameLine(0, 18 * s);
         ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(T().accent),
-                           tr(ICON_FA_WRENCH "  %d patch%s on"), npatch,
-                           npatch == 1 ? "" : "es");
+                           tr(ICON_FA_WRENCH "  Patches on: %d"), npatch);
     }
     ImGui::PopClipRect();
 
@@ -5574,10 +5573,10 @@ void DrawHomeActivity(ImVec2 size, int &tex_budget)
             break;
         }
         GameStats &st = g_stats[e->path];
-        std::string sub = (IsCurrentDisc(*e) ? std::string("Playing now")
+        std::string sub = (IsCurrentDisc(*e) ? std::string(tr("Playing now"))
                                              : FormatLastPlayed(st.last_played)) +
                           "  -  " + FormatPlayTime(st.play_seconds);
-        std::string note = FindResumeSnapshot(*e) >= 0 ? "Resume point"
+        std::string note = FindResumeSnapshot(*e) >= 0 ? tr("Resume point")
                            : st.favorite                ? ICON_FA_STAR
                                                         : "";
         if (DashRow(*e, sub, note, w, tex_budget, false,
@@ -5621,16 +5620,18 @@ void DrawHomeActivity(ImVec2 size, int &tex_budget)
         float fh = ImGui::GetFontSize();
         float tx = p.x + th * 0.8f + 16 * s, ty = p.y + (row_h - fh * 2 - 4 * s) / 2;
         ImVec4 clip(tx, p.y, p.x + w - 70 * s, p.y + row_h);
-        std::string title = "New homebrew: " + app.title;
+        std::string title = string_format(tr("New homebrew: %s"), app.title.c_str());
         dl->AddText(ImGui::GetFont(), fh, ImVec2(tx, ty), T().text, title.c_str(),
                     NULL, 0, &clip);
-        std::string sub = "Installed " + FormatLastPlayed(app.installed) +
+        std::string sub = string_format(tr("Installed %s"),
+                                        FormatLastPlayed(app.installed).c_str()) +
                           "  -  " + app.section;
         dl->AddText(ImGui::GetFont(), fh * 0.88f, ImVec2(tx, ty + fh + 4 * s),
                     T().dim, sub.c_str(), NULL, 0, &clip);
-        ImVec2 gs = ImGui::CalcTextSize(tr("Play  " ICON_FA_CHEVRON_RIGHT));
+        std::string go_label = std::string(tr("Play")) + "  " ICON_FA_CHEVRON_RIGHT;
+        ImVec2 gs = ImGui::CalcTextSize(go_label.c_str());
         dl->AddText(ImVec2(p.x + w - gs.x - 8 * s, p.y + (row_h - fh) / 2), T().accent,
-                    "Play  " ICON_FA_CHEVRON_RIGHT);
+                    go_label.c_str());
         if (go || ActivatedByNav()) {
             HomebrewPlay(app);
             SwitchTab(kTabStore); // shows its progress
@@ -5654,16 +5655,17 @@ void DrawHomeActivity(ImVec2 size, int &tex_budget)
                     IM_COL32_WHITE, ICON_FA_WRENCH);
         float fh = ImGui::GetFontSize();
         float tx = p.x + th * 0.8f + 16 * s, ty = p.y + (row_h - fh * 2 - 4 * s) / 2;
-        dl->AddText(ImVec2(tx, ty), T().text, "New patches available");
+        dl->AddText(ImVec2(tx, ty), T().text, tr("New patches available"));
         std::string sub = string_format(tr("Widescreen, 60 FPS and more for %d of your "
                                         "games"),
                                         new_patches);
         ImVec4 clip(tx, p.y, p.x + w - 60 * s, p.y + row_h);
         dl->AddText(ImGui::GetFont(), fh * 0.88f, ImVec2(tx, ty + fh + 4 * s),
                     T().dim, sub.c_str(), NULL, 0, &clip);
-        ImVec2 gs = ImGui::CalcTextSize(tr("Get  " ICON_FA_CHEVRON_RIGHT));
+        std::string go_label = std::string(tr("Get")) + "  " ICON_FA_CHEVRON_RIGHT;
+        ImVec2 gs = ImGui::CalcTextSize(go_label.c_str());
         dl->AddText(ImVec2(p.x + w - gs.x - 8 * s, p.y + (row_h - fh) / 2), T().accent,
-                    "Get  " ICON_FA_CHEVRON_RIGHT);
+                    go_label.c_str());
         if (go || ActivatedByNav()) {
             SwitchTab(kTabPatches);
             StartPatchDownload(0, false);
@@ -5779,23 +5781,23 @@ void RefreshSetup(bool force = false)
     }
     g_setup_checked = now;
     g_setup = {
-        { "MCPX boot ROM", "The Xbox's 512-byte startup code, dumped from your console.",
+        { N_("MCPX boot ROM"), N_("The Xbox's 512-byte startup code, dumped from your console."),
           &g_config.sys.files.bootrom_path, true },
-        { "BIOS (flash ROM)", "Your Xbox's BIOS: 256 KB or 1 MB.",
+        { N_("BIOS (flash ROM)"), N_("Your Xbox's BIOS: 256 KB or 1 MB."),
           &g_config.sys.files.flashrom_path, true },
-        { "Hard disk image", "The Xbox hard drive with its dashboard, saves and "
-          "homebrew (.qcow2 or a raw image).",
+        { N_("Hard disk image"), N_("The Xbox hard drive with its dashboard, saves and "
+          "homebrew (.qcow2 or a raw image)."),
           &g_config.sys.files.hdd_path, true },
-        { "Games folder", "Where your disc images are, for the library.",
+        { N_("Games folder"), N_("Where your disc images are, for the library."),
           nullptr, false },
     };
     for (auto &it : g_setup) {
         if (!it.path) {
             int n = (int)AllFolders().size();
             it.state = n ? 0 : 1;
-            it.detail = n ? string_format(tr("%d folder%s, %d games"), n, n == 1 ? "" : "s",
+            it.detail = n ? string_format(tr("Folders: %d, games: %d"), n,
                                           (int)g_entries.size())
-                          : "Not set";
+                          : tr("Not set");
             continue;
         }
         const char *p = *it.path;
@@ -5803,25 +5805,25 @@ void RefreshSetup(bool force = false)
         uint64_t size = FileSizeOr(p, &exists);
         if (!p || !p[0]) {
             it.state = 1;
-            it.detail = "Not set";
+            it.detail = tr("Not set");
             continue;
         }
         if (!exists) {
             it.state = 1;
-            it.detail = "File not found: " + std::string(p);
+            it.detail = tr("File not found:") + std::string(" ") + p;
             continue;
         }
         it.detail = p;
         if (it.path == &g_config.sys.files.bootrom_path && size != 512) {
             it.state = 2;
-            it.detail = "Should be 512 bytes, this file is " + SizeText(size) +
-                        ": " + p;
+            it.detail = string_format(tr("Should be 512 bytes, this file is %s:"),
+                                      SizeText(size).c_str()) + " " + p;
         } else if (it.path == &g_config.sys.files.flashrom_path &&
                    size != 256 * 1024 && size != 512 * 1024 &&
                    size != 1024 * 1024) {
             it.state = 2;
-            it.detail = "Should be 256 KB or 1 MB, this file is " + SizeText(size) +
-                        ": " + p;
+            it.detail = string_format(tr("Should be 256 KB or 1 MB, this file is %s:"),
+                                      SizeText(size).c_str()) + " " + p;
         } else if (it.path == &g_config.sys.files.hdd_path) {
             char magic[4] = {};
             std::ifstream f(fs::u8path(p), std::ios::binary);
@@ -5829,8 +5831,8 @@ void RefreshSetup(bool force = false)
             bool qcow = memcmp(magic, "QFI\xfb", 4) == 0;
             if (!qcow && size < (64ull << 20)) {
                 it.state = 2;
-                it.detail = "Too small for an Xbox hard disk (" + SizeText(size) +
-                            "): " + p;
+                it.detail = string_format(tr("Too small for an Xbox hard disk (%s):"),
+                                          SizeText(size).c_str()) + " " + p;
             }
         }
     }
@@ -5862,14 +5864,14 @@ void DrawSetupItems(bool compact)
         ImGui::TextColored(col, "%s",
                            it.state == 0 ? ICON_FA_CHECK : ICON_FA_TRIANGLE_EXCLAMATION);
         ImGui::SameLine();
-        ImGui::TextUnformatted(it.name);
+        ImGui::TextUnformatted(tr(it.name));
         if (!it.required) {
             ImGui::SameLine();
             ImGui::TextDisabled(tr("(optional)"));
         }
         ImGui::Indent(24 * s);
         ImGui::PushTextWrapPos(0.0f);
-        ImGui::TextDisabled("%s", it.what);
+        ImGui::TextDisabled("%s", tr(it.what));
         if (it.state) {
             ImGui::TextColored(col, "%s", it.detail.c_str());
         } else {
@@ -5945,11 +5947,11 @@ void DrawSetupPopup()
     if (g_setup_open) {
         g_setup_open = false;
         RefreshSetup(true);
-        ImGui::OpenPopup("Setup Check");
+        ImGui::OpenPopup(trid("Setup Check"));
     }
     const float s = g_viewport_mgr.m_scale;
     ImGui::SetNextWindowSize(ImVec2(560 * s, 0), ImGuiCond_Appearing);
-    if (!ImGui::BeginPopupModal("Setup Check", nullptr,
+    if (!ImGui::BeginPopupModal(trid("Setup Check"), nullptr,
                                 ImGuiWindowFlags_AlwaysAutoResize)) {
         return;
     }
@@ -6069,10 +6071,10 @@ void DrawInsigniaTab(int &tex_budget)
     ImGui::PopFont();
     uint64_t ago = (SDL_GetTicks() - g_insignia_checked_at) / 60000;
     if (st == InsigniaStatus::Checking || st == InsigniaStatus::Unknown) {
-        ImGui::TextDisabled(tr("insignia.live"));
+        ImGui::TextDisabled("insignia.live");
     } else {
         ImGui::TextDisabled(tr("Checked %s  -  insignia.live"),
-                            ago == 0 ? "just now"
+                            ago == 0 ? tr("just now")
                                      : string_format(tr("%d min ago"), (int)ago).c_str());
     }
     ImGui::EndGroup();
@@ -6142,13 +6144,13 @@ void DrawInsigniaTab(int &tex_budget)
         ImGui::SetCursorScreenPos(ImVec2(p.x, ImGui::GetItemRectMax().y + 12 * s));
     };
     step(1, net_ok, tr("Turn on networking"),
-         "Settings > Network: Enable, with the NAT backend");
+         tr("Settings > Network: Enable, with the NAT backend"));
     step(2, false, tr("Point the Xbox at Insignia"),
-         "Set the DNS from Insignia's Connect guide in the dashboard's network "
-         "settings");
+         tr("Set the DNS from Insignia's Connect guide in the dashboard's network "
+            "settings"));
     step(3, false, tr("Create your account"),
-         "Register with the Insignia Setup Assistant, then run the network test");
-    step(4, false, tr("Play"), "Start a supported game and sign in to Xbox Live");
+         tr("Register with the Insignia Setup Assistant, then run the network test"));
+    step(4, false, tr("Play"), tr("Start a supported game and sign in to Xbox Live"));
     if (ImGui::Button(tr("Connect guide"))) {
         SDL_OpenURL("https://insignia.live/connect");
     }
@@ -6204,12 +6206,13 @@ void DrawInsigniaTab(int &tex_budget)
     for (LibraryEntry *e : mine) {
         GameStats &gs = g_stats[e->path];
         std::string sub = FormatTitleId(e->title_id) + "  -  " +
-                          (IsCurrentDisc(*e)   ? std::string("Playing now")
-                           : gs.last_played > 0 ? "Played " + FormatLastPlayed(gs.last_played)
-                                                : std::string("Not played yet"));
+                          (IsCurrentDisc(*e)   ? std::string(tr("Playing now"))
+                           : gs.last_played > 0 ? string_format(tr("Played %s"),
+                                                    FormatLastPlayed(gs.last_played).c_str())
+                                                : std::string(tr("Not played yet")));
         bool sel = g_selected_path == e->path;
         // One click (or A) plays: this list exists to get into a game
-        if (DashRow(*e, sub, ICON_FA_PLAY "  Play online", w, tex_budget, sel,
+        if (DashRow(*e, sub, tr(ICON_FA_PLAY "  Play online"), w, tex_budget, sel,
                     T().neon ? T().accent : IM_COL32(168, 236, 107, 255))) {
             g_selected_path = e->path;
             game_library_window.Launch(e->path);
@@ -6250,9 +6253,8 @@ void DrawMediaTab(int &tex_budget)
             size_t shots = it->valid ? ScreenshotsFor(it->title_id).size() : 0;
             std::string label = it->DisplayName();
             if (saves || shots) {
-                label += string_format(tr("   (%zu save%s, %zu screenshot%s)"), saves,
-                                       saves == 1 ? "" : "s", shots,
-                                       shots == 1 ? "" : "s");
+                label += string_format(tr("   (saves: %d, screenshots: %d)"), (int)saves,
+                                       (int)shots);
             }
             ImGui::PushID(it->path.c_str());
             if (ImGui::Selectable(label.c_str(), it == e)) {
@@ -6425,8 +6427,8 @@ int StoreGet(const std::string &url, std::string *body, StoreTransfer *t = nullp
 std::string StoreHttpError(int code)
 {
     if (code <= 0) {
-        return "Couldn't reach XboxHomebrew.store. Check your internet "
-               "connection.";
+        return tr("Couldn't reach XboxHomebrew.store. Check your internet "
+                  "connection.");
     }
     return string_format(tr("XboxHomebrew.store answered with an error (HTTP %d)."),
                          code);
@@ -6575,7 +6577,7 @@ void StoreFetchApps(bool reset)
             }
             g_store.loading = false;
             if (!ok) {
-                g_store.err = code == 200 ? "The store sent something unexpected."
+                g_store.err = code == 200 ? std::string(tr("The store sent something unexpected."))
                                           : StoreHttpError(code);
                 return;
             }
@@ -6669,8 +6671,10 @@ void StoreDownloadDone(const std::string &err, const fs::path &content)
     std::string e;
     if (!XboxExplorerInstallFolder(content.u8string(), 'E', "/" + g_store.inst_dir,
                                    g_store.inst_name,
-                                   "Installing " + g_store.inst_app + " to E:\\" +
-                                       g_store.inst_dir + "\\" + g_store.inst_name,
+                                   string_format(tr("Installing %s to %s"),
+                                                 g_store.inst_app.c_str(),
+                                                 ("E:\\" + g_store.inst_dir + "\\" +
+                                                  g_store.inst_name).c_str()),
                                    &e)) {
         g_store.phase = StoreState::Failed;
         g_store.inst_msg = e;
@@ -6724,11 +6728,11 @@ void StoreInstall(const StoreApp &app, const StoreVersion &v)
                 }
             }
             if (xfer->cancel) {
-                err = "Cancelled.";
+                err = tr("Cancelled.");
                 break;
             }
             if (code != 200 || body.empty()) {
-                err = code == 200   ? std::string("The download was empty.")
+                err = code == 200   ? std::string(tr("The download was empty."))
                       : code <= 0 ? StoreHttpError(code)
                                   : string_format(tr("The download failed (HTTP %d). "
                                                   "Try again later."),
@@ -6739,7 +6743,7 @@ void StoreInstall(const StoreApp &app, const StoreVersion &v)
                 xfer->phase = 1;
                 fs::path z = stage / "download.zip";
                 if (!WriteFileAtomic(z, body)) {
-                    err = "Couldn't save the download (is the disk full?)";
+                    err = tr("Couldn't save the download (is the disk full?)");
                     break;
                 }
                 body.clear();
@@ -6757,7 +6761,7 @@ void StoreInstall(const StoreApp &app, const StoreVersion &v)
                     fs::remove_all(to, ec);
                     fs::rename(e.path(), to, ec);
                     if (ec) {
-                        err = "Couldn't unpack the download (is the disk full?)";
+                        err = tr("Couldn't unpack the download (is the disk full?)");
                         break;
                     }
                 }
@@ -6766,8 +6770,8 @@ void StoreInstall(const StoreApp &app, const StoreVersion &v)
             }
             size_t lead = body.find_first_not_of(" \t\r\n");
             if (lead != std::string::npos && body[lead] == '<') {
-                err = "The download link gave a web page instead of the file. "
-                      "Try again later.";
+                err = tr("The download link gave a web page instead of the file. "
+                         "Try again later.");
                 break;
             }
             std::string name = i < (int)files.size() && !files[i].empty()
@@ -6778,7 +6782,7 @@ void StoreInstall(const StoreApp &app, const StoreVersion &v)
                 name = StoreSafeFolderName(name);
             }
             if (!WriteFileAtomic(content / fs::u8path(name), body)) {
-                err = "Couldn't save the download (is the disk full?)";
+                err = tr("Couldn't save the download (is the disk full?)");
             }
         }
         StoreOnMain([err, content] { StoreDownloadDone(err, content); });
@@ -6812,11 +6816,12 @@ void StorePump()
         }
         g_store.inst_msg =
             error ? status
-                  : "Installed to E:\\" + g_store.inst_dir + "\\" +
-                        g_store.inst_name +
-                        ". The Microsoft dashboard doesn't list homebrew: start "
-                        "it from a homebrew dashboard such as XBMC4Gamers, which "
-                        "finds E:\\Games, E:\\Apps and E:\\Emulators.";
+                  : string_format(tr("Installed to %s. The Microsoft dashboard doesn't "
+                                     "list homebrew: start it from a homebrew "
+                                     "dashboard such as XBMC4Gamers, which finds "
+                                     "E:\\Games, E:\\Apps and E:\\Emulators."),
+                                  ("E:\\" + g_store.inst_dir + "\\" +
+                                   g_store.inst_name).c_str());
         std::error_code ec;
         fs::remove_all(g_store.staging, ec);
     }
@@ -6950,7 +6955,7 @@ void DrawStoreDetails(const StoreApp &app, float w)
     ImGui::TextUnformatted(app.name.c_str());
     ImGui::PopTextWrapPos();
     ImGui::PopFont();
-    ImGui::TextDisabled("%s%s%s", app.author.empty() ? "" : "by ",
+    ImGui::TextDisabled("%s%s%s", app.author.empty() ? "" : tr("by "),
                         app.author.c_str(),
                         app.category.empty() ? ""
                                              : ("  -  " + app.category).c_str());
@@ -6974,7 +6979,7 @@ void DrawStoreDetails(const StoreApp &app, float w)
     if (v) {
         if (g_store.versions.size() > 1) {
             ImGui::SetNextItemWidth(std::min(220 * s, w));
-            std::string label = "Version " + v->version;
+            std::string label = string_format(tr("Version %s"), v->version.c_str());
             if (ImGui::BeginCombo("##storever", label.c_str())) {
                 for (int i = 0; i < (int)g_store.versions.size(); i++) {
                     std::string l = g_store.versions[i].version;
@@ -7009,11 +7014,11 @@ void DrawStoreDetails(const StoreApp &app, float w)
             StoreTransfer &t = *g_store.xfer;
             float frac = t.total ? (float)((double)t.now / t.total) : 0.0f;
             std::string label =
-                t.phase == 1 ? std::string("Unpacking...")
+                t.phase == 1 ? std::string(tr("Unpacking..."))
                 : t.total
-                    ? string_format("Downloading %s / %s", StoreSize(t.now).c_str(),
+                    ? string_format(tr("Downloading %s / %s"), StoreSize(t.now).c_str(),
                                     StoreSize(t.total).c_str())
-                    : std::string("Downloading...");
+                    : std::string(tr("Downloading..."));
             if (t.files > 1) {
                 label += string_format(tr("  (file %d of %d)"), t.file + 1, t.files);
             }
@@ -7025,7 +7030,7 @@ void DrawStoreDetails(const StoreApp &app, float w)
             }
         } else if (this_one && g_store.phase == StoreState::Copying) {
             ImGui::ProgressBar(XboxExplorerProgress(), ImVec2(w, 0),
-                               "Copying to the Xbox...");
+                               tr("Copying to the Xbox..."));
         } else {
             ImGui::BeginDisabled(busy || XboxExplorerBusy());
             if (DashButton(tr(ICON_FA_DOWNLOAD "  Install to Xbox"), T().primary,
@@ -7380,7 +7385,7 @@ void HomebrewPump()
         g_hb.deleting = false;
         bool error = false;
         std::string status = XboxExplorerStatus(&error);
-        g_hb.msg = error ? status : g_hb.title + " was deleted.";
+        g_hb.msg = error ? status : string_format(tr("%s was deleted."), g_hb.title.c_str());
         g_hb.msg_err = error;
         g_hb.loaded = false;
     }
@@ -7392,7 +7397,7 @@ void HomebrewPump()
     std::string status = XboxExplorerStatus(&error);
     std::error_code ec;
     if (error || !fs::exists(fs::u8path(g_hb.iso), ec)) {
-        g_hb.msg = error ? status : "Cancelled";
+        g_hb.msg = error ? status : std::string(tr("Cancelled"));
         g_hb.msg_err = error;
         return;
     }
@@ -7487,10 +7492,10 @@ void DrawMyHomebrew()
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (32 * s - ImGui::GetFontSize()) / 2);
     if (g_hb.preparing) {
         ImGui::ProgressBar(XboxExplorerProgress(), ImVec2(320 * s, 0),
-                           ("Getting " + g_hb.title + " ready...").c_str());
+                           string_format(tr("Getting %s ready..."), g_hb.title.c_str()).c_str());
     } else if (g_hb.deleting) {
         ImGui::ProgressBar(XboxExplorerProgress(), ImVec2(320 * s, 0),
-                           ("Deleting " + g_hb.title + "...").c_str());
+                           string_format(tr("Deleting %s..."), g_hb.title.c_str()).c_str());
     } else if (!g_hb.msg.empty()) {
         ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(g_hb.msg_err ? T().bad
                                                                        : T().dim),
@@ -7737,7 +7742,7 @@ void DrawStoreTab()
     };
     seg(0, string_format(tr(ICON_FA_GAMEPAD "  Installed (%d)"), (int)g_hb.apps.size()));
     ImGui::SameLine(0, 8 * s);
-    seg(1, ICON_FA_DOWNLOAD "  Store");
+    seg(1, tr(ICON_FA_DOWNLOAD "  Store"));
     ImGui::Dummy(ImVec2(0, 4 * s));
     if (g_hb.view == 1) {
         DrawStoreBrowser();
@@ -7824,7 +7829,7 @@ void DrawPatchesTab(int &tex_budget)
                           string_format(tr("%d installed, %d available online"),
                                         installed, online);
         std::string note = on ? string_format(tr(ICON_FA_WRENCH "  %d on"), on)
-                              : installed ? std::string("all off") : std::string();
+                              : installed ? std::string(tr("all off")) : std::string();
         ImVec2 p = ImGui::GetCursorScreenPos();
         if (DashRow(*e, sub, note, w - btn_w - 12 * s, tex_budget, false,
                     on ? T().accent : 0) ||
@@ -7968,13 +7973,13 @@ void DrawDashSettingsTab()
             static const struct {
                 const char *label;
                 uint32_t flag;
-            } modes[] = { { "Widescreen (16:9)", XBOX_EEPROM_VIDEO_WIDESCREEN },
+            } modes[] = { { N_("Widescreen (16:9)"), XBOX_EEPROM_VIDEO_WIDESCREEN },
                           { "480p", XBOX_EEPROM_VIDEO_480P },
                           { "720p", XBOX_EEPROM_VIDEO_720P },
                           { "1080i", XBOX_EEPROM_VIDEO_1080I } };
             for (auto &m : modes) {
                 bool v = (flags & m.flag) != 0;
-                if (ImGui::Checkbox(m.label, &v)) {
+                if (ImGui::Checkbox(tr(m.label), &v)) {
                     uint32_t nf = v ? (flags | m.flag) : (flags & ~m.flag);
                     if (xbox_eeprom_set_video_flags(nf)) {
                         flags = nf;
@@ -8005,6 +8010,23 @@ void DrawDashSettingsTab()
                         &g_config.general.discord_presence);
         ImGui::Checkbox(tr("Animations and moving background"),
                         &g_config.display.ui.use_animations);
+        label(XuiLanguageLabel());
+        {
+            int lang = XuiLanguageSettingIndex();
+            std::string cur = XuiLanguageItemName(lang);
+            if (ImGui::BeginCombo("##language", cur.c_str())) {
+                for (int i = 0; i < (int)XuiLanguages().size(); i++) {
+                    std::string name = XuiLanguageItemName(i);
+                    if (ImGui::Selectable(name.c_str(), i == lang)) {
+                        XuiLanguageChoose(i);
+                    }
+                    if (i == lang) {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                }
+                ImGui::EndCombo();
+            }
+        }
         label(tr("Library style"));
         ImGui::Combo("##style", &g_config.general.library.style,
                      tr_items("Dashboard (tabs)\0Classic (library window)\0"
@@ -8062,9 +8084,9 @@ void DrawClassicHeader()
         ImGui::TextDisabled(tr("%d games"), (int)g_entries.size());
     }
     const char *dvd = g_config.sys.files.dvd_path;
-    const char *close_label = (dvd && dvd[0]) ? ICON_FA_XMARK "  Back to game"
-                                              : ICON_FA_XMARK "  Close";
-    const char *style_label = "Dashboard style";
+    const char *close_label = (dvd && dvd[0]) ? tr(ICON_FA_XMARK "  Back to game")
+                                              : tr(ICON_FA_XMARK "  Close");
+    const char *style_label = tr("Dashboard style");
     float close_w = ImGui::CalcTextSize(close_label).x +
                     ImGui::GetStyle().FramePadding.x * 2;
     float style_w = ImGui::CalcTextSize(style_label).x +
@@ -8132,27 +8154,27 @@ void DrawLibraryTab(int &tex_budget)
     {
         int active = (g_filter_compat != 0) + (g_filter_played != 0);
         std::string label = active ? string_format(tr(ICON_FA_SLIDERS "  Filter (%d)"), active)
-                                   : std::string(ICON_FA_SLIDERS "  Filter");
+                                   : std::string(tr(ICON_FA_SLIDERS "  Filter"));
         if (toggle(label.c_str(), active > 0,
                    tr("Filter by compatibility rating or whether you've played it"))) {
             ImGui::OpenPopup("##libfilter");
         }
         if (ImGui::BeginPopup("##libfilter")) {
             ImGui::TextDisabled(tr("Compatibility (xemu.app)"));
-            const char *compat[] = { "Any", "Playable or Perfect",
-                                     "Has problems (Starts, Intro, Broken)",
-                                     "Not rated yet" };
+            const char *compat[] = { N_("Any"), N_("Playable or Perfect"),
+                                     N_("Has problems (Starts, Intro, Broken)"),
+                                     N_("Not rated yet") };
             for (int i = 0; i < 4; i++) {
-                if (ImGui::RadioButton(compat[i], g_filter_compat == i)) {
+                if (ImGui::RadioButton(tr(compat[i]), g_filter_compat == i)) {
                     g_filter_compat = i;
                 }
             }
             ImGui::Separator();
             ImGui::TextDisabled(tr("Played"));
-            const char *played[] = { "Any", "Played", "Never played" };
+            const char *played[] = { N_("Any"), N_("Played"), N_("Never played") };
             for (int i = 0; i < 3; i++) {
                 ImGui::PushID(100 + i);
-                if (ImGui::RadioButton(played[i], g_filter_played == i)) {
+                if (ImGui::RadioButton(tr(played[i]), g_filter_played == i)) {
                     g_filter_played = i;
                 }
                 ImGui::PopID();
@@ -8202,7 +8224,7 @@ void DrawLibraryTab(int &tex_budget)
     ImGui::SameLine();
     ImGui::BeginDisabled(g_covers_running);
     if (ImGui::Button(g_covers_running
-                          ? string_format("Covers %d/%d", (int)g_covers_done,
+                          ? string_format(tr("Covers %d/%d"), (int)g_covers_done,
                                           (int)g_covers_total).c_str()
                           : tr("Get covers"))) {
         StartCoverDownload();
@@ -8220,8 +8242,7 @@ void DrawLibraryTab(int &tex_budget)
     if (ImGui::Button(tr(ICON_FA_FOLDER_OPEN "  Folders"))) {
         g_open_folders_popup = true;
     }
-    ImGui::SetItemTooltip(tr("%d game folder%s"), (int)folders.size(),
-                          folders.size() == 1 ? "" : "s");
+    ImGui::SetItemTooltip(tr("Game folders: %d"), (int)folders.size());
     ImGui::SameLine(0, 2 * s);
     ImGui::BeginDisabled(g_scan_running);
     if (ImGui::Button(tr(ICON_FA_ARROWS_ROTATE "  Scan folders"))) {
@@ -8388,7 +8409,8 @@ void LaunchNow(const std::string &path)
     if (e) {
         std::string error;
         if (!PrepareLaunchImage(*e, load_path, error)) {
-            std::string msg = "Could not apply patches for " + name + ": " + error;
+            std::string msg = string_format(tr("Could not apply patches for %s:"),
+                                            name.c_str()) + " " + error;
             xemu_queue_error_message(msg.c_str());
             return;
         }
@@ -8399,7 +8421,7 @@ void LaunchNow(const std::string &path)
         return; // the load failed and xemu already showed why
     }
     if (load_path != path) {
-        name += " (patched)";
+        name += std::string(" ") + tr("(patched)");
     }
     // Restart the console so it boots the disc, like powering on a real Xbox
     // with the game in the tray. Swapping the disc alone leaves many
@@ -8408,7 +8430,7 @@ void LaunchNow(const std::string &path)
     if (!runstate_is_running()) {
         vm_start();
     }
-    std::string msg = "Starting " + name;
+    std::string msg = string_format(tr("Starting %s"), name.c_str());
     xemu_queue_notification(msg.c_str());
     game_library_window.is_open = false;
 }
@@ -8616,15 +8638,15 @@ void InsigniaWord(const char **word, ImU32 *col)
     *col = IM_COL32(150, 150, 150, 255);
     switch ((InsigniaStatus)(int)g_insignia_status) {
     case InsigniaStatus::Up:
-        *word = "insignia online";
+        *word = tr("insignia online");
         *col = T().ok;
         break;
     case InsigniaStatus::Maintenance:
-        *word = "insignia maintenance";
+        *word = tr("insignia maintenance");
         *col = T().warn;
         break;
     case InsigniaStatus::Down:
-        *word = "insignia offline";
+        *word = tr("insignia offline");
         *col = T().bad;
         break;
     default:
@@ -8638,8 +8660,8 @@ void DrawStyleStatus(float right, float y)
     const float s = g_viewport_mgr.m_scale;
     ImDrawList *dl = ImGui::GetWindowDrawList();
     const char *dvd = g_config.sys.files.dvd_path;
-    const char *close_label = (dvd && dvd[0]) ? ICON_FA_XMARK "  Back to game"
-                                              : ICON_FA_XMARK "  Close";
+    const char *close_label = (dvd && dvd[0]) ? tr(ICON_FA_XMARK "  Back to game")
+                                              : tr(ICON_FA_XMARK "  Close");
     float close_w = ImGui::CalcTextSize(close_label).x + 28 * s;
     float bh = 32 * s;
     ImGui::SetCursorScreenPos(ImVec2(right - close_w, y));
@@ -8762,8 +8784,7 @@ void DrawBladesFrame(int &tex_budget)
         ShapeStroke(dl, p, q, Alpha(col, hov ? 200 : 120), 10 * s, 1.0f * s);
         dl->AddRectFilled(ImVec2(p.x + 6 * s, p.y + 10 * s),
                           ImVec2(p.x + 9 * s, p.y + 40 * s), col);
-        std::string name = kTabNames[i];
-        std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+        std::string name = Lower(tr(kTabNames[i]));
         float fs = label_font->FontSize;
         AddTextVertical(dl, label_font, fs,
                         ImVec2(p.x + (sw - fs) / 2, q.y - 16 * s),
@@ -8784,8 +8805,7 @@ void DrawBladesFrame(int &tex_budget)
     ShapeStroke(dl, p, q, Alpha(col, 170), 12 * s, 1.2f * s);
     dl->AddRectFilled(ImVec2(p.x, p.y + 12 * s), ImVec2(p.x + 4 * s, q.y - 12 * s),
                       col);
-    std::string title = kTabNames[g_dash_tab];
-    std::transform(title.begin(), title.end(), title.begin(), ::tolower);
+    std::string title = Lower(tr(kTabNames[g_dash_tab]));
     ImFont *tf = FontOr(g_font_mgr.m_menu_font);
     dl->AddText(tf, tf->FontSize, ImVec2(p.x + 22 * s, p.y + 10 * s),
                 IM_COL32(245, 245, 245, 255), title.c_str());
@@ -8959,9 +8979,15 @@ void DrawMetroStart(int &tex_budget)
     y += ts.y + 10 * s;
     const GameStats &st = g_stats[cur->path];
     float fh = ImGui::GetFontSize();
+    // Values line up after the longest label (translations differ)
+    float col = 110 * s;
+    for (const char *l : { "Title ID", "Region", "Play time", "Last played",
+                           "Compatibility", "Online", "Save states" }) {
+        col = std::max(col, ImGui::CalcTextSize(tr(l)).x + 14 * s);
+    }
     auto line = [&](const char *label, const std::string &value) {
         dl->AddText(ImVec2(dx, y), ImGui::GetColorU32(ImGuiCol_TextDisabled), label);
-        dl->AddText(ImVec2(dx + 110 * s, y), IM_COL32(225, 225, 230, 255),
+        dl->AddText(ImVec2(dx + col, y), IM_COL32(225, 225, 230, 255),
                     value.c_str());
         y += fh + 6 * s;
     };
@@ -8974,10 +9000,10 @@ void DrawMetroStart(int &tex_budget)
     CompatStatus mcs = CompatFor(*cur);
     if (mcs != CompatStatus::None) {
         dl->AddText(ImVec2(dx, y), ImGui::GetColorU32(ImGuiCol_TextDisabled),
-                    "Compatibility");
-        dl->AddCircleFilled(ImVec2(dx + 110 * s + fh * 0.3f, y + fh * 0.55f),
+                    tr("Compatibility"));
+        dl->AddCircleFilled(ImVec2(dx + col + fh * 0.3f, y + fh * 0.55f),
                             fh * 0.28f, CompatColor(mcs), 16);
-        dl->AddText(ImVec2(dx + 110 * s + fh * 0.8f, y), CompatColor(mcs),
+        dl->AddText(ImVec2(dx + col + fh * 0.8f, y), CompatColor(mcs),
                     CompatName(mcs));
         y += fh + 6 * s;
     }
@@ -9021,9 +9047,7 @@ void DrawMetroFrame(int &tex_budget)
     float xs[kTabCount], x = 0;
     std::string names[kTabCount];
     for (int i = 0; i < kTabCount; i++) {
-        names[i] = kTabNames[i];
-        std::transform(names[i].begin(), names[i].end(), names[i].begin(),
-                       ::tolower);
+        names[i] = Lower(tr(kTabNames[i]));
         xs[i] = x;
         x += hf->CalcTextSizeA(hsz, FLT_MAX, 0, names[i].c_str()).x + hgap;
     }
@@ -9212,8 +9236,8 @@ void GameLibraryWindow::Draw()
     if (folders.empty() && g_extra_files.empty()) {
         ImVec2 avail = ImGui::GetContentRegionAvail();
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + avail.y * 0.3f);
-        const char *msg = "Add the folders where you keep your Xbox disc "
-                          "images (.iso / .xiso). Subfolders are included.";
+        const char *msg = tr("Add the folders where you keep your Xbox disc "
+                             "images (.iso / .xiso). Subfolders are included.");
         float w = std::min(avail.x, 440 * s);
         float x0 = ImGui::GetCursorPosX() + (avail.x - w) / 2;
         ImGui::SetCursorPosX(x0);

@@ -227,11 +227,12 @@ bool HostToXboxSteps(const fs::path &src, const std::string &xdir, Job *job,
     }
     uint64_t size = fs::file_size(src, ec);
     if (ec) {
-        *err = "Can't read \"" + src.u8string() + "\"";
+        *err = string_format(tr("Can't read \"%s\""), src.u8string().c_str());
         return false;
     }
     if (size > 0xFFFFFFFFull) {
-        *err = "\"" + name + "\" is larger than 4 GB, the Xbox's file size limit";
+        *err = string_format(tr("\"%s\" is larger than 4 GB, the Xbox's file size limit"),
+                             name.c_str());
         return false;
     }
     job->steps.push_back({ Step::XFile, src.u8string(), xpath, size });
@@ -343,7 +344,7 @@ void FinishJob()
             fs::rename(fs::u8path(j.iso_part), fs::u8path(j.iso_final), ec);
             ok = !ec;
             if (!ok) {
-                j.err = "Couldn't save the disc image";
+                j.err = tr("Couldn't save the disc image");
             }
         }
         if (ok) {
@@ -365,10 +366,11 @@ void FinishJob()
     if (!j.err.empty()) {
         SetStatus(j.err, true);
     } else if (j.cancel) {
-        SetStatus("Cancelled");
+        SetStatus(tr("Cancelled"));
     } else {
-        SetStatus(j.title + " - done." +
-                  (j.writes ? " The Xbox restarted to load the changes." : ""));
+        SetStatus(j.title + " - " + tr("done.") +
+                  (j.writes ? std::string(" ") + tr("The Xbox restarted to load the changes.")
+                            : std::string()));
     }
     g_job.reset();
     g_list_dirty = true;
@@ -394,7 +396,7 @@ bool RunStep(Job &j)
         std::error_code ec;
         fs::create_directories(fs::u8path(s.host), ec);
         if (ec) {
-            j.err = "Can't create \"" + s.host + "\"";
+            j.err = string_format(tr("Can't create \"%s\""), s.host.c_str());
             return false;
         }
         j.i++;
@@ -425,7 +427,7 @@ bool RunStep(Job &j)
             }
 #endif
             if (!j.f) {
-                j.err = "Can't read \"" + s.host + "\"";
+                j.err = string_format(tr("Can't read \"%s\""), s.host.c_str());
                 return false;
             }
             if (!g_drive.NewFile(j.vol, s.xpath, &err)) {
@@ -456,7 +458,8 @@ bool RunStep(Job &j)
                          : 0;
         if (n < 0 || (want && n == 0) || !SeekHost(j.iso, s.dest + j.off) ||
             (n > 0 && fwrite(j.buf.data(), 1, (size_t)n, j.iso) != (size_t)n)) {
-            j.err = "Couldn't copy " + s.xpath + " into the disc image";
+            j.err = string_format(tr("Couldn't copy %s into the disc image"),
+                                  s.xpath.c_str());
             return false;
         }
         j.off += n;
@@ -475,7 +478,7 @@ bool RunStep(Job &j)
             j.f = fopen(s.host.c_str(), "wb");
 #endif
             if (!j.f) {
-                j.err = "Can't write \"" + s.host + "\"";
+                j.err = string_format(tr("Can't write \"%s\""), s.host.c_str());
                 return false;
             }
             j.off = 0;
@@ -485,7 +488,7 @@ bool RunStep(Job &j)
                          : 0;
         if (n < 0 || (want && n == 0) ||
             (n > 0 && fwrite(j.buf.data(), 1, (size_t)n, j.f) != (size_t)n)) {
-            j.err = "Couldn't copy " + s.xpath;
+            j.err = string_format(tr("Couldn't copy %s"), s.xpath.c_str());
             return false;
         }
         j.off += n;
@@ -526,14 +529,13 @@ void AddHostPaths(const std::vector<std::string> &paths)
     }
     const XboxVolume *v = g_drive.Volume(g_vol);
     if (v && v->free_known && job->total > v->free) {
-        SetStatus("Not enough space on " + std::string(1, g_vol) + ": (" +
-                      FormatSize(job->total) + " needed, " +
-                      FormatSize(v->free) + " free)",
+        SetStatus(string_format(tr("Not enough space on %c: (%s needed, %s free)"), g_vol,
+                                FormatSize(job->total).c_str(),
+                                FormatSize(v->free).c_str()),
                   true);
         return;
     }
-    job->title = string_format(tr("Copying %d file%s to %c:"), job->files,
-                               job->files == 1 ? "" : "s", g_vol);
+    job->title = string_format(tr("Copying files to %c: (%d)"), g_vol, job->files);
     AskThenStart(std::move(job));
 }
 
@@ -551,7 +553,7 @@ void ExportSelected(const std::string &host_dir)
         SetStatus(err, true);
         return;
     }
-    job->title = "Copying \"" + fi->name + "\" to your PC";
+    job->title = string_format(tr("Copying \"%s\" to your PC"), fi->name.c_str());
     AskThenStart(std::move(job));
 }
 
@@ -569,7 +571,7 @@ void DeleteSelected()
         SetStatus(err, true);
         return;
     }
-    job->title = "Deleting \"" + fi->name + "\"";
+    job->title = string_format(tr("Deleting \"%s\""), fi->name.c_str());
     // Already confirmed by the delete dialog
     StartJob(std::move(job));
 }
@@ -586,7 +588,7 @@ void SimpleWrite(const std::string &title, std::function<bool(std::string *)> op
     g_drive.Flush();
     XboxRestart();
     g_paused_for_job = false;
-    SetStatus(ok ? title + " - done. The Xbox restarted to load the change."
+    SetStatus(ok ? title + " - " + tr("done. The Xbox restarted to load the change.")
                  : (err.empty() ? g_open_err : err),
               !ok);
     g_list_dirty = true;
@@ -670,7 +672,7 @@ void DrawToolbar()
     }
     const XboxVolume *v = g_drive.Volume(g_vol);
     if (v && v->free_known) {
-        std::string fr = FormatSize(v->free) + " free";
+        std::string fr = string_format(tr("%s free"), FormatSize(v->free).c_str());
         ImGui::SameLine(ImGui::GetContentRegionMax().x -
                         ImGui::CalcTextSize(fr.c_str()).x);
         ImGui::TextDisabled("%s", fr.c_str());
@@ -878,20 +880,20 @@ bool NamePopup(const char *id, const char *title, const char *button,
 void DrawPopups()
 {
     std::string name;
-    if (NamePopup("##xdrive-newfolder", "New folder name:", "Create", &name)) {
+    if (NamePopup("##xdrive-newfolder", tr("New folder name:"), tr("Create"), &name)) {
         std::string path = XboxJoin(g_path, name);
         char vol = g_vol;
-        SimpleWrite("New folder", [vol, path](std::string *err) {
+        SimpleWrite(tr("New folder"), [vol, path](std::string *err) {
             return g_drive.MakeDir(vol, path, err);
         });
     }
-    if (NamePopup("##xdrive-rename", "New name:", "Rename", &name)) {
+    if (NamePopup("##xdrive-rename", tr("New name:"), tr("Rename"), &name)) {
         const XboxFileInfo *fi = Selected();
         if (fi && fi->name != name) {
             std::string from = XboxJoin(g_path, fi->name);
             std::string to = XboxJoin(g_path, name);
             char vol = g_vol;
-            SimpleWrite("Rename", [vol, from, to](std::string *err) {
+            SimpleWrite(tr("Rename"), [vol, from, to](std::string *err) {
                 return g_drive.Rename(vol, from, to, err);
             });
         }
@@ -900,7 +902,7 @@ void DrawPopups()
                                ImGuiWindowFlags_AlwaysAutoResize)) {
         const XboxFileInfo *fi = Selected();
         ImGui::Text(tr("Delete \"%s\"%s from %c:?"), fi ? fi->name.c_str() : "",
-                    fi && fi->dir ? " and everything in it" : "", g_vol);
+                    fi && fi->dir ? tr(" and everything in it") : "", g_vol);
         ImGui::TextDisabled(tr("This can't be undone. The Xbox pauses and "
                             "restarts to make the change."));
         if (ImGui::Button(tr(ICON_FA_TRASH " Delete"))) {
@@ -977,7 +979,7 @@ bool XboxExplorerInstallFolder(const std::string &host_dir, char vol,
                                const std::string &title, std::string *err)
 {
     if (g_job) {
-        *err = "Another copy to the Xbox is still running";
+        *err = tr("Another copy to the Xbox is still running");
         return false;
     }
     std::string why;
@@ -986,15 +988,15 @@ bool XboxExplorerInstallFolder(const std::string &host_dir, char vol,
         return false;
     }
     if (!EnsureOpen()) {
-        *err = g_open_err.empty() ? "Can't open the Xbox hard drive" : g_open_err;
+        *err = g_open_err.empty() ? std::string(tr("Can't open the Xbox hard drive")) : g_open_err;
         return false;
     }
     if (!g_drive.Volume(vol)) {
-        *err = std::string("This hard disk image has no ") + vol + ": drive";
+        *err = string_format(tr("This hard disk image has no %c: drive"), vol);
         return false;
     }
     if (!XboxDiskEmulatedWritable()) {
-        *err = "The hard disk image is read-only";
+        *err = tr("The hard disk image is read-only");
         return false;
     }
     // Plan everything before pausing, so a problem leaves the Xbox running
@@ -1031,7 +1033,7 @@ bool XboxExplorerInstallFolder(const std::string &host_dir, char vol,
     if (!g_drive.Stat(vol, resolved_parent, &fi)) {
         job->steps.push_back({ Step::XMkDir, "", resolved_parent, 0 });
     } else if (!fi.dir) {
-        *err = parent + " on " + std::string(1, vol) + ": is a file";
+        *err = string_format(tr("%s on %c: is a file"), parent.c_str(), vol);
         return false;
     } else if (g_drive.Stat(vol, target, &fi)) {
         // An update: the old version goes first
@@ -1048,7 +1050,7 @@ bool XboxExplorerInstallFolder(const std::string &host_dir, char vol,
     }
     std::sort(children.begin(), children.end());
     if (children.empty()) {
-        *err = "There's nothing to copy";
+        *err = tr("There's nothing to copy");
         return false;
     }
     for (auto &c : children) {
@@ -1062,9 +1064,8 @@ bool XboxExplorerInstallFolder(const std::string &host_dir, char vol,
         v = g_drive.Volume(vol);
     }
     if (v && v->free_known && job->total > v->free) {
-        *err = "Not enough space on " + std::string(1, vol) + ": (" +
-               FormatSize(job->total) + " needed, " + FormatSize(v->free) +
-               " free)";
+        *err = string_format(tr("Not enough space on %c: (%s needed, %s free)"), vol,
+                             FormatSize(job->total).c_str(), FormatSize(v->free).c_str());
         return false;
     }
     // Planned against the disk as it was; StartJob re-reads it after pausing
@@ -1087,7 +1088,7 @@ bool XisoTree(char vol, const std::string &path, XisoNode *node, uint64_t *sig,
               int depth, std::string *err)
 {
     if (depth > 32) {
-        *err = "Folders nested too deeply";
+        *err = tr("Folders nested too deeply");
         return false;
     }
     std::vector<XboxFileInfo> list;
@@ -1213,14 +1214,14 @@ bool XboxExplorerMakeXiso(char vol, const std::string &dir,
 {
     *ready = false;
     if (g_job) {
-        *err = "The Xbox hard drive is busy with another copy";
+        *err = tr("The Xbox hard drive is busy with another copy");
         return false;
     }
     if (XboxIsRunning() && g_drive.IsOpen()) {
         Reopen(); // the running Xbox may have changed files
     }
     if (!EnsureOpen()) {
-        *err = g_open_err.empty() ? "Can't open the Xbox hard drive" : g_open_err;
+        *err = g_open_err.empty() ? std::string(tr("Can't open the Xbox hard drive")) : g_open_err;
         return false;
     }
     XisoNode root;
@@ -1243,14 +1244,15 @@ bool XboxExplorerMakeXiso(char vol, const std::string &dir,
     }
     auto job = std::make_unique<Job>();
     job->vol = vol;
-    job->title = "Preparing " + dir.substr(dir.find_last_of('/') + 1);
+    job->title = string_format(tr("Preparing %s"),
+                               dir.substr(dir.find_last_of('/') + 1).c_str());
     job->iso_final = iso_path;
     job->iso_part = iso_path + ".part";
     job->iso_sig = sigs;
     fs::create_directories(fs::u8path(iso_path).parent_path(), ec);
     job->iso = OpenHost(job->iso_part, "wb+");
     if (!job->iso) {
-        *err = "Can't write \"" + job->iso_part + "\"";
+        *err = string_format(tr("Can't write \"%s\""), job->iso_part.c_str());
         return false;
     }
     bool ok = true;
@@ -1263,7 +1265,7 @@ bool XboxExplorerMakeXiso(char vol, const std::string &dir,
     if (!ok) {
         fclose(job->iso);
         fs::remove(fs::u8path(job->iso_part), ec);
-        *err = "Couldn't write the disc image (is the disk full?)";
+        *err = tr("Couldn't write the disc image (is the disk full?)");
         return false;
     }
     for (const XisoNode *f : plan.files) {
@@ -1286,29 +1288,29 @@ bool XboxExplorerDeleteFolder(char vol, const std::string &dir,
                               const std::string &title, std::string *err)
 {
     if (g_job) {
-        *err = "The Xbox hard drive is busy with another copy";
+        *err = tr("The Xbox hard drive is busy with another copy");
         return false;
     }
     if (XboxIsRunning() && g_drive.IsOpen()) {
         Reopen();
     }
     if (!EnsureOpen()) {
-        *err = g_open_err.empty() ? "Can't open the Xbox hard drive" : g_open_err;
+        *err = g_open_err.empty() ? std::string(tr("Can't open the Xbox hard drive")) : g_open_err;
         return false;
     }
     if (!XboxDiskEmulatedWritable()) {
-        *err = "The hard disk image is read-only";
+        *err = tr("The hard disk image is read-only");
         return false;
     }
     XboxFileInfo fi;
     if (dir.empty() || dir == "/" || !g_drive.Stat(vol, dir, &fi) || !fi.dir) {
-        *err = "It's no longer on the drive";
+        *err = tr("It's no longer on the drive");
         return false;
     }
     auto job = std::make_unique<Job>();
     job->writes = true;
     job->vol = vol;
-    job->title = "Deleting " + title;
+    job->title = string_format(tr("Deleting %s"), title.c_str());
     if (!DeleteSteps(vol, dir, fi, job.get(), err)) {
         return false;
     }
@@ -1324,14 +1326,14 @@ bool XboxExplorerFindHomebrew(std::vector<XboxHomebrewApp> *out, std::string *er
 {
     out->clear();
     if (g_job) {
-        *err = "The Xbox hard drive is busy";
+        *err = tr("The Xbox hard drive is busy");
         return false;
     }
     if (XboxIsRunning() && g_drive.IsOpen()) {
         Reopen();
     }
     if (!EnsureOpen()) {
-        *err = g_open_err.empty() ? "Can't open the Xbox hard drive" : g_open_err;
+        *err = g_open_err.empty() ? std::string(tr("Can't open the Xbox hard drive")) : g_open_err;
         return false;
     }
     static const char *const kSections[] = { "Games", "Apps", "Emulators" };
@@ -1426,7 +1428,7 @@ void XboxExplorerDraw(void)
     if (!EnsureOpen()) {
         ImGui::Dummy(ImVec2(0, 20 * s));
         ImGui::TextUnformatted(tr(ICON_FA_HARD_DRIVE "  Xbox hard drive"));
-        ImGui::TextDisabled("%s", g_open_err.empty() ? "Opening..." : g_open_err.c_str());
+        ImGui::TextDisabled("%s", g_open_err.empty() ? tr("Opening...") : g_open_err.c_str());
         if (ImGui::Button(tr("Try again"))) {
             g_open_tried = 0;
         }
@@ -1450,7 +1452,7 @@ void XboxExplorerDraw(void)
 void XboxExplorerOpenWindow(void)
 {
     g_window_open = true;
-    ImGui::SetWindowFocus("Xbox Hard Drive");
+    ImGui::SetWindowFocus(trid("Xbox Hard Drive"));
 }
 
 void XboxExplorerWindowDraw(void)
@@ -1460,7 +1462,7 @@ void XboxExplorerWindowDraw(void)
     }
     const float s = g_viewport_mgr.m_scale;
     ImGui::SetNextWindowSize(ImVec2(820 * s, 560 * s), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Xbox Hard Drive", &g_window_open)) {
+    if (ImGui::Begin(trid("Xbox Hard Drive"), &g_window_open)) {
         XboxExplorerDraw();
     }
     ImGui::End();

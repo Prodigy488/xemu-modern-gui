@@ -7,6 +7,7 @@
 // (at your option) any later version.
 //
 #include "shader-cache.hh"
+#include "i18n.hh"
 
 #include <atomic>
 #include <cstdio>
@@ -175,10 +176,10 @@ int ShaderCacheClearFor(uint32_t title_id, std::string *msg)
     DropPipelineCache();
     char b[256];
     snprintf(b, sizeof(b),
-             "Removed %d shader file%s for this game and the Vulkan pipeline "
-             "cache (shared by all games, rebuilt as you play). Restart xemu "
-             "before playing it again so nothing old stays in memory.",
-             n, n == 1 ? "" : "s");
+             tr("Removed this game's shader files (%d) and the Vulkan pipeline "
+                "cache (shared by all games, rebuilt as you play). Restart xemu "
+                "before playing it again so nothing old stays in memory."),
+             n);
     *msg = b;
     return n;
 }

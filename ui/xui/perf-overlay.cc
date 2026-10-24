@@ -137,11 +137,11 @@ void DrawShaderIndicator(void)
     const float s = g_viewport_mgr.m_scale;
     ImGuiViewport *vp = ImGui::GetMainViewport();
     ImDrawList *dl = ImGui::GetForegroundDrawList(vp);
-    char text[64];
+    char text[160];
     if (last_second > 0) {
-        snprintf(text, sizeof(text), "Preparing shaders  %d", last_second);
+        snprintf(text, sizeof(text), "%s  %d", tr("Preparing shaders"), last_second);
     } else {
-        snprintf(text, sizeof(text), "Preparing shaders");
+        snprintf(text, sizeof(text), "%s", tr("Preparing shaders"));
     }
     ImVec2 ts = ImGui::CalcTextSize(text);
     float r = ts.y * 0.38f;

@@ -416,6 +416,65 @@ std::string XuiLanguageFontPath(int *font_no)
     return "";
 }
 
+static const XuiLanguage *FindLanguage(const char *code)
+{
+    for (const auto &l : kLanguages) {
+        if (!strcmp(l.code, code)) {
+            return &l;
+        }
+    }
+    return nullptr;
+}
+
+std::string XuiLanguageItemName(int i)
+{
+    if (i < 0 || i >= (int)kLanguages.size()) {
+        return "";
+    }
+    const XuiLanguage &l = kLanguages[i];
+    if (!*l.code) {
+        const XuiLanguage *sys = FindLanguage(XuiSystemLanguage());
+        return std::string(tr("Windows language")) + " (" +
+               (sys ? sys->native : "English") + ")";
+    }
+    if (!strcmp(l.native, l.english)) {
+        return l.native;
+    }
+    return std::string(l.native) + "  -  " + l.english;
+}
+
+int XuiLanguageSettingIndex()
+{
+    const char *setting = g_config.display.ui.language;
+    if (!setting) {
+        setting = "";
+    }
+    for (int i = 0; i < (int)kLanguages.size(); i++) {
+        if (!strcmp(kLanguages[i].code, setting)) {
+            return i;
+        }
+    }
+    return 0;
+}
+
+void XuiLanguageChoose(int i)
+{
+    if (i < 0 || i >= (int)kLanguages.size()) {
+        return;
+    }
+    xemu_settings_set_string(&g_config.display.ui.language, kLanguages[i].code);
+}
+
+const char *XuiLanguageLabel()
+{
+    static std::string label;
+    label = tr("Language");
+    if (strcmp(XuiLanguageCode(), "en") != 0 && label != "Language") {
+        label += " / Language";
+    }
+    return label.c_str();
+}
+
 float XuiLanguageCoverage(const char *code)
 {
     if (!strcmp(code, "en") || !*code) {

@@ -306,7 +306,7 @@ void FilePicker(const char *str_id, const char *current_path,
     ImGuiStyle &style = ImGui::GetStyle();
     ImVec2 p = ImGui::GetCursorScreenPos();
     ImVec2 cursor = ImGui::GetCursorPos();
-    const char *desc = (current_path && strlen(current_path)) ? current_path : "(None Selected)";
+    const char *desc = (current_path && strlen(current_path)) ? current_path : tr("(None Selected)");
     ImVec2 bb(ImGui::GetColumnWidth(),
               GetWidgetTitleDescriptionHeight(str_id, desc));
     ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0, 0));

@@ -261,7 +261,7 @@ public:
     bool DrawItems(PopupMenuItemDelegate &nav) override
     {
         const char *values[] = {
-            "Center", "Scale", "Stretch"
+            tr("Center"), tr("Scale"), tr("Stretch")
         };
 
         for (int i = 0; i < CONFIG_DISPLAY_UI_FIT__COUNT; i++) {
@@ -280,8 +280,8 @@ public:
     bool DrawItems(PopupMenuItemDelegate &nav) override
     {
         const char *values[] = {
-            "Native",
-            "Auto (Default)",
+            tr("Native"),
+            tr("Auto (Default)"),
             "4:3",
             "16:9"
         };

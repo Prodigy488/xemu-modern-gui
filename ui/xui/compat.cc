@@ -52,23 +52,23 @@ void CompatibilityReporter::Draw()
     if (!is_open) return;
 
     const char *playability_names[] = {
-        "Broken",
-        "Intro",
-        "Starts",
-        "Playable",
-        "Perfect",
+        tr("Broken"),
+        tr("Intro"),
+        tr("Starts"),
+        tr("Playable"),
+        tr("Perfect"),
     };
 
     const char *playability_descriptions[] = {
-        "This title crashes very soon after launching, or displays nothing at all.",
-        "This title displays an intro sequence, but fails to make it to gameplay.",
-        "This title starts, but may crash or have significant issues.",
-        "This title is playable, but may have minor issues.",
-        "This title is playable from start to finish with no noticable issues."
+        tr("This title crashes very soon after launching, or displays nothing at all."),
+        tr("This title displays an intro sequence, but fails to make it to gameplay."),
+        tr("This title starts, but may crash or have significant issues."),
+        tr("This title is playable, but may have minor issues."),
+        tr("This title is playable from start to finish with no noticeable issues.")
     };
 
     ImGui::SetNextWindowContentSize(ImVec2(550.0f*g_viewport_mgr.m_scale, 0.0f));
-    if (!ImGui::Begin("Report Compatibility", &is_open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (!ImGui::Begin(trid("Report Compatibility"), &is_open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::End();
         return;
     }

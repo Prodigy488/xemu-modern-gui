@@ -58,6 +58,21 @@ void MainMenuTabView::Draw()
 
 void MainMenuGeneralView::Draw()
 {
+    SectionTitle(XuiLanguageLabel());
+    {
+        int lang = XuiLanguageSettingIndex();
+        auto getter = [](void *, int i, const char **out) {
+            static std::string names[32];
+            names[i % 32] = XuiLanguageItemName(i);
+            *out = names[i % 32].c_str();
+            return true;
+        };
+        if (ChevronCombo("##language", &lang, getter, nullptr,
+                         (int)XuiLanguages().size(), "")) {
+            XuiLanguageChoose(lang);
+        }
+    }
+
 #if defined(_WIN32)
     SectionTitle(tr("Updates"));
     Toggle(tr("Check for updates"), &g_config.general.updates.check,
@@ -278,7 +293,7 @@ void MainMenuInputView::Draw()
     ImGui::NextColumn();
 
     // List available input devices
-    const char *not_connected = "Not Connected";
+    const char *not_connected = tr("Not Connected");
     ControllerState *bound_state = xemu_input_get_bound(active);
 
     // Get current controller name
@@ -380,7 +395,7 @@ void MainMenuInputView::Draw()
         ImVec2(controller_width/t_w, 0));
     ImVec2 pos = ImGui::GetCursorPos();
     if (!device_selected) {
-        const char *msg = "Please select an available input device";
+        const char *msg = tr("Please select an available input device");
         ImVec2 dim = ImGui::CalcTextSize(msg);
         ImGui::SetCursorPosX(cur.x + (controller_display_size.x-dim.x)/2);
         ImGui::SetCursorPosY(cur.y + (controller_display_size.y-dim.y)/2);
@@ -415,7 +430,7 @@ void MainMenuInputView::Draw()
             // peripheral they want to use
             enum peripheral_type selected_type =
                 bound_state->peripheral_types[i];
-            const char *peripheral_type_names[2] = { "None", "Memory Unit" };
+            const char *peripheral_type_names[2] = { tr("None"), tr("Memory Unit") };
             const char *selected_peripheral_type =
                 peripheral_type_names[selected_type];
             ImGui::SetNextItemWidth(-FLT_MIN);
@@ -520,7 +535,7 @@ void MainMenuInputView::Draw()
                         } else {
                             // Show alert message
                             char *msg = g_strdup_printf(
-                                "Unable to create XMU image at %s", new_path);
+                                tr("Unable to create XMU image at %s"), new_path);
                             xemu_queue_error_message(msg);
                             g_free(msg);
                         }
@@ -621,43 +636,43 @@ void MainMenuInputView::PopulateTableController(ControllerState *state)
         "B",
         "X",
         "Y",
-        "Back",
-        "Guide",
-        "Start",
-        "Left Stick Button",
-        "Right Stick Button",
-        "White",
-        "Black",
-        "DPad Up",
-        "DPad Down",
-        "DPad Left",
-        "DPad Right",
+        N_("Back"),
+        N_("Guide"),
+        N_("Start"),
+        N_("Left Stick Button"),
+        N_("Right Stick Button"),
+        N_("White"),
+        N_("Black"),
+        N_("DPad Up"),
+        N_("DPad Down"),
+        N_("DPad Left"),
+        N_("DPad Right"),
     };
 
     // Must match g_keyboard_scancode_map[15:]. Each axis requires
     // two keys for the positive and negative direction with the
     // exception of the triggers, which only require one each.
     static constexpr const char *keyboard_stick_index_to_name_map[10] = {
-        "Left Stick Up",
-        "Left Stick Left",
-        "Left Stick Right",
-        "Left Stick Down",
-        "Left Trigger",
-        "Right Stick Up",
-        "Right Stick Left",
-        "Right Stick Right",
-        "Right Stick Down",
-        "Right Trigger",
+        N_("Left Stick Up"),
+        N_("Left Stick Left"),
+        N_("Left Stick Right"),
+        N_("Left Stick Down"),
+        N_("Left Trigger"),
+        N_("Right Stick Up"),
+        N_("Right Stick Left"),
+        N_("Right Stick Right"),
+        N_("Right Stick Down"),
+        N_("Right Trigger"),
     };
 
     // Must match controller axis map below.
     static constexpr const char *gamepad_axis_index_to_name_map[6] = {
-        "Left Stick Axis X",
-        "Left Stick Axis Y",
-        "Right Stick Axis X",
-        "Right Stick Axis Y",
-        "Left Trigger Axis",
-        "Right Trigger Axis",
+        N_("Left Stick Axis X"),
+        N_("Left Stick Axis Y"),
+        N_("Right Stick Axis X"),
+        N_("Right Stick Axis Y"),
+        N_("Left Trigger Axis"),
+        N_("Right Trigger Axis"),
     };
 
     bool is_keyboard = state->type == INPUT_DEVICE_SDL_KEYBOARD;
@@ -681,9 +696,9 @@ void MainMenuInputView::PopulateTableController(ControllerState *state)
         ImGui::TableSetColumnIndex(0);
 
         if (i < num_face_buttons) {
-          ImGui::Text("%s", face_button_index_to_name_map[i]);
+          ImGui::Text("%s", tr(face_button_index_to_name_map[i]));
         } else {
-          ImGui::Text("%s", axis_index_to_name_map[i - num_face_buttons]);
+          ImGui::Text("%s", tr(axis_index_to_name_map[i - num_face_buttons]));
         }
 
         // Button Binding Column
@@ -694,7 +709,7 @@ void MainMenuInputView::PopulateTableController(ControllerState *state)
             continue;
         }
 
-        const char *remap_button_text = "Invalid";
+        const char *remap_button_text = tr("Invalid");
         if (is_keyboard) {
           // g_keyboard_scancode_map includes both face buttons and axis buttons.
             int keycode = *(g_keyboard_scancode_map[i]);
@@ -771,12 +786,12 @@ void MainMenuDisplayView::Draw()
 {
     SectionTitle(tr("Renderer"));
     ChevronCombo(tr("Backend"), &g_config.display.renderer,
-                 "Null\0"
-                 "OpenGL\0"
+                 tr_items("Null\0"
+                          "OpenGL\0"
 #ifdef CONFIG_VULKAN
-                 "Vulkan\0"
+                          "Vulkan\0"
 #endif
-                 ,
+                          ),
                  tr("Select desired renderer implementation"));
     int rendering_scale = nv2a_get_surface_scale_factor() - 1;
     if (ChevronCombo(tr("Internal resolution scale"), &rendering_scale,
@@ -815,8 +830,8 @@ void MainMenuDisplayView::Draw()
             RtxVideoRetry();
         }
     } else if (g_config.display.filtering >= CONFIG_DISPLAY_FILTERING_FSR) {
-        char buf[48];
-        snprintf(buf, sizeof(buf), "Sharpening strength (%d%%, %s)",
+        char buf[160];
+        snprintf(buf, sizeof(buf), tr("Sharpening strength (%d%%, %s)"),
                  (int)(g_config.display.fsr_sharpness * 100),
                  g_config.display.filtering == CONFIG_DISPLAY_FILTERING_NIS
                      ? "NVIDIA NIS" : "AMD RCAS");
@@ -897,8 +912,8 @@ void MainMenuDisplayView::Draw()
 void MainMenuAudioView::Draw()
 {
     SectionTitle(tr("Volume"));
-    char buf[32];
-    snprintf(buf, sizeof(buf), "Limit output volume (%d%%)",
+    char buf[160];
+    snprintf(buf, sizeof(buf), tr("Limit output volume (%d%%)"),
              (int)(g_config.audio.volume_limit * 100));
     Slider(tr("Output volume limit"), &g_config.audio.volume_limit, buf);
 
@@ -1039,8 +1054,8 @@ void MainMenuNetworkView::DrawPcapOptions(bool appearing)
 
     if (iface_mgr->m_failed_to_load_lib) {
 #if defined(_WIN32)
-        const char *msg = "npcap library could not be loaded.\n"
-                          "To use this backend, please install npcap.";
+        const char *msg = tr("npcap library could not be loaded.\n"
+                             "To use this backend, please install npcap.");
         ImGui::Text("%s", msg);
         ImGui::Dummy(ImVec2(0,10*g_viewport_mgr.m_scale));
         ImGui::SetCursorPosX((ImGui::GetWindowWidth()-120*g_viewport_mgr.m_scale)/2);
@@ -1092,8 +1107,8 @@ void MainMenuNetworkView::DrawNatOptions(bool appearing)
 {
     static ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg;
     WidgetTitleDescriptionItem(
-        "Port Forwarding",
-        "Configure xemu to forward connections to guest on these ports");
+        tr("Port Forwarding"),
+        tr("Configure xemu to forward connections to guest on these ports"));
     float p = ImGui::GetFrameHeight() * 0.3;
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(p, p));
     if (ImGui::BeginTable("port_forward_tbl", 4, flags))
@@ -1284,7 +1299,7 @@ bool MainMenuSnapshotsView::BigSnapshotButton(QEMUSnapshotInfo *snapshot,
     // Snapshot XBE title name
     ImGui::PushFont(g_font_mgr.m_menu_font_small);
     const char *title_name = data->xbe_title_name ? data->xbe_title_name :
-                                                    "(Unknown XBE Title Name)";
+                                                    tr("(Unknown XBE Title Name)");
     draw_list->AddText(ImVec2(p0.x + title_pos.x, p0.y + title_pos.y),
                        IM_COL32(255, 255, 255, 200), title_name);
 
@@ -1299,7 +1314,7 @@ bool MainMenuSnapshotsView::BigSnapshotButton(QEMUSnapshotInfo *snapshot,
     // Snapshot keyboard binding
     if (current_snapshot_binding != -1) {
         char *binding_text =
-            g_strdup_printf("Bound to F%d", current_snapshot_binding + 5);
+            g_strdup_printf(tr("Bound to F%d"), current_snapshot_binding + 5);
         draw_list->AddText(ImVec2(p0.x + binding_pos.x, p0.y + binding_pos.y),
                            IM_COL32(255, 255, 255, 200), binding_text);
         g_free(binding_text);
@@ -1471,7 +1486,7 @@ void MainMenuSnapshotsView::Draw()
         if (ImGui::IsItemHovered() &&
             ImGui::IsKeyPressed(ImGuiKey_GamepadFaceLeft)) {
             ImGui::SetNextWindowPos(pos);
-            ImGui::OpenPopup("Snapshot Options");
+            ImGui::OpenPopup(trid("Snapshot Options"));
         }
 
         DrawSnapshotContextMenu(snapshot, data, current_snapshot_binding);
@@ -1490,12 +1505,12 @@ void MainMenuSnapshotsView::Draw()
         const char *msg;
         if (g_snapshot_mgr.m_snapshots_len) {
             if (!m_search_buf.empty()) {
-                msg = "Press Create to create new snapshot";
+                msg = tr("Press Create to create new snapshot");
             } else {
-                msg = "No snapshots match filter criteria";
+                msg = tr("No snapshots match filter criteria");
             }
         } else {
-            msg = "No snapshots to display";
+            msg = tr("No snapshots to display");
         }
         ImVec2 dim = ImGui::CalcTextSize(msg);
         ImVec2 cur = ImGui::GetCursorPos();
@@ -1508,7 +1523,7 @@ void MainMenuSnapshotsView::DrawSnapshotContextMenu(
     QEMUSnapshotInfo *snapshot, XemuSnapshotData *data,
     int current_snapshot_binding)
 {
-    if (!ImGui::BeginPopupContextItem("Snapshot Options")) {
+    if (!ImGui::BeginPopupContextItem(trid("Snapshot Options"))) {
         return;
     }
 
@@ -1518,7 +1533,7 @@ void MainMenuSnapshotsView::DrawSnapshotContextMenu(
 
     if (ImGui::BeginMenu(tr("Keybinding"))) {
         for (int i = 0; i < 4; ++i) {
-            char *item_name = g_strdup_printf("Bind to F%d", i + 5);
+            char *item_name = g_strdup_printf(tr("Bind to F%d"), i + 5);
 
             if (ImGui::MenuItem(item_name)) {
                 if (current_snapshot_binding >= 0) {
@@ -1620,18 +1635,18 @@ void MainMenuSystemView::Draw()
             uint32_t flag;
             const char *description;
         } modes[] = {
-            { "Widescreen", XBOX_EEPROM_VIDEO_WIDESCREEN,
-              "Games that support it render in 16:9" },
+            { N_("Widescreen"), XBOX_EEPROM_VIDEO_WIDESCREEN,
+              N_("Games that support it render in 16:9") },
             { "480p", XBOX_EEPROM_VIDEO_480P,
-              "Allow progressive scan (HDTV AV pack)" },
+              N_("Allow progressive scan (HDTV AV pack)") },
             { "720p", XBOX_EEPROM_VIDEO_720P,
-              "Allow 720p in the few games that support it (HDTV AV pack)" },
+              N_("Allow 720p in the few games that support it (HDTV AV pack)") },
             { "1080i", XBOX_EEPROM_VIDEO_1080I,
-              "Allow 1080i in the few games that support it (HDTV AV pack)" },
+              N_("Allow 1080i in the few games that support it (HDTV AV pack)") },
         };
         for (auto &m : modes) {
             bool on = (video_flags & m.flag) != 0;
-            if (Toggle(m.label, &on, m.description)) {
+            if (Toggle(tr(m.label), &on, tr(m.description))) {
                 uint32_t flags = on ? (video_flags | m.flag)
                                     : (video_flags & ~m.flag);
                 if (xbox_eeprom_set_video_flags(flags)) {
@@ -1801,7 +1816,7 @@ bool MainMenuTabButton::Draw(bool selected)
     ImGui::PushFont(g_font_mgr.m_menu_font);
 
     ImVec2 button_size = ImVec2(-FLT_MIN, 0);
-    auto text = string_format("%s %s", m_icon.c_str(), m_text.c_str());
+    auto text = string_format("%s %s", m_icon.c_str(), tr(m_text.c_str()));
     ImGui::PushID(this);
     bool status = ImGui::Button(text.c_str(), button_size);
     ImGui::PopID();
@@ -1812,14 +1827,14 @@ bool MainMenuTabButton::Draw(bool selected)
 }
 
 MainMenuScene::MainMenuScene()
-    : m_animation(0.12, 0.12), m_general_button("General", ICON_FA_GEARS),
-      m_input_button("Input", ICON_FA_GAMEPAD),
-      m_display_button("Display", ICON_FA_TV),
-      m_audio_button("Audio", ICON_FA_VOLUME_HIGH),
-      m_network_button("Network", ICON_FA_NETWORK_WIRED),
-      m_snapshots_button("Snapshots", ICON_FA_CLOCK_ROTATE_LEFT),
-      m_system_button("System", ICON_FA_MICROCHIP),
-      m_about_button("About", ICON_FA_CIRCLE_INFO)
+    : m_animation(0.12, 0.12), m_general_button(N_("General"), ICON_FA_GEARS),
+      m_input_button(N_("Input"), ICON_FA_GAMEPAD),
+      m_display_button(N_("Display"), ICON_FA_TV),
+      m_audio_button(N_("Audio"), ICON_FA_VOLUME_HIGH),
+      m_network_button(N_("Network"), ICON_FA_NETWORK_WIRED),
+      m_snapshots_button(N_("Snapshots"), ICON_FA_CLOCK_ROTATE_LEFT),
+      m_system_button(N_("System"), ICON_FA_MICROCHIP),
+      m_about_button(N_("About"), ICON_FA_CIRCLE_INFO)
 {
     m_had_focus_last_frame = false;
     m_focus_view = false;

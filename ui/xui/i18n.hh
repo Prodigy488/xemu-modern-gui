@@ -64,6 +64,15 @@ const uint16_t *XuiLanguageGlyphRanges();
 // the font's index in a .ttc collection
 std::string XuiLanguageFontPath(int *font_no);
 
+// For language pickers: the name shown for XuiLanguages()[i] ("Deutsch -
+// German"; the first is "Windows language (Deutsch)"), the index of the
+// setting, and choosing one (saved to the setting)
+std::string XuiLanguageItemName(int i);
+int XuiLanguageSettingIndex();
+void XuiLanguageChoose(int i);
+// "Language", plus " / Language" when not in English, so it can be found
+const char *XuiLanguageLabel();
+
 // How much of the interface the language covers, 0..1 (for the picker)
 float XuiLanguageCoverage(const char *code);
 

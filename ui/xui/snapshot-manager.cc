@@ -114,19 +114,19 @@ void SnapshotManager::Draw()
 void SnapshotManager::DrawSnapshotDiscLoadDialog()
 {
     if (m_open_pending) {
-        ImGui::OpenPopup("DVD Drive Image");
+        ImGui::OpenPopup(trid("DVD Drive Image"));
         m_open_pending = false;
     }
 
-    if (!ImGui::BeginPopupModal("DVD Drive Image", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (!ImGui::BeginPopupModal(trid("DVD Drive Image"), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
         return;
     }
 
     ImGui::Text(tr("The DVD drive disc image mounted when the snapshot was created does not appear to be loaded:"));
     ImGui::Spacing();
     ImGui::Indent();
-    ImGui::Text(tr("Current Image: %s"), m_current_disc_path.length() ? m_current_disc_path.c_str() : "(None)");
-    ImGui::Text(tr("Expected Image: %s"), m_target_disc_path.length() ? m_target_disc_path.c_str() : "(None)");
+    ImGui::Text(tr("Current Image: %s"), m_current_disc_path.length() ? m_current_disc_path.c_str() : tr("(None)"));
+    ImGui::Text(tr("Expected Image: %s"), m_target_disc_path.length() ? m_target_disc_path.c_str() : tr("(None)"));
     ImGui::Unindent();
     ImGui::Spacing();
     ImGui::Text(tr("Would you like to load it now?"));

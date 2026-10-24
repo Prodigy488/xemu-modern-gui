@@ -7,6 +7,7 @@
 // (at your option) any later version.
 //
 #include "game-compat.hh"
+#include "i18n.hh"
 
 #include <algorithm>
 #include <cstdio>
@@ -289,13 +290,13 @@ CompatStatus CompatLookup(const std::map<uint32_t, CompatStatus> &list,
 const char *CompatName(CompatStatus s)
 {
     switch (s) {
-    case CompatStatus::Perfect: return "Perfect";
-    case CompatStatus::Playable: return "Playable";
-    case CompatStatus::Starts: return "Starts";
-    case CompatStatus::Intro: return "Intro";
-    case CompatStatus::Broken: return "Broken";
-    case CompatStatus::Unknown: return "Untested";
-    default: return "Not listed";
+    case CompatStatus::Perfect: return tr("Perfect");
+    case CompatStatus::Playable: return tr("Playable");
+    case CompatStatus::Starts: return tr("Starts");
+    case CompatStatus::Intro: return tr("Intro");
+    case CompatStatus::Broken: return tr("Broken");
+    case CompatStatus::Unknown: return tr("Untested");
+    default: return tr("Not listed");
     }
 }
 
@@ -304,19 +305,19 @@ const char *CompatDescription(CompatStatus s)
     // As worded on xemu.app
     switch (s) {
     case CompatStatus::Perfect:
-        return "Playable from start to finish with no noticeable issues.";
+        return tr("Playable from start to finish with no noticeable issues.");
     case CompatStatus::Playable:
-        return "Playable, with minor issues.";
+        return tr("Playable, with minor issues.");
     case CompatStatus::Starts:
-        return "Starts, but may crash or have significant issues.";
+        return tr("Starts, but may crash or have significant issues.");
     case CompatStatus::Intro:
-        return "Displays an intro sequence, but fails to make it to gameplay.";
+        return tr("Displays an intro sequence, but fails to make it to gameplay.");
     case CompatStatus::Broken:
-        return "Crashes very soon after launching, or displays nothing at all.";
+        return tr("Crashes very soon after launching, or displays nothing at all.");
     case CompatStatus::Unknown:
-        return "A compatibility test has not been recorded for this title.";
+        return tr("A compatibility test has not been recorded for this title.");
     default:
-        return "This title isn't in xemu's compatibility list.";
+        return tr("This title isn't in xemu's compatibility list.");
     }
 }
 

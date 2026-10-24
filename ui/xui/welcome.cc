@@ -51,7 +51,7 @@ void FirstBootWindow::Draw()
 
     Logo();
 
-    const char *msg = "Configure machine settings to get started";
+    const char *msg = tr("Configure machine settings to get started");
     ImGui::SetCursorPosX((ImGui::GetWindowWidth()-ImGui::CalcTextSize(msg).x)/2);
     ImGui::Text("%s", msg);
 

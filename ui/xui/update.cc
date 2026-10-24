@@ -66,7 +66,7 @@ void AutoUpdateWindow::Draw()
 {
     if (!is_open) return;
     ImGui::SetNextWindowContentSize(ImVec2(550.0f*g_viewport_mgr.m_scale, 0.0f));
-    if (!ImGui::Begin("Update", &is_open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (!ImGui::Begin(trid("Update"), &is_open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::End();
         return;
     }
@@ -77,15 +77,15 @@ void AutoUpdateWindow::Draw()
 
     const char *status_msg[] = {
         "",
-        "An error has occured. Try again.",
-        "Checking for update...",
-        "Downloading update...",
-        "Update successful! Restart to launch the updated version."
+        tr("An error has occurred. Try again."),
+        tr("Checking for update..."),
+        tr("Downloading update..."),
+        tr("Update successful! Restart to launch the updated version.")
     };
     const char *available_msg[] = {
-        "Update availability unknown.",
-        "This version of xemu Modern GUI is up to date.",
-        "An updated version of xemu Modern GUI is available!",
+        tr("Update availability unknown."),
+        tr("This version of xemu Modern GUI is up to date."),
+        tr("An updated version of xemu Modern GUI is available!"),
     };
 
     if (updater.get_status() == UPDATER_IDLE) {

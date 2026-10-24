@@ -31,6 +31,8 @@
 #include <misc/cpp/imgui_stdlib.h>
 #include <stb_image.h>
 
+#include "i18n.hh"
+
 #include "qemu/osdep.h"
 
 extern "C" {

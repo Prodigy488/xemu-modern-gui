@@ -134,7 +134,8 @@ void Save()
               WriteText(dir / "frames.csv", PerfFramesCsv(g.cap)) &&
               WriteText(dir / "trace.json", PerfTraceJson(g.cap));
     if (!ok) {
-        g.save_err = "Couldn't save the report to " + dir.u8string();
+        g.save_err = string_format(tr("Couldn't save the report to %s"),
+                                   dir.u8string().c_str());
         return;
     }
     // Screenshots from the glitch marks (F12 / Shift+F12 while recording)
@@ -228,7 +229,7 @@ void DrawGraph(float w, float h)
 void DrawReport()
 {
     const PerfReport &r = g.report;
-    ImGui::Text("%s", g.cap.game.empty() ? "No game detected" : g.cap.game.c_str());
+    ImGui::Text("%s", g.cap.game.empty() ? tr("No game detected") : g.cap.game.c_str());
     ImGui::TextDisabled(tr("%s  -  %s  -  %.0f s, %d frames"), g.cap.renderer.c_str(),
                         g.cap.settings.c_str(), g.cap.duration_ms / 1000, r.frames);
     ImGui::Text(tr("Frame rate %.0f average, %.0f lowest.  Render time %d ms typical, "
@@ -284,10 +285,8 @@ void DrawReport()
     for (size_t i = 0; i < r.marks.size(); i++) {
         auto &m = r.marks[i];
         int sec = (int)(m.t_ms / 1000);
-        ImGui::SeparatorText(("Glitch mark " + std::to_string(i + 1) + " at " +
-                              std::to_string(sec / 60) + ":" +
-                              (sec % 60 < 10 ? "0" : "") + std::to_string(sec % 60))
-                                 .c_str());
+        ImGui::SeparatorText(string_format(tr("Glitch mark %d at %d:%02d"), (int)i + 1,
+                                           sec / 60, sec % 60).c_str());
         for (auto &d : m.unusual) {
             ImGui::BulletText(tr("%s: %.1f per frame here, %.1f usually"), d.name.c_str(),
                               d.slow_avg, d.normal_avg);
@@ -443,7 +442,7 @@ bool RenderSummaryPng(const std::string &path, std::string *err)
     glDeleteFramebuffers(1, &fb);
     glDeleteTextures(1, &tex);
     if (!ok_fb) {
-        *err = "Couldn't draw the summary picture";
+        *err = tr("Couldn't draw the summary picture");
         return false;
     }
     for (int row = 0; row < H; row++) {
@@ -454,11 +453,11 @@ bool RenderSummaryPng(const std::string &path, std::string *err)
     }
     std::vector<uint8_t> png;
     if (!fpng::fpng_encode_image_to_memory(flip.data(), W, H, 4, png)) {
-        *err = "Couldn't encode the picture";
+        *err = tr("Couldn't encode the picture");
         return false;
     }
     if (!WriteText(fs::u8path(path), std::string((const char *)png.data(), png.size()))) {
-        *err = "Couldn't save " + path;
+        *err = string_format(tr("Couldn't save %s"), path.c_str());
         return false;
     }
     return true;
@@ -472,13 +471,13 @@ void PerfCaptureAfterRender(void)
     }
     g.export_pending = false;
     if (g.saved_dir.empty()) {
-        g.export_msg = "Record and save a capture first";
+        g.export_msg = tr("Record and save a capture first");
         return;
     }
     std::string path = (fs::u8path(g.saved_dir) / "summary.png").u8string();
     std::string err;
     if (RenderSummaryPng(path, &err)) {
-        g.export_msg = "Saved summary.png in the capture folder";
+        g.export_msg = tr("Saved summary.png in the capture folder");
         RevealFileInFolder(path);
     } else {
         g.export_msg = err;
@@ -566,8 +565,8 @@ void PerfCaptureDraw(void)
         ImDrawList *dl = ImGui::GetForegroundDrawList();
         ImGuiViewport *vp = ImGui::GetMainViewport();
         int sec = (int)(NowMs() / 1000);
-        char t[96];
-        snprintf(t, sizeof(t), "REC %d:%02d   Shift+F12 mark glitch   Shift+F9 stop",
+        char t[256];
+        snprintf(t, sizeof(t), tr("REC %d:%02d   Shift+F12 mark glitch   Shift+F9 stop"),
                  sec / 60, sec % 60);
         ImVec2 ts = ImGui::CalcTextSize(t);
         ImVec2 p(vp->WorkPos.x + vp->WorkSize.x - ts.x - 40 * s, vp->WorkPos.y + 30 * s);
@@ -583,7 +582,7 @@ void PerfCaptureDraw(void)
         return;
     }
     ImGui::SetNextWindowSize(ImVec2(720 * s, 640 * s), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Performance Capture", &g.window)) {
+    if (!ImGui::Begin(trid("Performance Capture"), &g.window)) {
         ImGui::End();
         return;
     }

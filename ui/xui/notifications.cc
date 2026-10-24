@@ -67,11 +67,11 @@ void NotificationManager::Draw()
     ImGuiIO& io = ImGui::GetIO();
 
     if (m_error_queue.size() > 0) {
-        ImGui::OpenPopup("Error");
+        ImGui::OpenPopup(trid("Error"));
         ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x/2, io.DisplaySize.y/2),
                                 ImGuiCond_Always, ImVec2(0.5, 0.5));
     }
-    if (ImGui::BeginPopupModal("Error", NULL, ImGuiWindowFlags_AlwaysAutoResize))
+    if (ImGui::BeginPopupModal(trid("Error"), NULL, ImGuiWindowFlags_AlwaysAutoResize))
     {
         ImGui::Text("%s", m_error_queue[0]);
         ImGui::Dummy(ImVec2(0,16));

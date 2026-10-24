@@ -15,6 +15,7 @@ xemu_ss.add(files(
   'perf-capture.cc',
   'perf-voice.cc',
   'insignia-net.cc',
+  'osk.cc',
   'shader-cache.cc',
   'dynamic-res.cc',
   'dynamic-res-logic.cc',

@@ -309,6 +309,9 @@ display:
     show_shader_indicator:
       type: bool
       default: true
+    onscreen_keyboard:
+      type: bool
+      default: true
     language: string
     hide_cursor:
       type: bool

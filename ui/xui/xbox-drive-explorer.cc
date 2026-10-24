@@ -19,6 +19,7 @@
 #include <memory>
 
 #include "common.hh"
+#include "osk.hh"
 #include "game-library.hh"
 #include "IconsFontAwesome6.h"
 #include "misc.hh"
@@ -855,6 +856,7 @@ bool NamePopup(const char *id, const char *title, const char *button,
         }
         bool enter = ImGui::InputText("##name", g_name_buf, sizeof(g_name_buf),
                                       ImGuiInputTextFlags_EnterReturnsTrue);
+        OskTextBox();
         std::string why;
         bool valid = XboxValidName(g_name_buf, &why);
         if (!valid && g_name_buf[0]) {

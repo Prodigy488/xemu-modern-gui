@@ -18,6 +18,7 @@
 //
 #include <string>
 #include "common.hh"
+#include "osk.hh"
 #include "compat.hh"
 #include "widgets.hh"
 #include "viewport-manager.hh"
@@ -132,6 +133,7 @@ void CompatibilityReporter::Draw()
         report.token = token_buf;
         dirty = true;
     }
+    OskTextBox();
     ImGui::PopFont();
     ImGui::SameLine();
     if (ImGui::Button(tr("Get Token"))) {
@@ -158,6 +160,7 @@ void CompatibilityReporter::Draw()
         report.compat_comments = description;
         dirty = true;
     }
+    OskTextBox();
 
     if (ImGui::TreeNode(tr("Report Details"))) {
         ImGui::PushFont(g_font_mgr.m_fixed_width_font);

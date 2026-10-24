@@ -51,6 +51,7 @@
 #include "menubar.hh"
 #include "../xemu-net.h"
 #include "perf-voice.hh"
+#include "osk.hh"
 #include "compat.hh"
 #include "xbox-drive-explorer.hh"
 #include "perf-capture.hh"
@@ -240,6 +241,7 @@ void xemu_hud_update(void)
     g_input_mgr.Update();
 
     ImGui::NewFrame();
+    OskBeginFrame(); // before any UI: takes the controller while typing
     ProcessKeyboardShortcuts();
 
 #if defined(CONFIG_RENDERDOC)
@@ -348,6 +350,7 @@ void xemu_hud_update(void)
         DynamicResDraw();
     }
     g_snapshot_mgr.Draw();
+    OskDraw(); // on top of everything
 
     // static bool show_demo = true;
     // if (show_demo) ImGui::ShowDemoWindow(&show_demo);

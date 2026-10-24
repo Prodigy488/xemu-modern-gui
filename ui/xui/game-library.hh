@@ -67,3 +67,12 @@ std::string GameLibraryCurrentTitle(void);
 // Name of a game by title ID, from your library or xemu's compatibility list
 // ("" if unknown)
 std::string GameLibraryTitleName(uint32_t title_id);
+
+// The dashboard theme's colors, for other UI drawn to match (the on-screen
+// keyboard). neon: cut corners; otherwise rounded.
+struct GameLibraryColors {
+    bool neon;
+    uint32_t accent, accent2, text, dim, on_accent; // ImU32 (ABGR)
+};
+GameLibraryColors GameLibraryThemeColors(void);
+

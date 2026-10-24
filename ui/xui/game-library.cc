@@ -27,6 +27,7 @@
 #include <nlohmann/json.hpp>
 
 #include "common.hh"
+#include "osk.hh"
 #include "game-library.hh"
 #include "game-library-scan.hh"
 #include "rtx-video.hh"
@@ -1691,6 +1692,18 @@ const LibTheme &T()
                ? kThemeGreen
                : kThemeNeon;
 }
+
+} // namespace
+
+// For the on-screen keyboard: the dashboard's colors and shape
+GameLibraryColors GameLibraryThemeColors(void)
+{
+    const LibTheme &t = T();
+    return { t.neon, t.accent, t.accent2, t.text, t.dim,
+             ImGui::ColorConvertFloat4ToU32(t.on_primary) };
+}
+
+namespace {
 
 ImU32 Alpha(ImU32 c, int a)
 {
@@ -3780,6 +3793,14 @@ void CheckInsigniaStatus(bool force)
         g_insignia_status = (int)result;
     });
 }
+
+// Insignia Setup Assistant (defined with the homebrew code)
+const char *InsigniaSetupLabel(bool *busy);
+void InsigniaRunSetupAssistant();
+void InsigniaSetupDownload();
+bool InsigniaSetupInstalled();
+const std::string &InsigniaSetupMessage(bool *err);
+void InsigniaStartDashboard();
 
 // Networking on with the NAT backend and Insignia's DNS (all xemu needs for
 // Insignia; the Xbox's network settings stay on automatic)
@@ -6127,9 +6148,13 @@ void DrawInsigniaTab(int &tex_budget)
     float setup_y = a.y + status_h + gap;
     float setup_h = two_col ? avail.y - status_h - gap : 300 * s;
     DashCard(dl, ImVec2(a.x, setup_y), ImVec2(a.x + left_w, setup_y + setup_h));
-    ImGui::SetCursorScreenPos(ImVec2(a.x + 26 * s, setup_y + 22 * s));
-    ImGui::BeginGroup();
-    ImGui::PushTextWrapPos(a.x + left_w - 26 * s);
+    ImGui::SetCursorScreenPos(ImVec2(a.x, setup_y));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(26 * s, 22 * s));
+    ImGui::BeginChild("##insignia-setup", ImVec2(left_w, setup_h),
+                      ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened);
+    dl = ImGui::GetWindowDrawList();
+    ImGui::PushTextWrapPos(ImGui::GetContentRegionMax().x);
     DashLabel(tr("Get online in xemu"));
     ImGui::Dummy(ImVec2(0, 6 * s));
     bool net_ok = g_config.net.enable &&
@@ -6216,9 +6241,61 @@ void DrawInsigniaTab(int &tex_budget)
         ImGui::Unindent(40 * s);
         ImGui::Dummy(ImVec2(0, 6 * s));
     }
-    step(3, false, tr("Create your account"),
-         tr("Register with the Insignia Setup Assistant, then run the network test"));
-    step(4, false, tr("Play"), tr("Start a supported game and sign in to Xbox Live"));
+    {
+        // Register this Xbox: Insignia's Setup Assistant, fetched and started
+        bool busy = false;
+        const char *label = InsigniaSetupLabel(&busy);
+        step(3, false, tr("Register this Xbox"),
+             tr("The Insignia Setup Assistant registers the Xbox with Insignia: "
+                "press Register in it, then come back here"));
+        ImGui::Indent(40 * s);
+        ImGui::BeginDisabled(busy || XboxExplorerBusy());
+        if (ImGui::SmallButton(label)) {
+            InsigniaRunSetupAssistant();
+        }
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip("%s", tr("Downloads Insignia's latest Setup Assistant from "
+                                       "their GitHub page (the first time), copies it "
+                                       "to E:\\Apps\\InsigniaSetup on the Xbox drive "
+                                       "and starts it. The Xbox restarts, so save "
+                                       "your game first."));
+        if (!busy && InsigniaSetupInstalled()) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton(tr("Download again"))) {
+                InsigniaSetupDownload();
+            }
+            ImGui::SetItemTooltip("%s", tr("Get Insignia's latest version"));
+        }
+        bool msg_err = false;
+        const std::string &msg = InsigniaSetupMessage(&msg_err);
+        if (!msg.empty()) {
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(msg_err ? T().warn : T().ok),
+                               "%s", msg.c_str());
+        }
+        ImGui::Unindent(40 * s);
+        ImGui::Dummy(ImVec2(0, 6 * s));
+    }
+    if (step(4, false, tr("Get an invite code"),
+             tr("Sign up with your email on insignia.live. They email you a code "
+                "for the next step."),
+             tr("Sign up on insignia.live"))) {
+        SDL_OpenURL("https://insignia.live/");
+    }
+    if (step(5, false, tr("Create your Xbox Live account"),
+             tr("In the Xbox dashboard's Xbox Live section: country, gamertag, "
+                "the invite code, the same email, then a PIN. Insignia's Connect "
+                "guide shows each screen, including the test card number to "
+                "enter (nothing is charged)."),
+             tr("Start the Xbox dashboard"))) {
+        InsigniaStartDashboard();
+    }
+    ImGui::Indent(40 * s);
+    ImGui::TextDisabled("%s", tr("Needs dashboard version 5960 (Settings > System "
+                                 "Info on the Xbox). Older? Start a game that "
+                                 "came with that update and choose Xbox Live."));
+    ImGui::Unindent(40 * s);
+    ImGui::Dummy(ImVec2(0, 6 * s));
+    step(6, false, tr("Play"), tr("Start a supported game and sign in to Xbox Live"));
     if (ImGui::Button(tr("Connect guide"))) {
         SDL_OpenURL("https://insignia.live/connect");
     }
@@ -6235,7 +6312,10 @@ void DrawInsigniaTab(int &tex_budget)
     }
     ImGui::EndDisabled();
     ImGui::PopTextWrapPos();
-    ImGui::EndGroup();
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+    dl = ImGui::GetWindowDrawList();
 
     // Your online games
     ImVec2 la = two_col ? ImVec2(a.x + left_w + gap, a.y)
@@ -6862,9 +6942,12 @@ void HomebrewMarkDirty();
 void StoreRememberInstall(const std::string &dir, const std::string &app_id);
 
 // Every frame (also while the store isn't shown)
+void InsigniaSetupPump();
+
 void StorePump()
 {
     HomebrewPump();
+    InsigniaSetupPump();
     std::vector<std::function<void()>> fns;
     {
         std::lock_guard<std::mutex> lock(g_store_main_mutex);
@@ -7472,6 +7555,186 @@ void HomebrewPump()
     game_library_window.Launch(g_hb.iso);
 }
 
+// --- Insignia Setup Assistant: downloaded from Insignia's official release
+// when asked (it isn't ours to bundle), installed to E:\Apps\InsigniaSetup
+// and started like any homebrew
+
+const char *const kInsigniaSetupUrl =
+    "https://github.com/insignia-live/setup-assistant-release/releases/latest/"
+    "download/default.xbe";
+const char *const kInsigniaSetupDir = "InsigniaSetup"; // in E:\Apps
+
+struct InsigniaSetup {
+    int phase = 0; // 0 idle, 1 downloading, 2 copying to the Xbox, 3 starting
+    std::string msg;
+    bool msg_err = false;
+    std::shared_ptr<StoreTransfer> xfer;
+} g_isa;
+
+fs::path InsigniaSetupMarker()
+{
+    return IconCacheDir() / "insignia-setup-installed";
+}
+
+bool InsigniaSetupInstalled()
+{
+    std::error_code ec;
+    return fs::exists(InsigniaSetupMarker(), ec);
+}
+
+XboxHomebrewApp InsigniaSetupApp()
+{
+    XboxHomebrewApp a;
+    a.vol = 'E';
+    a.dir = std::string("/Apps/") + kInsigniaSetupDir;
+    a.folder = kInsigniaSetupDir;
+    a.section = "Apps";
+    a.title = "Insignia Setup Assistant";
+    return a;
+}
+
+void InsigniaSetupStart()
+{
+    g_isa.phase = 3;
+    g_hb.msg.clear();
+    g_hb.msg_err = false;
+    HomebrewPlay(InsigniaSetupApp());
+}
+
+// Download (again) and install, then start it
+void InsigniaSetupDownload()
+{
+    if (g_isa.phase != 0 || XboxExplorerBusy()) {
+        return;
+    }
+    g_isa.msg.clear();
+    g_isa.msg_err = false;
+    g_isa.phase = 1;
+    auto xfer = std::make_shared<StoreTransfer>();
+    g_isa.xfer = xfer;
+    fs::path stage = IconCacheDir() / "insignia-setup";
+    g_store_dl->Post([xfer, stage] {
+        std::string body, err;
+        int code = StoreGet(kInsigniaSetupUrl, &body, xfer.get());
+        fs::path content = stage / "content";
+        std::error_code ec;
+        fs::remove_all(stage, ec);
+        fs::create_directories(content, ec);
+        if (code <= 0) {
+            err = tr("Couldn't reach GitHub to download the Setup Assistant. "
+                     "Check your internet connection.");
+        } else if (code != 200 || body.size() < 4096 || body.compare(0, 4, "XBEH")) {
+            err = string_format(tr("The Setup Assistant download failed (HTTP %d). "
+                                   "Try again later."),
+                                code);
+        } else if (!WriteFileAtomic(content / "default.xbe", body)) {
+            err = tr("Couldn't save the download (is the disk full?)");
+        }
+        StoreOnMain([err, content] {
+            if (!err.empty()) {
+                g_isa.phase = 0;
+                g_isa.msg = err;
+                g_isa.msg_err = true;
+                return;
+            }
+            std::string e;
+            if (!XboxExplorerInstallFolder(content.u8string(), 'E', "/Apps",
+                                           kInsigniaSetupDir,
+                                           tr("Installing the Insignia Setup "
+                                              "Assistant"),
+                                           &e)) {
+                g_isa.phase = 0;
+                g_isa.msg = e;
+                g_isa.msg_err = true;
+                return;
+            }
+            g_isa.phase = 2;
+        });
+    });
+}
+
+// The button: start it if it's on the Xbox drive, otherwise get it first
+void InsigniaRunSetupAssistant()
+{
+    if (g_isa.phase != 0) {
+        return;
+    }
+    if (InsigniaSetupInstalled()) {
+        InsigniaSetupStart();
+    } else {
+        InsigniaSetupDownload();
+    }
+}
+
+// Every frame, from StorePump()
+void InsigniaSetupPump()
+{
+    if (g_isa.phase == 2 && !XboxExplorerBusy()) {
+        bool error = false;
+        std::string status = XboxExplorerStatus(&error);
+        if (error) {
+            g_isa.phase = 0;
+            g_isa.msg = status;
+            g_isa.msg_err = true;
+            return;
+        }
+        std::ofstream(InsigniaSetupMarker()) << "1\n";
+        g_hb.loaded = false; // the Homebrew tab lists it now
+        InsigniaSetupStart();
+        return;
+    }
+    if (g_isa.phase == 3 && !g_hb.preparing && !XboxExplorerBusy()) {
+        g_isa.phase = 0;
+        if (g_hb.msg_err) {
+            // Gone from the drive (deleted, or another hard disk image):
+            // the next press downloads it again
+            std::error_code ec;
+            fs::remove(InsigniaSetupMarker(), ec);
+            g_isa.msg = g_hb.msg + "  " + tr("Press the button again to download "
+                                             "it again.");
+            g_isa.msg_err = true;
+        } else {
+            g_isa.msg = tr("Started. In the Setup Assistant, press Register.");
+            g_isa.msg_err = false;
+        }
+    }
+}
+
+// What the button says and whether it's busy
+const char *InsigniaSetupLabel(bool *busy)
+{
+    *busy = g_isa.phase != 0;
+    switch (g_isa.phase) {
+    case 1:
+        return tr("Downloading...");
+    case 2:
+        return tr("Copying to the Xbox...");
+    case 3:
+        return tr("Starting...");
+    default:
+        return InsigniaSetupInstalled() ? tr(ICON_FA_PLAY "  Run the Setup Assistant")
+                                        : tr(ICON_FA_DOWNLOAD "  Get and run the Setup "
+                                             "Assistant");
+    }
+}
+
+const std::string &InsigniaSetupMessage(bool *err)
+{
+    *err = g_isa.msg_err;
+    return g_isa.msg;
+}
+
+// Back to the Xbox dashboard (no disc), to create the Xbox Live account
+void InsigniaStartDashboard()
+{
+    ActionEjectDiscNow();
+    ActionReset();
+    if (!runstate_is_running()) {
+        vm_start();
+    }
+    game_library_window.is_open = false;
+}
+
 bool HomebrewCard(const XboxHomebrewApp &a, float w)
 {
     const float s = g_viewport_mgr.m_scale;
@@ -7680,6 +7943,7 @@ void DrawStoreBrowser()
                                  g_store.search, sizeof(g_store.search))) {
         g_store.search_edit_t = ImGui::GetTime();
     }
+    OskTextBox();
     if (g_store.search_edit_t >= 0 && ImGui::GetTime() - g_store.search_edit_t > 0.4) {
         g_store.search_edit_t = -1;
         if (g_store.search_applied != g_store.search) {
@@ -8078,6 +8342,11 @@ void DrawDashSettingsTab()
                         &g_config.general.discord_presence);
         ImGui::Checkbox(tr("Animations and moving background"),
                         &g_config.display.ui.use_animations);
+        ImGui::Checkbox(tr("On-screen keyboard for controllers"),
+                        &g_config.display.ui.onscreen_keyboard);
+        ImGui::SetItemTooltip("%s", tr("Opens when you select a text box with a "
+                                       "controller. A types, X deletes, Y is a "
+                                       "space, B closes it."));
         label(XuiLanguageLabel());
         {
             int lang = XuiLanguageSettingIndex();
@@ -8183,11 +8452,15 @@ void DrawLibraryTab(int &tex_budget)
     // Toolbar
     float search_w = std::max(180 * s, ImGui::GetContentRegionAvail().x * 0.28f);
     ImGui::SetNextItemWidth(search_w);
-    if (ImGui::IsWindowAppearing()) {
+    // Ready to type, unless a controller is in use: then the D-pad should
+    // move around, and A on the box brings up the on-screen keyboard
+    if (ImGui::IsWindowAppearing() &&
+        GImGui->NavInputSource != ImGuiInputSource_Gamepad) {
         ImGui::SetKeyboardFocusHere();
     }
     ImGui::InputTextWithHint("##search", tr(ICON_FA_MAGNIFYING_GLASS "  Search by name or title ID"),
                              &g_search);
+    OskTextBox();
     ImGui::SameLine();
     bool grid = g_config.general.library.view == CONFIG_GENERAL_LIBRARY_VIEW_GRID;
     auto toggle = [&](const char *label, bool active, const char *tip) {

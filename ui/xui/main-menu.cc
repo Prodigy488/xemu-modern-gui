@@ -18,6 +18,7 @@
 //
 #include "rtx-video.hh"
 #include "common.hh"
+#include "osk.hh"
 #include "scene-manager.hh"
 #include "widgets.hh"
 #include "main-menu.hh"
@@ -95,6 +96,8 @@ void MainMenuGeneralView::Draw()
 #endif
 
     SectionTitle(tr("Miscellaneous"));
+    Toggle(tr("On-screen keyboard"), &g_config.display.ui.onscreen_keyboard,
+           tr("Show a keyboard when a text box is selected with a controller"));
     Toggle(tr("Skip startup animation"), &g_config.general.skip_boot_anim,
            tr("Skip the full Xbox boot animation sequence"));
     Toggle(tr("Discord status"), &g_config.general.discord_presence,
@@ -1152,11 +1155,13 @@ void MainMenuNetworkView::DrawNatOptions(bool appearing)
         static char buf[8] = {"1234"};
         ImGui::SetNextItemWidth(ImGui::GetColumnWidth());
         ImGui::InputText("###hostport", buf, sizeof(buf));
+        OskTextBox();
 
         ImGui::TableSetColumnIndex(1);
         static char buf2[8] = {"1234"};
         ImGui::SetNextItemWidth(ImGui::GetColumnWidth());
         ImGui::InputText("###guestport", buf2, sizeof(buf2));
+        OskTextBox();
 
         ImGui::TableSetColumnIndex(2);
         static CONFIG_NET_NAT_FORWARD_PORTS_PROTOCOL protocol =
@@ -1198,6 +1203,7 @@ void MainMenuNetworkView::DrawUdpOptions(bool appearing)
     if (ImGui::InputText("###remote_host", remote_addr, sizeof(remote_addr))) {
         xemu_settings_set_string(&g_config.net.udp.remote_addr, remote_addr);
     }
+    OskTextBox();
     PrepareComboTitleDescription(
         tr("Bind Address"), tr("Local addr:port to receive packets on (0.0.0.0:9968)"),
         size_ratio);
@@ -1205,6 +1211,7 @@ void MainMenuNetworkView::DrawUdpOptions(bool appearing)
     if (ImGui::InputText("###local_host", local_addr, sizeof(local_addr))) {
         xemu_settings_set_string(&g_config.net.udp.bind_addr, local_addr);
     }
+    OskTextBox();
     ImGui::PopFont();
 }
 
@@ -1399,6 +1406,7 @@ void MainMenuSnapshotsView::Draw()
     ImGui::InputTextWithHint("##search", tr("Search or name new snapshot..."),
                              &m_search_buf, ImGuiInputTextFlags_CallbackEdit,
                              &OnSearchTextUpdate, this);
+    OskTextBox();
 
     bool snapshot_with_create_name_exists = false;
     for (int i = 0; i < g_snapshot_mgr.m_snapshots_len; ++i) {

@@ -11,6 +11,7 @@
 // (at your option) any later version.
 //
 #pragma once
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -61,3 +62,6 @@ void GameLibraryAfterSettingsSave(void);
 void GameLibraryConsumeBack(void);
 // Name of the game in the DVD drive ("" if none)
 std::string GameLibraryCurrentTitle(void);
+// Name of a game by title ID, from your library or xemu's compatibility list
+// ("" if unknown)
+std::string GameLibraryTitleName(uint32_t title_id);

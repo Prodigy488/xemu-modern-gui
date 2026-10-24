@@ -30,6 +30,10 @@ bool ParseCompatJson(const std::string &text,
 // with their own ID share their game's entry)
 uint32_t CompatListedId(uint32_t title_id);
 
+// Game names from the same list, by title ID
+bool ParseCompatNames(const std::string &text,
+                      std::map<uint32_t, std::string> *out);
+
 CompatStatus CompatLookup(const std::map<uint32_t, CompatStatus> &list,
                           uint32_t title_id);
 

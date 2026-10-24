@@ -32,6 +32,7 @@
 #include "rtx-video.hh"
 #include "xbox-drive-explorer.hh"
 #include "perf-capture.hh"
+#include "shader-cache.hh"
 #include "xbox-drive.hh"
 #include "game-patches.hh"
 #include "game-compat.hh"
@@ -318,6 +319,9 @@ std::atomic<uint64_t> g_insignia_checked_at{ 0 };
 std::thread g_insignia_thread;
 std::string g_selected_path;
 std::string g_settings_path; // game whose settings popup is open
+int g_settings_shader_count = 0;  // its cached shader files, when opened
+bool g_settings_shader_confirm = false;
+std::string g_settings_shader_msg;
 GameOverrides g_settings_edit;
 bool g_open_settings_popup = false;
 bool g_focus_requested = false;
@@ -1833,6 +1837,9 @@ void OpenSettingsFor(LibraryEntry &e)
     g_settings_path = e.path;
     g_settings_edit = g_overrides.count(e.title_id) ? g_overrides[e.title_id]
                                                     : GameOverrides();
+    g_settings_shader_count = e.valid ? ShaderCacheCountFor(e.title_id) : 0;
+    g_settings_shader_confirm = false;
+    g_settings_shader_msg.clear();
     g_open_settings_popup = true;
 }
 
@@ -2665,6 +2672,10 @@ void DrawContextMenu(LibraryEntry &e)
     if (ImGui::MenuItem("Patches...", NULL, false, e.valid)) {
         OpenPatchesFor(e);
     }
+    if (ImGui::MenuItem("Clear shader cache...", NULL, false, e.valid)) {
+        OpenSettingsFor(e); // the option lives in the game's settings
+        g_settings_shader_confirm = true;
+    }
     if (PreviewPlayer::Supported()) {
         if (ImGui::MenuItem(ICON_FA_PLAY "  Add preview video...", NULL, false,
                             e.valid)) {
@@ -2911,6 +2922,7 @@ void DrawCover3D(ImDrawList *dl, ImVec2 a, ImVec2 b, const LibraryEntry &e, floa
 // The list is cached in library-cache/compat.json and refreshed once a day in
 // the background
 std::map<uint32_t, CompatStatus> g_compat;
+std::map<uint32_t, std::string> g_compat_names; // title ID -> name
 std::thread g_compat_thread;
 std::atomic<bool> g_compat_downloaded{ false };
 bool g_compat_started = false;
@@ -2930,6 +2942,10 @@ void LoadCompatCache()
     std::map<uint32_t, CompatStatus> list;
     if (ParseCompatJson(text, &list)) {
         g_compat = std::move(list);
+    }
+    std::map<uint32_t, std::string> names;
+    if (ParseCompatNames(text, &names)) {
+        g_compat_names = std::move(names);
     }
 }
 
@@ -3366,6 +3382,46 @@ void DrawSettingsPopup()
     }
     ImGui::EndDisabled();
     ImGui::TextDisabled("Applied whenever this game's disc is loaded.");
+    ImGui::Separator();
+    // Shader cache: try clearing it if the game hangs or draws wrong after
+    // a crash
+    ImGui::TextUnformatted("Shader cache");
+    if (!g_settings_shader_msg.empty()) {
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 440 * s);
+        ImGui::TextDisabled("%s", g_settings_shader_msg.c_str());
+        ImGui::PopTextWrapPos();
+    } else if (!g_settings_shader_confirm) {
+        ImGui::TextDisabled(g_settings_shader_count
+                                ? "%d shader files saved for this game."
+                                : "No shader files recorded for this game yet "
+                                  "(recording started with this version).",
+                            g_settings_shader_count);
+        if (ImGui::Button("Clear this game's shader cache...")) {
+            g_settings_shader_confirm = true;
+        }
+        ImGui::SetItemTooltip("If the game hangs or draws wrong after a crash, "
+                              "a damaged cached shader may be the cause");
+    } else {
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 440 * s);
+        ImGui::TextWrapped(
+            g_settings_shader_count
+                ? "Delete this game's saved shaders and the Vulkan pipeline "
+                  "cache (shared by all games)? They're rebuilt as you play, "
+                  "with some stutter the first time."
+                : "No shader files are recorded for this game, so only the "
+                  "Vulkan pipeline cache (shared by all games) is cleared. To "
+                  "be sure, use \"Clear all shader caches\" in the "
+                  "dashboard's Settings tab.");
+        ImGui::PopTextWrapPos();
+        if (ImGui::Button("Clear")) {
+            ShaderCacheClearFor(e->title_id, &g_settings_shader_msg);
+            g_settings_shader_confirm = false;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Keep")) {
+            g_settings_shader_confirm = false;
+        }
+    }
     ImGui::Separator();
     if (ImGui::Button("Save", ImVec2(120 * s, 0))) {
         g_overrides[e->title_id] = g_settings_edit;
@@ -7494,6 +7550,33 @@ void DrawDashSettingsTab()
         ImGui::Dummy(ImVec2(0, 8 * s));
         ImGui::Checkbox("Performance overlay (F9)",
                         &g_config.display.ui.show_perf_overlay);
+        {
+            static int clear_step = 0; // 0 button, 1 confirm, 2 done
+            static std::string clear_msg;
+            if (clear_step == 0) {
+                if (DashButton(ICON_FA_TRASH "  Clear all shader caches...",
+                               T().glass, T().white, ImVec2(0, 32 * s))) {
+                    clear_step = 1;
+                }
+                ImGui::SetItemTooltip("For every game. Single games: right-click "
+                                      "> Clear shader cache");
+            } else if (clear_step == 1) {
+                ImGui::TextWrapped("Delete every saved shader for every game? "
+                                   "They're rebuilt as you play, with some "
+                                   "stutter the first time.");
+                if (DashButton("Clear all", T().primary, T().on_primary,
+                               ImVec2(0, 30 * s))) {
+                    ShaderCacheClearAll(&clear_msg);
+                    clear_step = 2;
+                }
+                ImGui::SameLine();
+                if (DashButton("Keep", T().glass, T().white, ImVec2(0, 30 * s))) {
+                    clear_step = 0;
+                }
+            } else {
+                ImGui::TextWrapped("%s", clear_msg.c_str());
+            }
+        }
         if (DashButton(ICON_FA_GAUGE_HIGH "  Performance capture...", T().glass,
                        T().white, ImVec2(0, 32 * s))) {
             PerfCaptureOpenWindow();
@@ -7972,6 +8055,20 @@ static std::vector<RecentGame> GetRecentGamesUncached(int max_count)
 void GameLibraryWindow::Update()
 {
     StorePump();
+    {
+        // Note shader cache files against the game in the drive
+        // (every 2 s: the library may still be loading at first)
+        static uint64_t last_check = 0, last_flush = 0;
+        if (SDL_GetTicks() - last_check > 2000) {
+            last_check = SDL_GetTicks();
+            LibraryEntry *cur = g_loaded ? CurrentGame() : nullptr;
+            ShaderCacheSetTitle(cur ? cur->title_id : 0);
+        }
+        if (SDL_GetTicks() - last_flush > 10000) {
+            last_flush = SDL_GetTicks();
+            ShaderCacheFlush();
+        }
+    }
     if (g_compat_downloaded.exchange(false)) {
         LoadCompatCache();
     }
@@ -8806,6 +8903,28 @@ void GameLibraryWindow::Draw()
     ImGui::PopStyleVar();
 }
 
+std::string GameLibraryTitleName(uint32_t title_id)
+{
+    // Your library first (your own names and regions), then xemu's list
+    for (auto &e : g_entries) {
+        if (e.valid && e.title_id == title_id) {
+            return e.DisplayName();
+        }
+    }
+    auto it = g_compat_names.find(title_id);
+    if (it == g_compat_names.end()) {
+        it = g_compat_names.find(CompatListedId(title_id));
+    }
+    if (it != g_compat_names.end()) {
+        return it->second;
+    }
+    switch (title_id) {
+    case 0xFFFE0000: return "Xbox Dashboard";
+    case 0xFFFF0051: return "Xbox Dashboard (system)";
+    default: return "";
+    }
+}
+
 std::string GameLibraryCurrentTitle(void)
 {
     if (LibraryEntry *e = CurrentGame()) {
@@ -8868,6 +8987,7 @@ void GameLibraryBeforeSettingsSave(void)
 // Runs at exit (registered after the settings-save handler, so it runs first)
 static void GameLibraryShutdown(void)
 {
+    ShaderCacheFlush();
     g_scan_cancel = true;
     if (g_scan_thread.joinable()) {
         g_scan_thread.join();

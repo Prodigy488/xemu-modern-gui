@@ -234,6 +234,38 @@ bool ParseCompatJson(const std::string &text,
     return !out->empty();
 }
 
+bool ParseCompatNames(const std::string &text,
+                      std::map<uint32_t, std::string> *out)
+{
+    out->clear();
+    nlohmann::json j = nlohmann::json::parse(text, nullptr, false);
+    if (!j.is_array()) {
+        return false;
+    }
+    for (auto &t : j) {
+        if (!t.is_object() || !t.contains("url") || !t["url"].is_string() ||
+            !t.contains("name") || !t["name"].is_string()) {
+            continue;
+        }
+        std::string url = t["url"].get<std::string>();
+        size_t p = url.find("/titles/");
+        if (p == std::string::npos) {
+            continue;
+        }
+        std::string hex = url.substr(p + 8, 8);
+        char *end = nullptr;
+        unsigned long id = strtoul(hex.c_str(), &end, 16);
+        if (hex.size() != 8 || !end || *end) {
+            continue;
+        }
+        std::string name = t["name"].get<std::string>();
+        if (!name.empty()) {
+            (*out)[(uint32_t)id] = name;
+        }
+    }
+    return !out->empty();
+}
+
 uint32_t CompatListedId(uint32_t title_id)
 {
     for (auto &a : kAliases) {

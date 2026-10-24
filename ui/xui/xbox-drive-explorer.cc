@@ -15,6 +15,7 @@
 #include <ctime>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 
 #include "common.hh"
@@ -719,6 +720,28 @@ void DrawToolbar()
     ImGui::EndDisabled();
 }
 
+// "4D530003" -> "Project Gotham Racing" for folders named by title ID
+std::string TitleFolderName(const XboxFileInfo &fi)
+{
+    if (!fi.dir || fi.name.size() != 8) {
+        return "";
+    }
+    for (char c : fi.name) {
+        if (!isxdigit((unsigned char)c)) {
+            return "";
+        }
+    }
+    static std::map<std::string, std::string> cache;
+    auto it = cache.find(fi.name);
+    if (it != cache.end()) {
+        return it->second;
+    }
+    std::string name =
+        GameLibraryTitleName((uint32_t)strtoul(fi.name.c_str(), nullptr, 16));
+    cache[fi.name] = name;
+    return name;
+}
+
 void DrawList(float height)
 {
     const float s = g_viewport_mgr.m_scale;
@@ -756,6 +779,12 @@ void DrawList(float height)
         bool clicked = ImGui::Selectable(label.c_str(), g_sel == i,
                                          ImGuiSelectableFlags_SpanAllColumns |
                                              ImGuiSelectableFlags_AllowDoubleClick);
+        // Save and cache folders are named by title ID: show the game
+        std::string game = TitleFolderName(fi);
+        if (!game.empty()) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("  %s", game.c_str());
+        }
         if (clicked) {
             g_sel = i;
             bool mouse = ImGui::IsMouseReleased(ImGuiMouseButton_Left) ||

@@ -46,6 +46,14 @@ shared.
 
 ## What's added
 
+- **New in v1.6: Performance Capture.** Find out why a game slows down or
+  glitches: press Shift+F9 while playing, Shift+F12 when a glitch shows,
+  Shift+F9 to stop. The report graphs every frame and says what was
+  different in the slow frames (new shaders, images read back from the GPU,
+  GPU waits, occlusion queries, uploads, or nothing graphical, pointing at
+  the emulated CPU) and what was unusual around each glitch. Saved as
+  `report.txt`, `frames.csv` and a `trace.json` for
+  [Perfetto](https://ui.perfetto.dev).
 - **New in v1.5: Homebrew tab.**
   - **Play** the homebrew on your Xbox hard disk image (`E:\Games`,
     `E:\Apps`, `E:\Emulators`) straight from the dashboard, no homebrew
@@ -123,7 +131,7 @@ shared.
   - Higher-priority emulation threads.
   - A larger CPU code cache.
   - Windows power throttling turned off.
-  - A performance overlay (F9).
+  - A performance overlay (F9) and Performance Capture (Shift+F9).
   - Fixes for some Vulkan and audio crashes.
 
 Every change is a separate commit on the `enhanced` branch, based on the

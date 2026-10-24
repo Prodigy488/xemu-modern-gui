@@ -49,6 +49,8 @@
 #include "debug.hh"
 #include "welcome.hh"
 #include "menubar.hh"
+#include "../xemu-net.h"
+#include "perf-voice.hh"
 #include "compat.hh"
 #include "xbox-drive-explorer.hh"
 #include "perf-capture.hh"
@@ -166,6 +168,7 @@ void xemu_hud_init(SDL_Window* window, void* sdl_gl_context)
 
 void xemu_hud_cleanup(void)
 {
+    PerfVoiceShutdown();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
@@ -212,6 +215,7 @@ void xemu_hud_update(void)
     game_library_window.Update();
     XboxExplorerUpdate();
     PerfCaptureUpdate();
+    xemu_net_sync_dns();
     static bool library_startup_checked = false;
     if (!library_startup_checked) {
         library_startup_checked = true;

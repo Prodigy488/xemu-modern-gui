@@ -943,7 +943,7 @@ std::string PerfFramesCsv(const PerfCapture &cap)
     size_t mi = 0;
     for (size_t i = 0; i < cap.frames.size(); i++) {
         const PerfFrame &f = cap.frames[i];
-        o += Fmt("%zu,%.1f,%d", i, f.t_ms, f.work_ms);
+        o += Fmt("%d,%.1f,%d", (int)i, f.t_ms, f.work_ms);
         for (size_t c = 0; c < cap.counter_names.size(); c++) {
             o += Fmt(",%d", c < f.counters.size() ? f.counters[c] : 0);
         }

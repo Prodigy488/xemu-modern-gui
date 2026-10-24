@@ -23,7 +23,9 @@
 #include "game-library.hh"
 #include "game-shortcut.hh"
 #include "IconsFontAwesome6.h"
+#include "misc.hh"
 #include "perf-analysis.hh"
+#include "perf-voice.hh"
 #include "viewport-manager.hh"
 #include "../xemu-notifications.h"
 #include "../xemu-settings.h"
@@ -39,6 +41,7 @@ struct State {
     bool window = false;
     bool recording = false;
     int length = 1; // index into kLengths
+    bool until_stopped = false; // started by voice: records until told to stop
     uint64_t start_ticks = 0, last_sample = 0;
     unsigned int last_frame_count = 0;
     time_t start_time = 0;
@@ -547,11 +550,31 @@ void PollFrames()
 
 void PerfCaptureUpdate(void)
 {
+    PerfVoiceSetEnabled(g_config.perf.capture_voice);
+    switch (PerfVoicePoll()) {
+    case PerfVoiceCommand::Start:
+        if (!g.recording) {
+            Start();
+            g.until_stopped = g.recording;
+        }
+        break;
+    case PerfVoiceCommand::Stop:
+        if (g.recording) {
+            Stop();
+        }
+        break;
+    case PerfVoiceCommand::Mark:
+        PerfCaptureMarkGlitch();
+        break;
+    default:
+        break;
+    }
     if (!g.recording) {
+        g.until_stopped = false;
         return;
     }
     PollFrames();
-    int len = kLengths[g.length];
+    int len = g.until_stopped ? 0 : kLengths[g.length];
     if ((len && NowMs() >= len * 1000.0) || g.cap.frames.size() > 200000) {
         Stop();
     }
@@ -578,6 +601,18 @@ void PerfCaptureDraw(void)
                             blink ? IM_COL32(255, 60, 60, 255) : IM_COL32(120, 30, 30, 255));
         dl->AddText(p, IM_COL32_WHITE, t);
     }
+    if (PerfVoiceListening()) {
+        // Small and dim, top right: the microphone is open
+        ImDrawList *dl = ImGui::GetForegroundDrawList();
+        ImGuiViewport *vp = ImGui::GetMainViewport();
+        const char *mic = ICON_FA_MICROPHONE;
+        ImVec2 ms = ImGui::CalcTextSize(mic);
+        ImVec2 p(vp->WorkPos.x + vp->WorkSize.x - ms.x - 14 * s,
+                 vp->WorkPos.y + (g.recording ? 30 * s + ms.y + 14 * s : 10 * s));
+        dl->AddText(p, g.recording ? IM_COL32(255, 255, 255, 200)
+                                   : IM_COL32(255, 255, 255, 90),
+                    mic);
+    }
     if (!g.window) {
         return;
     }
@@ -589,6 +624,34 @@ void PerfCaptureDraw(void)
     ImGui::TextWrapped(tr("Record a slow or glitchy part of a game to see what the "
                        "emulated graphics chip was doing. Start recording, play "
                        "the part, and press Shift+F12 the moment a glitch shows."));
+    ImGui::Spacing();
+    ImGui::Checkbox(tr("Voice commands (experimental)"),
+                    &g_config.perf.capture_voice);
+    ImGui::SetItemTooltip("%s", tr("Start, stop and mark glitches by voice, with "
+                                   "Windows speech recognition on your PC (nothing "
+                                   "is sent anywhere). Off by default; the "
+                                   "microphone is only listened to while this is "
+                                   "on, shown by a small microphone icon.\n\n"
+                                   "Say:\n"
+                                   "  \"Performance capture start\"  starts "
+                                   "recording until you say stop\n"
+                                   "  \"Performance capture stop\"  stops and "
+                                   "shows the report\n"
+                                   "  \"Performance capture mark\"  marks a "
+                                   "glitch, like Shift+F12\n\n"
+                                   "The commands are in English."));
+    if (g_config.perf.capture_voice) {
+        bool ok = true;
+        std::string st = PerfVoiceStatus(&ok);
+        if (!st.empty()) {
+            ImGui::SameLine();
+            if (ok) {
+                ImGui::TextDisabled(ICON_FA_MICROPHONE " %s", st.c_str());
+            } else {
+                ImGui::TextColored(ImVec4(0.95f, 0.6f, 0.3f, 1), "%s", st.c_str());
+            }
+        }
+    }
     ImGui::Spacing();
     if (g.recording) {
         if (ImGui::Button(tr(ICON_FA_STOP " Stop (Shift+F9)"))) {

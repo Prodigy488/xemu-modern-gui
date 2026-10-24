@@ -507,7 +507,7 @@ bool ParseJmp(const std::string &text, JmpPatch &out, std::string &error)
             continue;
         }
         char where[64];
-        snprintf(where, sizeof(where), "line %zu: ", i + 1);
+        snprintf(where, sizeof(where), "line %d: ", (int)(i + 1));
         if (t[0] == '#') {
             if (have_find) {
                 error = std::string(where) + "find value without a replacement";
@@ -978,9 +978,9 @@ bool BuildPatchedOverlay(const std::string &image_path,
     if (patched.size() > room) {
         char buf[200];
         snprintf(buf, sizeof(buf),
-                 "the patched default.xbe is %zu bytes, but the disc only "
+                 "the patched default.xbe is %llu bytes, but the disc only "
                  "has room for %llu bytes",
-                 patched.size(), (unsigned long long)room);
+                 (unsigned long long)patched.size(), (unsigned long long)room);
         error = buf;
         return false;
     }

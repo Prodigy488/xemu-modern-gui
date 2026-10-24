@@ -12,3 +12,7 @@
 #pragma once
 
 void DrawPerformanceOverlay(void);
+
+// "Preparing shaders" in the lower left while the game is building shaders
+// or pipelines; fades out when they're done
+void DrawShaderIndicator(void);

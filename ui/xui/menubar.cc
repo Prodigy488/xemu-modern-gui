@@ -326,6 +326,8 @@ void ShowMainMenu()
             }
             ImGui::MenuItem("Performance Overlay", "F9",
                             &g_config.display.ui.show_perf_overlay);
+            ImGui::MenuItem("Shader Indicator", NULL,
+                            &g_config.display.ui.show_shader_indicator);
 
             ImGui::EndMenu();
         }

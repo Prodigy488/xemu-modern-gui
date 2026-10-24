@@ -303,6 +303,9 @@ display:
     show_perf_overlay:
       type: bool
       default: false
+    show_shader_indicator:
+      type: bool
+      default: true
     hide_cursor:
       type: bool
       default: true

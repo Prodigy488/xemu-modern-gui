@@ -6,6 +6,8 @@
 // the Free Software Foundation; either version 2 of the License, or
 // (at your option) any later version.
 //
+#include <cmath>
+
 #include "common.hh"
 #include "perf-overlay.hh"
 #include "viewport-manager.hh"
@@ -77,4 +79,73 @@ void DrawPerformanceOverlay(void)
     }
     ImGui::End();
     ImGui::PopStyleVar(2);
+}
+
+void DrawShaderIndicator(void)
+{
+    // New shaders and pipelines per frame, from the nv2a profiler
+    static unsigned int last_count = 0;
+    static double last_activity = -100;
+    static double recent_t[64];
+    static int recent_n[64], recent_head = 0;
+    unsigned int count = g_nv2a_stats.frame_count;
+    unsigned int n = count - last_count;
+    if (n > NV2A_PROF_NUM_FRAMES - 1) {
+        n = NV2A_PROF_NUM_FRAMES - 1;
+    }
+    last_count = count;
+    unsigned int ptr = g_nv2a_stats.frame_ptr;
+    int built = 0;
+    for (unsigned int k = 0; k < n; k++) {
+        const auto &f =
+            g_nv2a_stats.frame_history[(ptr + NV2A_PROF_NUM_FRAMES - n + k) %
+                                       NV2A_PROF_NUM_FRAMES];
+        built += f.counters[NV2A_PROF_SHADER_GEN] + f.counters[NV2A_PROF_PIPELINE_GEN];
+    }
+    double now = ImGui::GetTime();
+    if (built > 0) {
+        last_activity = now;
+        recent_t[recent_head] = now;
+        recent_n[recent_head] = built;
+        recent_head = (recent_head + 1) % 64;
+    }
+    if (!g_config.display.ui.show_shader_indicator || !runstate_is_running()) {
+        return;
+    }
+    // Visible while active, then gone after a short fade
+    const double hold = 1.2, fade = 0.6;
+    double since = now - last_activity;
+    if (since > hold + fade) {
+        return;
+    }
+    float alpha = since <= hold ? 1.0f : (float)(1.0 - (since - hold) / fade);
+    int last_second = 0;
+    for (int i = 0; i < 64; i++) {
+        if (now - recent_t[i] <= 1.0) {
+            last_second += recent_n[i];
+        }
+    }
+
+    const float s = g_viewport_mgr.m_scale;
+    ImGuiViewport *vp = ImGui::GetMainViewport();
+    ImDrawList *dl = ImGui::GetForegroundDrawList(vp);
+    char text[64];
+    if (last_second > 0) {
+        snprintf(text, sizeof(text), "Preparing shaders  %d", last_second);
+    } else {
+        snprintf(text, sizeof(text), "Preparing shaders");
+    }
+    ImVec2 ts = ImGui::CalcTextSize(text);
+    float r = ts.y * 0.38f;
+    ImVec2 p(vp->WorkPos.x + 16 * s, vp->WorkPos.y + vp->WorkSize.y - ts.y - 14 * s);
+    ImVec2 a(p.x - 8 * s, p.y - 5 * s);
+    ImVec2 b(p.x + r * 2 + 8 * s + ts.x + 8 * s, p.y + ts.y + 5 * s);
+    dl->AddRectFilled(a, b, IM_COL32(0, 0, 0, (int)(120 * alpha)), 6 * s);
+    // Spinner: a short arc going round while active
+    ImVec2 c(p.x + r, p.y + ts.y / 2);
+    float start = (float)std::fmod(now * 6.0, 6.283185307179586);
+    dl->PathArcTo(c, r, start, start + 4.2f, 16);
+    dl->PathStroke(IM_COL32(255, 255, 255, (int)(200 * alpha)), 0, 2.0f * s);
+    dl->AddText(ImVec2(p.x + r * 2 + 8 * s, p.y),
+                IM_COL32(255, 255, 255, (int)(215 * alpha)), text);
 }

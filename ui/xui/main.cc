@@ -338,6 +338,7 @@ void xemu_hud_update(void)
     if (!first_boot_window.is_open) notification_manager.Draw();
     if (!first_boot_window.is_open && !game_library_window.is_open) {
         DrawPerformanceOverlay();
+        DrawShaderIndicator();
     }
     g_snapshot_mgr.Draw();
 

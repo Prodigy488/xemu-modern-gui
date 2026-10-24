@@ -7550,6 +7550,10 @@ void DrawDashSettingsTab()
         ImGui::Dummy(ImVec2(0, 8 * s));
         ImGui::Checkbox("Performance overlay (F9)",
                         &g_config.display.ui.show_perf_overlay);
+        ImGui::Checkbox("\"Preparing shaders\" indicator",
+                        &g_config.display.ui.show_shader_indicator);
+        ImGui::SetItemTooltip("Shown in the lower left while a game builds "
+                              "shaders, gone when it's done");
         {
             static int clear_step = 0; // 0 button, 1 confirm, 2 done
             static std::string clear_msg;

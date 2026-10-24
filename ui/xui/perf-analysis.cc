@@ -211,12 +211,15 @@ PerfReport AnalyzePerf(const PerfCapture &cap)
         }
         return best;
     };
+    std::string cur_counter; // set by slow_how() for the add() it's part of
     auto add = [&](int sev, const std::string &t, const std::string &d,
                    const std::string &how = "") {
-        r.findings.push_back({ sev, t, d, how });
+        r.findings.push_back({ sev, t, d, how, cur_counter });
+        cur_counter.clear();
     };
     // How a slow-frame comparison was made
     auto slow_how = [&](const PerfCounterDiff *d) {
+        cur_counter = d->name;
         return Fmt("Took the %d frames that needed more than %d ms to render "
                    "(1.5 times the typical %d ms, and never under 17 ms) and "
                    "compared their average counters with the other %d frames. "
@@ -307,6 +310,7 @@ PerfReport AnalyzePerf(const PerfCapture &cap)
     // builds up over many ordinary frames (a heavier scene) never makes
     // single frames "slow", but shows here.
     bool trend_found = false;
+    std::string trend_counter;
     std::set<std::string> rising; // counters that rose with the slowdown
     {
         struct Win {
@@ -439,6 +443,7 @@ PerfReport AnalyzePerf(const PerfCapture &cap)
                 }
                 if (best) {
                     trend_found = true;
+                    trend_counter = cap.counter_names[best->c];
                     const std::string &name = cap.counter_names[best->c];
                     std::string also;
                     for (auto &cd : cands) {
@@ -616,6 +621,169 @@ PerfReport AnalyzePerf(const PerfCapture &cap)
             Fmt("Render time of every frame compared with %d ms (1.5 times the "
                 "typical %d ms, and never under 17 ms).",
                 r.slow_threshold, r.median_work));
+    }
+    // Counters that only come along with the real cause. Comparing one
+    // counter at a time can't tell them apart (PGR: frames with extra image
+    // readbacks were also the frames drawing twice as much), so fit render
+    // time against the main suspect and each other counter together and see
+    // how much of the slow frames' extra time each one still accounts for.
+    {
+        auto index_of = [&](const std::string &n) {
+            for (size_t c = 0; c < nc; c++) {
+                if (cap.counter_names[c] == n) {
+                    return (int)c;
+                }
+            }
+            return -1;
+        };
+        std::vector<double> y;
+        for (auto &f : cap.frames) {
+            y.push_back(f.work_ms);
+        }
+        auto column = [&](int c) {
+            std::vector<double> v;
+            for (auto &f : cap.frames) {
+                v.push_back(c >= 0 && c < (int)f.counters.size() ? f.counters[c] : 0);
+            }
+            return v;
+        };
+        // Least squares y = a + b*x1 (+ c*x2)
+        auto fit = [&](const std::vector<double> &x1, const std::vector<double> *x2,
+                       double *b, double *c) {
+            size_t n = y.size();
+            double m[3][3] = {}, v[3] = {};
+            for (size_t i = 0; i < n; i++) {
+                double row[3] = { 1, x1[i], x2 ? (*x2)[i] : 0 };
+                for (int p = 0; p < 3; p++) {
+                    for (int q = 0; q < 3; q++) {
+                        m[p][q] += row[p] * row[q];
+                    }
+                    v[p] += row[p] * y[i];
+                }
+            }
+            int k = x2 ? 3 : 2;
+            for (int i = 0; i < k; i++) {
+                if (std::fabs(m[i][i]) < 1e-12) {
+                    return false;
+                }
+                for (int j = i + 1; j < k; j++) {
+                    double f = m[j][i] / m[i][i];
+                    for (int q = 0; q < k; q++) {
+                        m[j][q] -= f * m[i][q];
+                    }
+                    v[j] -= f * v[i];
+                }
+            }
+            double x[3] = {};
+            for (int i = k - 1; i >= 0; i--) {
+                double t = v[i];
+                for (int q = i + 1; q < k; q++) {
+                    t -= m[i][q] * x[q];
+                }
+                if (std::fabs(m[i][i]) < 1e-12) {
+                    return false;
+                }
+                x[i] = t / m[i][i];
+            }
+            *b = x[1];
+            if (c) {
+                *c = x[2];
+            }
+            return true;
+        };
+        double slow_work = 0, normal_work = 0;
+        int ns2 = 0, nn2 = 0;
+        for (auto &f : cap.frames) {
+            if (f.work_ms > r.slow_threshold) {
+                slow_work += f.work_ms;
+                ns2++;
+            } else {
+                normal_work += f.work_ms;
+                nn2++;
+            }
+        }
+        double excess = (ns2 && nn2) ? slow_work / ns2 - normal_work / nn2 : 0;
+        auto avg_diff = [&](const std::string &n) {
+            for (auto &d : r.slow_diffs) {
+                if (d.name == n) {
+                    return d.slow_avg - d.normal_avg;
+                }
+            }
+            return 0.0;
+        };
+        // The main suspect: the trend's counter, or else the slow-frame
+        // counter that alone accounts for most of the extra time
+        std::string primary = trend_counter;
+        if (primary.empty() && excess > 0) {
+            double best_share = 0;
+            for (auto &d : r.slow_diffs) {
+                double b = 0;
+                if (fit(column(index_of(d.name)), nullptr, &b, nullptr)) {
+                    double share = b * (d.slow_avg - d.normal_avg) / excess;
+                    if (share > best_share) {
+                        best_share = share;
+                        primary = d.name;
+                    }
+                }
+            }
+        }
+        int pi = index_of(primary);
+        if (pi >= 0 && excess > 0) {
+            std::vector<double> xp = column(pi);
+            for (auto &f : r.findings) {
+                if (f.counter.empty() || f.counter == primary || f.severity == 0) {
+                    continue;
+                }
+                if (rising.count(f.counter)) {
+                    f.severity = 0;
+                    f.title = "Part of the same extra drawing: " + f.title;
+                    f.how += Fmt(" It also rose and fell with %s over the "
+                                 "whole recording (it was one of the counters "
+                                 "moving with the frame rate), so it measures "
+                                 "the same extra work rather than a separate "
+                                 "cause.",
+                                 primary.c_str());
+                    continue;
+                }
+                int ci = index_of(f.counter);
+                std::vector<double> xc = column(ci);
+                double bp = 0, bc = 0;
+                if (!fit(xp, &xc, &bp, &bc)) {
+                    continue;
+                }
+                double dc = avg_diff(f.counter);
+                double share = bc * dc / excess;
+                auto cost = [](double ms) {
+                    if (ms <= 0) {
+                        return Fmt("nothing measurable (%.3f ms)", ms);
+                    }
+                    return ms < 0.1 ? Fmt("%.1f microseconds", ms * 1000)
+                                    : Fmt("%.2f ms", ms);
+                };
+                std::string detail = Fmt(
+                    " Then fitted the render time of all %d frames against %s "
+                    "and %s together: each %s adds %s and each %s %s. The slow "
+                    "frames' %.1f extra %s per frame account for %s of their "
+                    "%.1f ms extra render time (%.0f%%).",
+                    r.frames, primary.c_str(), f.counter.c_str(), f.counter.c_str(),
+                    cost(bc).c_str(), primary.c_str(), cost(bp).c_str(), dc,
+                    f.counter.c_str(),
+                    share > 0 ? Fmt("%.1f ms", bc * dc).c_str() : "none",
+                    excess, std::max(0.0, 100 * share));
+                if (share < 0.25) {
+                    f.severity = 0;
+                    f.title = "Comes with the slow frames but doesn't explain "
+                              "them: " + f.title;
+                    f.how += detail + Fmt(" Under a quarter, so it happens in "
+                                          "the same frames as the extra %s "
+                                          "rather than causing the slowdown.",
+                                          primary.c_str());
+                } else {
+                    f.how += detail + " A real share, so it adds to the slowdown "
+                                      "on its own.";
+                }
+            }
+        }
     }
     std::stable_sort(r.findings.begin(), r.findings.end(),
                      [](const PerfFinding &a, const PerfFinding &b) {

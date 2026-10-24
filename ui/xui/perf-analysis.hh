@@ -50,6 +50,7 @@ struct PerfFinding {
     std::string title;
     std::string detail;
     std::string how; // how it was worked out, with the numbers
+    std::string counter; // the counter it's about, if one
 };
 
 struct PerfReport {

@@ -32,9 +32,9 @@ finding out why a game is slow, and quality-of-life features.
 |---|---|---|---|
 | ![Insignia](docs/screenshots/insignia.jpg) | ![Blades](docs/screenshots/blades.jpg) | ![Metro](docs/screenshots/metro.jpg) | ![Classic](docs/screenshots/classic.jpg) |
 
-| Performance Capture | Settings |
-|---|---|
-| ![Performance Capture](docs/screenshots/perf-capture.jpg) | ![Settings](docs/screenshots/settings.jpg) |
+| Performance Capture | Settings | Setup check |
+|---|---|---|
+| ![Performance Capture](docs/screenshots/perf-capture.jpg) | ![Settings](docs/screenshots/settings.jpg) | ![Setup check](docs/screenshots/setup.jpg) |
 
 <sub>Screenshots use original placeholder cover art (not the real box art), example compatibility ratings and invented example homebrew. The Performance Capture screenshot shows a real recording of Project Gotham Racing.</sub>
 
@@ -50,6 +50,16 @@ shared.
 
 ## What's added
 
+- **New in v1.7: setup and everyday polish.**
+  - **Setup check:** Home shows what's missing (MCPX boot ROM, BIOS, hard
+    disk image, games folder) with a button to fix each; also in Settings
+    and the welcome window.
+  - **Per-game renderer and dynamic resolution:** set one game to OpenGL
+    and the rest stay on Vulkan.
+  - **Library filters** by compatibility rating and played / never played.
+  - **New homebrew on Home**, one click to play.
+  - **Performance Capture pictures:** save a summary image for posting.
+  - Updater fixes, and a controller pass over the newer screens.
 - **New in v1.6: performance tools.**
   - **Performance Capture:** find out why a game slows down or glitches.
     Press Shift+F9 while playing, Shift+F12 when a glitch shows, Shift+F9

@@ -15,6 +15,7 @@
 // (at your option) any later version.
 //
 #pragma once
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -34,6 +35,27 @@ bool XboxExplorerBusy(void);
 bool XboxExplorerInstallFolder(const std::string &host_dir, char vol,
                                const std::string &parent, const std::string &name,
                                const std::string &title, std::string *err);
+// Make a bootable disc image (XISO) of the folder <vol>:<dir> at iso_path,
+// so homebrew on the hard drive can be started from the DVD drive. Only
+// reads the drive; the Xbox keeps running. *ready is set when an up-to-date
+// image is already there; otherwise a job starts (see XboxExplorerBusy).
+bool XboxExplorerMakeXiso(char vol, const std::string &dir,
+                          const std::string &iso_path, bool *ready,
+                          std::string *err);
+
+// Homebrew installed in the usual places: <drive>:\Games, \Apps and
+// \Emulators (one folder each, with a default.xbe), on E: and F:
+struct XboxHomebrewApp {
+    char vol = 'E';
+    std::string dir;     // "/Games/2H4Ux"
+    std::string folder;  // "2H4Ux"
+    std::string section; // "Games"
+    std::string title;   // from the XBE, or the folder name
+    uint32_t title_id = 0;
+    uint64_t xbe_size = 0;
+};
+bool XboxExplorerFindHomebrew(std::vector<XboxHomebrewApp> *out, std::string *err);
+
 // Last status line ("Copying...", "... - done.", an error), and progress 0-1
 std::string XboxExplorerStatus(bool *is_error);
 float XboxExplorerProgress(void);

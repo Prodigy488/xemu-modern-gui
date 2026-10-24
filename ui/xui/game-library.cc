@@ -4540,7 +4540,7 @@ void UpdateDiscordPresence()
 enum DashTab { kTabHome, kTabLibrary, kTabInsignia, kTabMedia, kTabDrive,
                kTabStore, kTabPatches, kTabSettings, kTabCount };
 const char *const kTabNames[kTabCount] = { "Home",  "Library", "Insignia",
-                                           "Media", "Drive",   "Store",
+                                           "Media", "Drive",   "Homebrew",
                                            "Patches", "Settings" };
 int g_dash_tab = kTabHome;
 
@@ -6084,6 +6084,7 @@ struct StoreState {
     std::shared_ptr<StoreTransfer> xfer;
     std::string inst_app, inst_name, inst_msg;
     std::string inst_dir; // "Games", "Apps"... on E:
+    std::string inst_id;  // store app id
     fs::path staging;
     bool confirm = false;
 } g_store;
@@ -6282,6 +6283,7 @@ void StoreInstall(const StoreApp &app, const StoreVersion &v)
     }
     g_store.inst_app = app.name;
     g_store.inst_dir = StoreInstallFolder(app.category);
+    g_store.inst_id = app.id;
     g_store.inst_name =
         StoreSafeFolderName(v.folder_name.empty() ? app.name : v.folder_name);
     g_store.inst_msg.clear();
@@ -6378,9 +6380,14 @@ void StoreInstall(const StoreApp &app, const StoreVersion &v)
     });
 }
 
+void HomebrewPump();
+void HomebrewMarkDirty();
+void StoreRememberInstall(const std::string &dir, const std::string &app_id);
+
 // Every frame (also while the store isn't shown)
 void StorePump()
 {
+    HomebrewPump();
     std::vector<std::function<void()>> fns;
     {
         std::lock_guard<std::mutex> lock(g_store_main_mutex);
@@ -6393,6 +6400,11 @@ void StorePump()
         bool error = false;
         std::string status = XboxExplorerStatus(&error);
         g_store.phase = error ? StoreState::Failed : StoreState::Done;
+        if (!error) {
+            StoreRememberInstall("/" + g_store.inst_dir + "/" + g_store.inst_name,
+                                 g_store.inst_id);
+            HomebrewMarkDirty(); // list it under Installed
+        }
         g_store.inst_msg =
             error ? status
                   : "Installed to E:\\" + g_store.inst_dir + "\\" +
@@ -6694,15 +6706,250 @@ void DrawStoreDetails(const StoreApp &app, float w)
     }
 }
 
-void DrawStoreTab()
+// --- My homebrew: what's installed on the Xbox drive, started from a disc
+// image made of its folder (xemu boots discs, not files on the hard drive)
+
+struct HomebrewState {
+    bool loaded = false;
+    std::vector<XboxHomebrewApp> apps;
+    std::string err;
+    int view = -1; // 0 installed, 1 store; -1 until the first list
+    bool preparing = false;
+    std::string iso, title, msg;
+    bool msg_err = false;
+} g_hb;
+
+fs::path StoreInstalledPath()
+{
+    return StoreCacheDir() / "installed.json";
+}
+
+// Store app id by install location ("E:/Games/2H4Ux"), for covers
+std::map<std::string, std::string> &StoreInstalled()
+{
+    static std::map<std::string, std::string> m;
+    static bool loaded = false;
+    if (!loaded) {
+        loaded = true;
+        std::ifstream f(StoreInstalledPath());
+        json j = json::parse(f, nullptr, false);
+        if (j.is_object()) {
+            for (auto &kv : j.items()) {
+                if (kv.value().is_string()) {
+                    m[kv.key()] = kv.value().get<std::string>();
+                }
+            }
+        }
+    }
+    return m;
+}
+
+std::string HomebrewKey(char vol, const std::string &dir)
+{
+    std::string k = std::string(1, vol) + ":" + dir;
+    std::transform(k.begin(), k.end(), k.begin(), ::tolower);
+    return k;
+}
+
+void StoreRememberInstall(const std::string &dir, const std::string &app_id)
+{
+    StoreInstalled()[HomebrewKey('E', dir)] = app_id;
+    json j = json::object();
+    for (auto &kv : StoreInstalled()) {
+        j[kv.first] = kv.second;
+    }
+    WriteFileAtomic(StoreInstalledPath(), j.dump(1));
+}
+
+void HomebrewMarkDirty()
+{
+    g_hb.loaded = false;
+}
+
+void HomebrewRefresh()
+{
+    g_hb.loaded = true;
+    g_hb.err.clear();
+    if (!XboxExplorerFindHomebrew(&g_hb.apps, &g_hb.err)) {
+        g_hb.apps.clear();
+    }
+    if (g_hb.view < 0) {
+        g_hb.view = g_hb.apps.empty() ? 1 : 0;
+    }
+}
+
+std::string HomebrewDisplayDir(const XboxHomebrewApp &a)
+{
+    std::string d = std::string(1, a.vol) + ":" + a.dir;
+    std::replace(d.begin(), d.end(), '/', '\\');
+    return d;
+}
+
+void HomebrewPlay(const XboxHomebrewApp &a)
+{
+    if (g_hb.preparing || XboxExplorerBusy()) {
+        return;
+    }
+    std::string name = StoreSafeFolderName(a.title);
+    fs::path iso = IconCacheDir() / "homebrew" /
+                   StoreFileId(std::string(1, a.vol) + a.dir) / (name + ".iso");
+    bool ready = false;
+    std::string err;
+    g_hb.msg.clear();
+    g_hb.title = a.title;
+    g_hb.iso = iso.u8string();
+    if (!XboxExplorerMakeXiso(a.vol, a.dir, g_hb.iso, &ready, &err)) {
+        g_hb.msg = err;
+        g_hb.msg_err = true;
+        return;
+    }
+    if (ready) {
+        game_library_window.Launch(g_hb.iso);
+        return;
+    }
+    g_hb.preparing = true;
+}
+
+// Every frame, from StorePump()
+void HomebrewPump()
+{
+    if (!g_hb.preparing || XboxExplorerBusy()) {
+        return;
+    }
+    g_hb.preparing = false;
+    bool error = false;
+    std::string status = XboxExplorerStatus(&error);
+    std::error_code ec;
+    if (error || !fs::exists(fs::u8path(g_hb.iso), ec)) {
+        g_hb.msg = error ? status : "Cancelled";
+        g_hb.msg_err = error;
+        return;
+    }
+    game_library_window.Launch(g_hb.iso);
+}
+
+bool HomebrewCard(const XboxHomebrewApp &a, float w)
+{
+    const float s = g_viewport_mgr.m_scale;
+    float cover_h = w * 1.4f;
+    float h = cover_h + ImGui::GetFontSize() * 2.6f;
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::PushID((std::string(1, a.vol) + a.dir).c_str());
+    bool pressed = ImGui::InvisibleButton("##hb", ImVec2(w, h), ImGuiButtonFlags_EnableNav);
+    bool hovered = ImGui::IsItemHovered() || ImGui::IsItemFocused();
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s\n%s", a.title.c_str(), HomebrewDisplayDir(a).c_str());
+    }
+    ImGui::PopID();
+    if (!ImGui::IsRectVisible(p, ImVec2(p.x + w, p.y + h))) {
+        return pressed;
+    }
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 cb(p.x + w, p.y + cover_h);
+    float r = 10 * s;
+    auto it = StoreInstalled().find(HomebrewKey(a.vol, a.dir));
+    const StoreImage *img =
+        it != StoreInstalled().end() ? GetStoreImage(it->second, false) : nullptr;
+    if (img && img->tex) {
+        StoreImageFill(dl, img, p, cb, r);
+    } else {
+        StorePlaceholder(dl, a.title, p, cb, r);
+    }
+    if (hovered) {
+        ShapeStroke(dl, p, cb, T().accent, r, 2.5f * s);
+        // Play badge
+        ImVec2 c((p.x + cb.x) / 2, (p.y + cb.y) / 2);
+        float br = w * 0.16f;
+        dl->AddCircleFilled(c, br, IM_COL32(0, 0, 0, 150));
+        ImFont *f = ImGui::GetFont();
+        ImVec2 ts = ImGui::CalcTextSize(ICON_FA_PLAY);
+        dl->AddText(f, f->FontSize, ImVec2(c.x - ts.x / 2 + 2 * s, c.y - ts.y / 2),
+                    IM_COL32_WHITE, ICON_FA_PLAY);
+    }
+    float ty = cb.y + 6 * s;
+    ImGui::PushClipRect(ImVec2(p.x, ty), ImVec2(p.x + w, p.y + h), true);
+    dl->AddText(ImVec2(p.x + 2 * s, ty), T().text, a.title.c_str());
+    std::string sub = a.section + (a.vol != 'E' ? std::string("  -  ") + a.vol + ":" : "");
+    dl->AddText(ImVec2(p.x + 2 * s, ty + ImGui::GetFontSize() * 1.15f), T().dim,
+                sub.c_str());
+    ImGui::PopClipRect();
+    return pressed;
+}
+
+void DrawMyHomebrew()
+{
+    const float s = g_viewport_mgr.m_scale;
+    if (!g_hb.loaded && !XboxExplorerBusy()) {
+        HomebrewRefresh();
+    }
+    if (DashButton(ICON_FA_ROTATE "  Refresh", T().glass, T().white,
+                   ImVec2(0, 32 * s)) &&
+        !XboxExplorerBusy()) {
+        HomebrewRefresh();
+    }
+    ImGui::SameLine(0, 14 * s);
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (32 * s - ImGui::GetFontSize()) / 2);
+    if (g_hb.preparing) {
+        ImGui::ProgressBar(XboxExplorerProgress(), ImVec2(320 * s, 0),
+                           ("Getting " + g_hb.title + " ready...").c_str());
+    } else if (!g_hb.msg.empty()) {
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(g_hb.msg_err ? T().bad
+                                                                       : T().dim),
+                           "%s", g_hb.msg.c_str());
+    } else {
+        ImGui::TextDisabled("Pick one to play. It starts from the DVD drive, so "
+                            "anything it saves to its own folder isn't kept.");
+    }
+    ImGui::Dummy(ImVec2(0, 6 * s));
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    ImVec2 a = ImGui::GetCursorScreenPos();
+    DashCard(ImGui::GetWindowDrawList(), a, ImVec2(a.x + avail.x, a.y + avail.y));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18 * s, 16 * s));
+    ImGui::BeginChild("##myhb", avail,
+                      ImGuiChildFlags_AlwaysUseWindowPadding |
+                          ImGuiChildFlags_NavFlattened);
+    if (!g_hb.err.empty()) {
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(T().warn), "%s",
+                           g_hb.err.c_str());
+    } else if (g_hb.apps.empty()) {
+        ImGui::TextDisabled("No homebrew on the Xbox hard drive yet. Apps in "
+                            "E:\\Games, E:\\Apps or E:\\Emulators show up here.");
+        ImGui::Dummy(ImVec2(0, 8 * s));
+        if (DashButton(ICON_FA_DOWNLOAD "  Get homebrew from the store", T().primary,
+                       T().on_primary, ImVec2(0, 38 * s))) {
+            g_hb.view = 1;
+        }
+    }
+    float inner = ImGui::GetContentRegionAvail().x;
+    float gap = 14 * s;
+    int cols = std::max(1, (int)((inner + gap) / (150 * s + gap)));
+    float card_w = std::floor((inner - gap * (cols - 1)) / cols);
+    for (size_t i = 0; i < g_hb.apps.size(); i++) {
+        if (i % cols) {
+            ImGui::SameLine(0, gap);
+        }
+        XboxHomebrewApp app = g_hb.apps[i]; // Play can refresh the list
+        if (HomebrewCard(app, card_w)) {
+            HomebrewPlay(app);
+        }
+        if (i % cols == (size_t)cols - 1) {
+            ImGui::Dummy(ImVec2(0, 4 * s));
+        }
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+}
+
+void DrawStoreBrowser()
 {
     const float s = g_viewport_mgr.m_scale;
     StoreStart();
-    DashLabel("Homebrew store");
-    DashTitle("Homebrew apps and games from XboxHomebrew.store");
-    ImGui::TextDisabled("Run by Team Resurgent. Installs go to E:\\Games, "
-                        "E:\\Emulators or E:\\Apps on the Xbox hard drive.");
-    ImGui::Dummy(ImVec2(0, 4 * s));
+    ImGui::TextDisabled("XboxHomebrew.store, run by Team Resurgent. Games install "
+                        "to E:\\Games, emulators to E:\\Emulators, the rest to "
+                        "E:\\Apps.");
+    ImGui::Dummy(ImVec2(0, 2 * s));
 
     // Search and categories
     ImGui::SetNextItemWidth(260 * s);
@@ -6814,6 +7061,38 @@ void DrawStoreTab()
         ImGui::EndChild();
         ImGui::PopStyleVar();
         ImGui::PopStyleColor();
+    }
+}
+
+void DrawStoreTab()
+{
+    const float s = g_viewport_mgr.m_scale;
+    if (!g_hb.loaded && !XboxExplorerBusy()) {
+        HomebrewRefresh();
+    }
+    DashLabel("Homebrew");
+    DashTitle("Play homebrew on your Xbox hard drive, or get more");
+    ImGui::Dummy(ImVec2(0, 2 * s));
+    auto seg = [&](int v, const std::string &label) {
+        bool on = std::max(g_hb.view, 0) == v;
+        ImGui::PushStyleColor(ImGuiCol_Button,
+                              on ? ImGui::ColorConvertU32ToFloat4(Alpha(T().accent, 90))
+                                 : T().glass);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 14 * s);
+        if (ImGui::Button(label.c_str(), ImVec2(0, 30 * s))) {
+            g_hb.view = v;
+        }
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+    };
+    seg(0, string_format(ICON_FA_GAMEPAD "  Installed (%d)", (int)g_hb.apps.size()));
+    ImGui::SameLine(0, 8 * s);
+    seg(1, ICON_FA_DOWNLOAD "  Store");
+    ImGui::Dummy(ImVec2(0, 4 * s));
+    if (g_hb.view == 1) {
+        DrawStoreBrowser();
+    } else {
+        DrawMyHomebrew();
     }
 }
 

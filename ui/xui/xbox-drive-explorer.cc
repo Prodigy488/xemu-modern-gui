@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <functional>
@@ -22,6 +23,7 @@
 #include "misc.hh"
 #include "viewport-manager.hh"
 #include "xbox-drive-qemu.hh"
+#include "xiso.hh"
 
 namespace fs = std::filesystem;
 
@@ -147,10 +149,11 @@ void Navigate(char vol, const std::string &path)
 // ---- Jobs: copy in, copy out, delete ---------------------------------------
 
 struct Step {
-    enum Kind { XMkDir, XFile, HMkDir, HFile, XDelFile, XDelDir } kind;
+    enum Kind { XMkDir, XFile, HMkDir, HFile, XDelFile, XDelDir, IsoFile } kind;
     std::string host;  // host path (UTF-8)
     std::string xpath; // path on the Xbox volume
     uint64_t size = 0;
+    uint64_t dest = 0; // IsoFile: byte offset in the disc image
 };
 
 struct Job {
@@ -166,7 +169,29 @@ struct Job {
     std::string err;
     std::vector<uint8_t> buf;
     int files = 0;
+    // Disc image jobs
+    FILE *iso = nullptr;
+    std::string iso_part, iso_final, iso_sig;
 };
+
+FILE *OpenHost(const std::string &path, const char *mode)
+{
+#ifdef _WIN32
+    std::wstring m(mode, mode + strlen(mode));
+    return _wfopen(fs::u8path(path).wstring().c_str(), m.c_str());
+#else
+    return fopen(path.c_str(), mode);
+#endif
+}
+
+bool SeekHost(FILE *f, uint64_t off)
+{
+#ifdef _WIN32
+    return _fseeki64(f, (__int64)off, SEEK_SET) == 0;
+#else
+    return fseeko(f, (off_t)off, SEEK_SET) == 0;
+#endif
+}
 
 std::unique_ptr<Job> g_job;
 bool g_paused_for_job = false;
@@ -308,6 +333,28 @@ void FinishJob()
             fs::remove(fs::u8path(s.host), ec);
         }
     }
+    if (j.iso) {
+        bool ok = fclose(j.iso) == 0 && j.err.empty() && !j.cancel;
+        j.iso = nullptr;
+        std::error_code ec;
+        if (ok) {
+            fs::remove(fs::u8path(j.iso_final), ec);
+            fs::rename(fs::u8path(j.iso_part), fs::u8path(j.iso_final), ec);
+            ok = !ec;
+            if (!ok) {
+                j.err = "Couldn't save the disc image";
+            }
+        }
+        if (ok) {
+            FILE *sf = OpenHost(j.iso_final + ".sig", "wb");
+            if (sf) {
+                fwrite(j.iso_sig.data(), 1, j.iso_sig.size(), sf);
+                fclose(sf);
+            }
+        } else {
+            fs::remove(fs::u8path(j.iso_part), ec);
+        }
+    }
     if (j.writes) {
         g_drive.Flush();
         g_drive.UpdateFreeSpace(j.vol);
@@ -397,6 +444,23 @@ bool RunStep(Job &j)
         if (n < j.buf.size()) {
             fclose(j.f);
             j.f = nullptr;
+            j.off = 0;
+            j.i++;
+        }
+        return true;
+    }
+    case Step::IsoFile: {
+        size_t want = (size_t)std::min<uint64_t>(j.buf.size(), s.size - j.off);
+        int64_t n = want ? g_drive.ReadAt(j.vol, s.xpath, j.off, j.buf.data(), want)
+                         : 0;
+        if (n < 0 || (want && n == 0) || !SeekHost(j.iso, s.dest + j.off) ||
+            (n > 0 && fwrite(j.buf.data(), 1, (size_t)n, j.iso) != (size_t)n)) {
+            j.err = "Couldn't copy " + s.xpath + " into the disc image";
+            return false;
+        }
+        j.off += n;
+        j.done += n;
+        if (j.off >= s.size) {
             j.off = 0;
             j.i++;
         }
@@ -976,6 +1040,262 @@ bool XboxExplorerInstallFolder(const std::string &host_dir, char vol,
     g_vol = vol;
     g_path = resolved_parent;
     g_list_dirty = true;
+    return true;
+}
+
+namespace
+{
+// Folder tree on the Xbox drive, for a disc image; *sig summarizes it
+bool XisoTree(char vol, const std::string &path, XisoNode *node, uint64_t *sig,
+              int depth, std::string *err)
+{
+    if (depth > 32) {
+        *err = "Folders nested too deeply";
+        return false;
+    }
+    std::vector<XboxFileInfo> list;
+    if (!g_drive.List(vol, path, &list, err)) {
+        return false;
+    }
+    for (auto &fi : list) {
+        XisoNode k;
+        k.name = fi.name;
+        k.dir = fi.dir;
+        k.size = fi.dir ? 0 : fi.size;
+        k.source = XboxJoin(path, fi.name);
+        std::string key = k.source + "|" + std::to_string(k.size) + "|" +
+                          std::to_string((long long)fi.modified) + "\n";
+        for (unsigned char c : key) {
+            *sig = (*sig ^ c) * 1099511628211ull;
+        }
+        if (fi.dir && !XisoTree(vol, k.source, &k, sig, depth + 1, err)) {
+            return false;
+        }
+        node->kids.push_back(std::move(k));
+    }
+    return true;
+}
+
+std::string ReadSmallHostFile(const std::string &path)
+{
+    std::string out;
+    FILE *f = OpenHost(path, "rb");
+    if (f) {
+        char b[256];
+        size_t n = fread(b, 1, sizeof(b), f);
+        out.assign(b, n);
+        fclose(f);
+    }
+    return out;
+}
+
+std::string Utf16Le(const uint8_t *p, size_t max_chars)
+{
+    std::string out;
+    for (size_t i = 0; i < max_chars; i++) {
+        unsigned c = p[i * 2] | (p[i * 2 + 1] << 8);
+        if (!c) {
+            break;
+        }
+        if (c < 0x80) {
+            out += (char)c;
+        } else if (c < 0x800) {
+            out += (char)(0xC0 | (c >> 6));
+            out += (char)(0x80 | (c & 0x3F));
+        } else if (c < 0xD800 || c > 0xDFFF) {
+            out += (char)(0xE0 | (c >> 12));
+            out += (char)(0x80 | ((c >> 6) & 0x3F));
+            out += (char)(0x80 | (c & 0x3F));
+        }
+    }
+    return out;
+}
+
+// Title name and ID from an XBE's certificate
+void ReadXbeTitle(char vol, const std::string &xbe, XboxHomebrewApp *app)
+{
+    uint8_t hdr[0x180];
+    if (g_drive.ReadAt(vol, xbe, 0, hdr, sizeof(hdr)) != (int64_t)sizeof(hdr) ||
+        memcmp(hdr, "XBEH", 4) != 0) {
+        return;
+    }
+    auto le32 = [](const uint8_t *p) {
+        return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 |
+               (uint32_t)p[3] << 24;
+    };
+    uint32_t base = le32(hdr + 0x104), cert = le32(hdr + 0x118);
+    if (cert < base || cert - base > 0x100000) {
+        return;
+    }
+    uint8_t c[0x5C];
+    if (g_drive.ReadAt(vol, xbe, cert - base, c, sizeof(c)) != (int64_t)sizeof(c)) {
+        return;
+    }
+    app->title_id = le32(c + 8);
+    std::string t = Utf16Le(c + 0x0C, 40);
+    while (!t.empty() && (t.back() == ' ' || t.back() == '\t')) {
+        t.pop_back();
+    }
+    if (!t.empty()) {
+        app->title = t;
+    }
+}
+} // namespace
+
+bool XboxExplorerMakeXiso(char vol, const std::string &dir,
+                          const std::string &iso_path, bool *ready,
+                          std::string *err)
+{
+    *ready = false;
+    if (g_job) {
+        *err = "The Xbox hard drive is busy with another copy";
+        return false;
+    }
+    if (XboxIsRunning() && g_drive.IsOpen()) {
+        Reopen(); // the running Xbox may have changed files
+    }
+    if (!EnsureOpen()) {
+        *err = g_open_err.empty() ? "Can't open the Xbox hard drive" : g_open_err;
+        return false;
+    }
+    XisoNode root;
+    root.dir = true;
+    uint64_t sig = 1469598103934665603ull;
+    if (!XisoTree(vol, dir, &root, &sig, 0, err)) {
+        return false;
+    }
+    char sigs[32];
+    snprintf(sigs, sizeof(sigs), "%016llx", (unsigned long long)sig);
+    std::error_code ec;
+    if (fs::exists(fs::u8path(iso_path), ec) &&
+        ReadSmallHostFile(iso_path + ".sig") == sigs) {
+        *ready = true;
+        return true;
+    }
+    XisoPlan plan;
+    if (!XisoLayout(root, &plan, err)) {
+        return false;
+    }
+    auto job = std::make_unique<Job>();
+    job->vol = vol;
+    job->title = "Preparing " + dir.substr(dir.find_last_of('/') + 1);
+    job->iso_final = iso_path;
+    job->iso_part = iso_path + ".part";
+    job->iso_sig = sigs;
+    fs::create_directories(fs::u8path(iso_path).parent_path(), ec);
+    job->iso = OpenHost(job->iso_part, "wb+");
+    if (!job->iso) {
+        *err = "Can't write \"" + job->iso_part + "\"";
+        return false;
+    }
+    bool ok = true;
+    for (auto &b : plan.blobs) {
+        ok = ok && SeekHost(job->iso, b.first) &&
+             fwrite(b.second.data(), 1, b.second.size(), job->iso) == b.second.size();
+    }
+    // Full size up front (the end of the image is padding)
+    ok = ok && SeekHost(job->iso, plan.image_size - 1) && fputc(0, job->iso) != EOF;
+    if (!ok) {
+        fclose(job->iso);
+        fs::remove(fs::u8path(job->iso_part), ec);
+        *err = "Couldn't write the disc image (is the disk full?)";
+        return false;
+    }
+    for (const XisoNode *f : plan.files) {
+        Step st{ Step::IsoFile, "", f->source, f->size };
+        st.dest = (uint64_t)f->sector * kXisoSectorSize;
+        job->steps.push_back(st);
+        job->total += f->size;
+        job->files++;
+    }
+    if (job->steps.empty()) {
+        // Nothing but empty files: done already
+        Step st{ Step::IsoFile, "", "", 0 };
+        job->steps.push_back(st);
+    }
+    StartJob(std::move(job));
+    return g_job != nullptr;
+}
+
+bool XboxExplorerFindHomebrew(std::vector<XboxHomebrewApp> *out, std::string *err)
+{
+    out->clear();
+    if (g_job) {
+        *err = "The Xbox hard drive is busy";
+        return false;
+    }
+    if (XboxIsRunning() && g_drive.IsOpen()) {
+        Reopen();
+    }
+    if (!EnsureOpen()) {
+        *err = g_open_err.empty() ? "Can't open the Xbox hard drive" : g_open_err;
+        return false;
+    }
+    static const char *const kSections[] = { "Games", "Apps", "Emulators" };
+    for (char vol : { 'E', 'F' }) {
+        if (!g_drive.Volume(vol)) {
+            continue;
+        }
+        std::vector<XboxFileInfo> top;
+        std::string e;
+        if (!g_drive.List(vol, "/", &top, &e)) {
+            continue;
+        }
+        for (auto &t : top) {
+            const char *section = nullptr;
+            for (const char *s : kSections) {
+                std::string a = t.name, b = s;
+                std::transform(a.begin(), a.end(), a.begin(), ::tolower);
+                std::transform(b.begin(), b.end(), b.begin(), ::tolower);
+                if (t.dir && a == b) {
+                    section = s;
+                }
+            }
+            if (!section) {
+                continue;
+            }
+            std::vector<XboxFileInfo> apps;
+            if (!g_drive.List(vol, "/" + t.name, &apps, &e)) {
+                continue;
+            }
+            for (auto &a : apps) {
+                if (!a.dir) {
+                    continue;
+                }
+                XboxHomebrewApp app;
+                app.vol = vol;
+                app.dir = "/" + t.name + "/" + a.name;
+                app.folder = a.name;
+                app.section = section;
+                app.title = a.name;
+                // default.xbe, whatever its case
+                std::vector<XboxFileInfo> files;
+                std::string xbe;
+                if (g_drive.List(vol, app.dir, &files, &e)) {
+                    for (auto &f : files) {
+                        std::string n = f.name;
+                        std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+                        if (!f.dir && n == "default.xbe") {
+                            xbe = XboxJoin(app.dir, f.name);
+                            app.xbe_size = f.size;
+                        }
+                    }
+                }
+                if (xbe.empty()) {
+                    continue;
+                }
+                ReadXbeTitle(vol, xbe, &app);
+                out->push_back(app);
+            }
+        }
+    }
+    std::sort(out->begin(), out->end(),
+              [](const XboxHomebrewApp &a, const XboxHomebrewApp &b) {
+                  std::string x = a.title, y = b.title;
+                  std::transform(x.begin(), x.end(), x.begin(), ::tolower);
+                  std::transform(y.begin(), y.end(), y.begin(), ::tolower);
+                  return x < y;
+              });
     return true;
 }
 

@@ -270,6 +270,9 @@ display:
     surface_scale:
       type: integer
       default: 1
+    dynamic_resolution:
+      type: bool
+      default: false
   filtering:
     type: enum
     values: [linear, nearest, fsr, bicubic, lanczos, sgsr, nis, rtx]

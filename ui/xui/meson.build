@@ -13,6 +13,8 @@ xemu_ss.add(files(
   'perf-analysis.cc',
   'perf-capture.cc',
   'shader-cache.cc',
+  'dynamic-res.cc',
+  'dynamic-res-logic.cc',
   'game-preview.cc',
   'perf-overlay.cc',
   'game-shortcut.cc',

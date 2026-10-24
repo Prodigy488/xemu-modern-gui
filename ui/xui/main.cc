@@ -52,6 +52,7 @@
 #include "compat.hh"
 #include "xbox-drive-explorer.hh"
 #include "perf-capture.hh"
+#include "dynamic-res.hh"
 #include "game-library.hh"
 #include "perf-overlay.hh"
 #if defined(_WIN32)
@@ -207,6 +208,7 @@ void xemu_hud_update(void)
         g_last_scale = g_viewport_mgr.m_scale;
     }
 
+    DynamicResUpdate(); // before the library applies a new game's settings
     game_library_window.Update();
     XboxExplorerUpdate();
     PerfCaptureUpdate();
@@ -339,6 +341,7 @@ void xemu_hud_update(void)
     if (!first_boot_window.is_open && !game_library_window.is_open) {
         DrawPerformanceOverlay();
         DrawShaderIndicator();
+        DynamicResDraw();
     }
     g_snapshot_mgr.Draw();
 

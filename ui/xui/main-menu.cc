@@ -793,6 +793,10 @@ void MainMenuDisplayView::Draw()
                      "Increase surface scaling factor for higher quality")) {
         nv2a_set_surface_scale_factor(rendering_scale+1);
     }
+    Toggle("Dynamic resolution (experimental)",
+           &g_config.display.quality.dynamic_resolution,
+           "Lower the resolution while a game slows down, raise it again "
+           "when there's room");
     ChevronCombo("Upscaling filter", &g_config.display.filtering,
                  "Linear\0"
                  "Nearest\0"

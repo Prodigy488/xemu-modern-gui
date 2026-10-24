@@ -33,6 +33,7 @@
 #include "xbox-drive-explorer.hh"
 #include "perf-capture.hh"
 #include "shader-cache.hh"
+#include "dynamic-res.hh"
 #include "xbox-drive.hh"
 #include "game-patches.hh"
 #include "game-compat.hh"
@@ -7532,6 +7533,16 @@ void DrawDashSettingsTab()
             nv2a_set_surface_scale_factor(scale + 1);
         }
         ImGui::TextDisabled("The heaviest setting. 1x-2x with FSR is fast and sharp.");
+        ImGui::Checkbox("Dynamic resolution (experimental)",
+                        &g_config.display.quality.dynamic_resolution);
+        ImGui::SetItemTooltip(
+            "Lowers the resolution while a game runs below its usual frame "
+            "rate, and raises it again when there's room. If lowering doesn't "
+            "help (the slowdown isn't about resolution), it changes back.");
+        if (int user = DynamicResUserScale()) {
+            ImGui::TextDisabled("Now %dx; your setting is %dx.",
+                                g_config.display.quality.surface_scale, user);
+        }
         label("Upscaling filter");
         ImGui::Combo("##filter", &g_config.display.filtering,
                      "Linear\0Nearest\0AMD FidelityFX FSR 1.0\0Bicubic (Catmull-Rom)\0"
@@ -8968,6 +8979,7 @@ bool GameLibraryInterceptEject(void)
 
 void GameLibraryBeforeSettingsSave(void)
 {
+    DynamicResBeforeSettingsSave(); // the user's resolution, not a lowered one
     // Write the user's global values, not a game's overrides
     g_saved_config = { g_config.display.quality.surface_scale,
                        g_config.display.filtering,
@@ -9021,4 +9033,5 @@ void GameLibraryAfterSettingsSave(void)
     g_config.display.quality.surface_scale = g_saved_config.scale;
     g_config.display.filtering = g_saved_config.filtering;
     g_config.display.fsr_sharpness = g_saved_config.fsr;
+    DynamicResAfterSettingsSave();
 }

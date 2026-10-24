@@ -10,6 +10,7 @@
 
 #include "common.hh"
 #include "perf-overlay.hh"
+#include "dynamic-res.hh"
 #include "viewport-manager.hh"
 
 extern float g_main_menu_height;
@@ -71,8 +72,15 @@ void DrawPerformanceOverlay(void)
             : g_config.display.renderer == CONFIG_DISPLAY_RENDERER_OPENGL
                 ? "OpenGL"
                 : "Null";
-        ImGui::TextDisabled("%s  %ux  %s", renderer, nv2a_get_surface_scale_factor(),
-                            FilterName(g_config.display.filtering));
+        if (int user = DynamicResUserScale()) {
+            ImGui::TextDisabled("%s  %ux (dynamic, set %dx)  %s", renderer,
+                                nv2a_get_surface_scale_factor(), user,
+                                FilterName(g_config.display.filtering));
+        } else {
+            ImGui::TextDisabled("%s  %ux  %s", renderer,
+                                nv2a_get_surface_scale_factor(),
+                                FilterName(g_config.display.filtering));
+        }
         if (!runstate_is_running()) {
             ImGui::TextColored(ImVec4(0.95f, 0.8f, 0.25f, 1), "Paused");
         }

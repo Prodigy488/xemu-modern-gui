@@ -30,6 +30,14 @@ void xemu_net_enable(void);
 void xemu_net_disable(void);
 int xemu_net_is_enabled(void);
 
+/* Insignia's DNS server (from insignia.live/connect), as text */
+#define XEMU_INSIGNIA_DNS "46.101.64.175"
+/*
+ * Applies net.nat.insignia_dns: when on, the NAT backend answers the
+ * Xbox's DNS lookups with Insignia's DNS server. Cheap; call every frame.
+ */
+void xemu_net_sync_dns(void);
+
 #ifdef __cplusplus
 }
 #endif

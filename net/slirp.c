@@ -96,6 +96,7 @@ typedef struct SlirpState {
     gchar *smb_dir;
 #endif
     GSList *fwd;
+    struct in_addr vnameserver; /* xemu: the virtual DNS server's address */
 } SlirpState;
 
 static struct slirp_config_str *slirp_configs;
@@ -113,12 +114,167 @@ static void slirp_smb_cleanup(SlirpState *s);
 static inline void slirp_smb_cleanup(SlirpState *s) { }
 #endif
 
+/*
+ * xemu: DNS redirect (see net_slirp_set_dns_redirect). Queries from the
+ * guest to the virtual DNS server are readdressed to the chosen server
+ * before slirp sees them, and the answers are readdressed back on the way
+ * to the guest. Only answers to queries we redirected are changed (by the
+ * guest's source port), so a guest that already uses that server directly
+ * isn't affected.
+ */
+static uint32_t dns_redirect; /* network order; 0 off */
+#define DNS_FLOWS 64
+static struct {
+    uint16_t port; /* guest port, network order */
+    uint8_t proto;
+    int64_t last;  /* ms */
+} dns_flows[DNS_FLOWS];
+
+void net_slirp_set_dns_redirect(uint32_t ipv4)
+{
+    qatomic_set(&dns_redirect, ipv4);
+}
+
+/* RFC 1624 incremental checksum update for a changed 32-bit field */
+static uint16_t csum_replace4(uint16_t csum, uint32_t from, uint32_t to)
+{
+    uint32_t sum = (uint16_t)~csum;
+    sum += (uint16_t)~(from >> 16) + (uint16_t)~(from & 0xffff);
+    sum += (to >> 16) + (to & 0xffff);
+    while (sum >> 16) {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    return (uint16_t)~sum;
+}
+
+/*
+ * Rewrites one IPv4 address (src or dst) in an Ethernet frame holding a
+ * UDP or TCP packet, fixing the checksums. Returns the L4 header offset
+ * or 0 if it isn't such a packet.
+ */
+static size_t dns_l4(const uint8_t *buf, size_t size, uint8_t *proto)
+{
+    if (size < 14 + 20 || buf[12] != 0x08 || buf[13] != 0x00) {
+        return 0; /* not IPv4 */
+    }
+    const uint8_t *ip = buf + 14;
+    size_t ihl = (ip[0] & 0x0f) * 4;
+    if ((ip[0] >> 4) != 4 || ihl < 20 || size < 14 + ihl + 8) {
+        return 0;
+    }
+    if ((ip[6] & 0x3f) || ip[7]) {
+        return 0; /* a fragment */
+    }
+    if (ip[9] != 17 && !(ip[9] == 6 && size >= 14 + ihl + 20)) {
+        return 0;
+    }
+    *proto = ip[9];
+    return 14 + ihl;
+}
+
+static void dns_readdress(uint8_t *buf, size_t l4, uint8_t proto, int field,
+                          uint32_t to)
+{
+    uint8_t *ip = buf + 14;
+    uint32_t from;
+    memcpy(&from, ip + field, 4);
+    memcpy(ip + field, &to, 4);
+    uint16_t c;
+    memcpy(&c, ip + 10, 2);
+    c = csum_replace4(c, from, to);
+    memcpy(ip + 10, &c, 2);
+    /* UDP and TCP checksums cover the addresses too (pseudo header) */
+    size_t off = l4 + (proto == 17 ? 6 : 16);
+    memcpy(&c, buf + off, 2);
+    if (proto == 17 && c == 0) {
+        return; /* UDP without a checksum */
+    }
+    c = csum_replace4(c, from, to);
+    if (proto == 17 && c == 0) {
+        c = 0xffff;
+    }
+    memcpy(buf + off, &c, 2);
+}
+
+static const uint8_t *dns_redirect_out(SlirpState *s, const uint8_t *buf,
+                                       size_t size, uint8_t *copy,
+                                       size_t copy_size)
+{
+    uint32_t target = qatomic_read(&dns_redirect);
+    uint8_t proto;
+    size_t l4;
+    if (!target || size > copy_size || !(l4 = dns_l4(buf, size, &proto))) {
+        return buf;
+    }
+    uint32_t dst;
+    uint16_t dport;
+    memcpy(&dst, buf + 14 + 16, 4);
+    memcpy(&dport, buf + l4 + 2, 2);
+    if (dst != s->vnameserver.s_addr || dport != htons(53)) {
+        return buf;
+    }
+    memcpy(copy, buf, size);
+    dns_readdress(copy, l4, proto, 16, target);
+    /* Remember the flow so the answer can be readdressed */
+    uint16_t sport;
+    memcpy(&sport, buf + l4, 2);
+    int64_t now = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
+    int slot = 0;
+    for (int i = 0; i < DNS_FLOWS; i++) {
+        if (dns_flows[i].port == sport && dns_flows[i].proto == proto) {
+            slot = i;
+            break;
+        }
+        if (dns_flows[i].last < dns_flows[slot].last) {
+            slot = i;
+        }
+    }
+    dns_flows[slot].port = sport;
+    dns_flows[slot].proto = proto;
+    dns_flows[slot].last = now;
+    return copy;
+}
+
+static const void *dns_redirect_in(SlirpState *s, const void *pkt,
+                                   size_t pkt_len, uint8_t *copy,
+                                   size_t copy_size)
+{
+    uint32_t target = qatomic_read(&dns_redirect);
+    const uint8_t *buf = pkt;
+    uint8_t proto;
+    size_t l4;
+    if (!target || pkt_len > copy_size || !(l4 = dns_l4(buf, pkt_len, &proto))) {
+        return pkt;
+    }
+    uint32_t src;
+    uint16_t sport, dport;
+    memcpy(&src, buf + 14 + 12, 4);
+    memcpy(&sport, buf + l4, 2);
+    memcpy(&dport, buf + l4 + 2, 2);
+    if (src != target || sport != htons(53)) {
+        return pkt;
+    }
+    int64_t now = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
+    for (int i = 0; i < DNS_FLOWS; i++) {
+        if (dns_flows[i].port == dport && dns_flows[i].proto == proto &&
+            now - dns_flows[i].last < 120000) {
+            memcpy(copy, buf, pkt_len);
+            dns_readdress(copy, l4, proto, 12, s->vnameserver.s_addr);
+            return copy;
+        }
+    }
+    return pkt;
+}
+
 static ssize_t net_slirp_send_packet(const void *pkt, size_t pkt_len,
                                      void *opaque)
 {
     SlirpState *s = opaque;
     uint8_t min_pkt[ETH_ZLEN];
     size_t min_pktsz = sizeof(min_pkt);
+    uint8_t dns_copy[2048];
+
+    pkt = dns_redirect_in(s, pkt, pkt_len, dns_copy, sizeof(dns_copy));
 
     if (net_peer_needs_padding(&s->nc)) {
         if (eth_pad_short_frame(min_pkt, &min_pktsz, pkt, pkt_len)) {
@@ -133,7 +289,9 @@ static ssize_t net_slirp_send_packet(const void *pkt, size_t pkt_len,
 static ssize_t net_slirp_receive(NetClientState *nc, const uint8_t *buf, size_t size)
 {
     SlirpState *s = DO_UPCAST(SlirpState, nc, nc);
+    uint8_t dns_copy[2048];
 
+    buf = dns_redirect_out(s, buf, size, dns_copy, sizeof(dns_copy));
     slirp_input(s->slirp, buf, size);
 
     return size;
@@ -662,6 +820,7 @@ static int net_slirp_init(NetClientState *peer, const char *model,
     cfg.vnameserver6 = ip6_dns;
     cfg.vdnssearch = dnssearch;
     cfg.vdomainname = vdomainname;
+    s->vnameserver = dns;
     s->slirp = slirp_new(&cfg, &slirp_cb, s);
     QTAILQ_INSERT_TAIL(&slirp_stacks, s, entry);
 

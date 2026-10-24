@@ -34,6 +34,15 @@ void hmp_info_usernet(Monitor *mon, const QDict *qdict);
 
 #ifdef XBOX
 void *slirp_get_state_from_netdev(const char *id);
+
+/*
+ * xemu: send the guest's DNS queries (to the NAT's virtual DNS server,
+ * 10.0.2.3) to this IPv4 server instead of the host's DNS, and make the
+ * answers look like they came from the virtual server. For Insignia: the
+ * Xbox keeps its default automatic network settings. ipv4 is in network
+ * byte order; 0 turns it off.
+ */
+void net_slirp_set_dns_redirect(uint32_t ipv4);
 #endif
 
 #endif

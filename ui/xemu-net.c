@@ -201,3 +201,15 @@ int xemu_net_is_enabled(void)
     g_config.net.enable = (nc != NULL);
     return g_config.net.enable;
 }
+
+void xemu_net_sync_dns(void)
+{
+    static int last = -1;
+    int on = g_config.net.nat.insignia_dns ? 1 : 0;
+    if (on == last) {
+        return;
+    }
+    last = on;
+    /* 46.101.64.175 (XEMU_INSIGNIA_DNS), network byte order */
+    net_slirp_set_dns_redirect(on ? htonl(0x2E6540AFu) : 0);
+}

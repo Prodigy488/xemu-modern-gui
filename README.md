@@ -1,12 +1,23 @@
-# xemu Modern GUI (unofficial)
+# xemu Modern GUI: an experimental xemu fork
 
-An **unofficial fork** of [xemu](https://xemu.app) 0.8.139, the original Xbox
-emulator. It adds a console-style dashboard, better upscaling and
-quality-of-life features on top of the official release.
+> [!IMPORTANT]
+> **This is an experimental fork of [xemu](https://xemu.app) for trying out
+> user interface improvements.** It is not official xemu, and it is not made,
+> endorsed or supported by the xemu project. Some of these ideas may never
+> appear in xemu.
+>
+> - **Please don't ask about this build in xemu's Discord, GitHub or other
+>   xemu channels**, and don't report its problems there. Open an issue in
+>   this repository instead.
+> - If something doesn't work, try official xemu before assuming xemu has
+>   the problem.
+> - For the official emulator, downloads and support, go to
+>   [xemu.app](https://xemu.app).
 
-> **Not affiliated with or supported by the xemu project.** Please don't report
-> problems with this build to the xemu team; open an issue here instead. For
-> the official emulator, see [xemu.app](https://xemu.app).
+This fork is based on xemu 0.8.139. Emulation is unchanged except where noted
+under Performance and stability; the work here is on the interface: a
+console-style dashboard, a homebrew tab, upscaling options and
+quality-of-life features.
 
 > **Agent Declaration**: These changes were created with assistance from
 > Claude Code (Anthropic, Claude Opus 5.5).

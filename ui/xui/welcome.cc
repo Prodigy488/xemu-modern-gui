@@ -21,6 +21,7 @@
 #include "imgui.h"
 #include "viewport-manager.hh"
 #include "welcome.hh"
+#include "game-library.hh"
 #include "widgets.hh"
 #include "misc.hh"
 #include "gl-helpers.hh"
@@ -56,8 +57,16 @@ void FirstBootWindow::Draw()
 
     ImGui::Dummy(ImVec2(0,20*g_viewport_mgr.m_scale));
 
-    ImGui::SetCursorPosX((ImGui::GetWindowWidth()-120*g_viewport_mgr.m_scale)/2);
-    if (ImGui::Button("Settings", ImVec2(120*g_viewport_mgr.m_scale, 0))) {
+    // Guided setup on the dashboard, or xemu's own settings
+    float bw = 120*g_viewport_mgr.m_scale, gap = 10*g_viewport_mgr.m_scale;
+    ImGui::SetCursorPosX((ImGui::GetWindowWidth()-2*bw-gap)/2);
+    if (ImGui::Button("Guided setup", ImVec2(bw, 0))) {
+        GameLibraryOpenSetup();
+        g_config.general.show_welcome = false;
+        is_open = false;
+    }
+    ImGui::SameLine(0, gap);
+    if (ImGui::Button("Settings", ImVec2(bw, 0))) {
         g_main_menu.ShowSystem();
         g_config.general.show_welcome = false;
     }

@@ -118,6 +118,8 @@ struct GameOverrides {
     int surface_scale = 0; // 0 = use global
     int filtering = -1;    // -1 = use global
     float fsr_sharpness = -1; // < 0 = use global
+    int renderer = -1;        // -1 = use global, else CONFIG_DISPLAY_RENDERER_*
+    int dynamic_res = -1;     // -1 = use global, 0 off, 1 on
 };
 
 std::vector<LibraryEntry> g_entries;
@@ -298,17 +300,23 @@ struct AppliedOverrides {
     int base_scale = 1;
     int base_filtering = 0;
     float base_fsr = 0.8f;
+    int base_renderer = 0;
+    bool base_dynamic_res = false;
 } g_applied;
 
 struct SavedConfig {
     int scale, filtering;
     float fsr;
+    int renderer;
+    bool dynamic_res;
 } g_saved_config;
 
 // UI state
 std::string g_search;
 bool g_favorites_only = false;
 bool g_online_only = false;
+int g_filter_compat = 0; // 0 any, 1 Playable or better, 2 with problems, 3 not rated
+int g_filter_played = 0; // 0 any, 1 played, 2 never played
 bool g_open_insignia_popup = false;
 
 // Insignia website status: checked on demand (when its panel is shown), at
@@ -600,6 +608,8 @@ void LoadLibrary()
             ov.surface_scale = o.value("surface_scale", 0);
             ov.filtering = o.value("filtering", -1);
             ov.fsr_sharpness = o.value("fsr_sharpness", -1.0f);
+            ov.renderer = o.value("renderer", -1);
+            ov.dynamic_res = o.value("dynamic_res", -1);
             g_overrides[(uint32_t)strtoul(id.c_str(), NULL, 16)] = ov;
         }
     } catch (const std::exception &ex) {
@@ -641,7 +651,9 @@ void SaveLibrary()
         ovs[TitleIdHex(id)] = { { "enabled", o.enabled },
                                 { "surface_scale", o.surface_scale },
                                 { "filtering", o.filtering },
-                                { "fsr_sharpness", o.fsr_sharpness } };
+                                { "fsr_sharpness", o.fsr_sharpness },
+                                { "renderer", o.renderer },
+                                { "dynamic_res", o.dynamic_res } };
     }
     j["overrides"] = ovs;
     j["primary_recursive"] = g_primary_recursive;
@@ -1557,6 +1569,14 @@ void RestoreBaseline()
         g_config.display.fsr_sharpness == ov.fsr_sharpness) {
         g_config.display.fsr_sharpness = g_applied.base_fsr;
     }
+    // Switching renderer back happens live, like the user switching it
+    if (ov.renderer >= 0 && g_config.display.renderer == ov.renderer) {
+        g_config.display.renderer = g_applied.base_renderer;
+    }
+    if (ov.dynamic_res >= 0 &&
+        g_config.display.quality.dynamic_resolution == (ov.dynamic_res == 1)) {
+        g_config.display.quality.dynamic_resolution = g_applied.base_dynamic_res;
+    }
     g_applied.active = false;
 }
 
@@ -1578,6 +1598,8 @@ void ApplyOverridesFor(const std::string &path)
     g_applied.base_scale = g_config.display.quality.surface_scale;
     g_applied.base_filtering = g_config.display.filtering;
     g_applied.base_fsr = g_config.display.fsr_sharpness;
+    g_applied.base_renderer = g_config.display.renderer;
+    g_applied.base_dynamic_res = g_config.display.quality.dynamic_resolution;
 
     if (ov.surface_scale > 0 &&
         ov.surface_scale != g_config.display.quality.surface_scale) {
@@ -1588,6 +1610,12 @@ void ApplyOverridesFor(const std::string &path)
     }
     if (ov.fsr_sharpness >= 0) {
         g_config.display.fsr_sharpness = ov.fsr_sharpness;
+    }
+    if (ov.renderer >= 0) {
+        g_config.display.renderer = ov.renderer; // xemu switches live
+    }
+    if (ov.dynamic_res >= 0) {
+        g_config.display.quality.dynamic_resolution = ov.dynamic_res == 1;
     }
     xemu_queue_notification("Per-game settings applied");
 }
@@ -1799,6 +1827,23 @@ void SortedFiltered(std::vector<LibraryEntry *> &out)
         }
         if (g_online_only && !SupportsOnline(e)) {
             continue;
+        }
+        if (g_filter_compat) {
+            CompatStatus cs = CompatFor(e);
+            bool rated = cs != CompatStatus::None && cs != CompatStatus::Unknown;
+            bool good = cs == CompatStatus::Playable || cs == CompatStatus::Perfect;
+            if ((g_filter_compat == 1 && !good) ||
+                (g_filter_compat == 2 && (!rated || good)) ||
+                (g_filter_compat == 3 && rated)) {
+                continue;
+            }
+        }
+        if (g_filter_played) {
+            const GameStats &st = g_stats[e.path];
+            bool played = st.last_played > 0 || st.play_seconds > 0;
+            if ((g_filter_played == 1) != played) {
+                continue;
+            }
         }
         if (!needle.empty() &&
             Lower(e.DisplayName()).find(needle) == std::string::npos &&
@@ -3380,6 +3425,22 @@ void DrawSettingsPopup()
     if (custom_sharp) {
         ImGui::SliderFloat("Sharpness", &g_settings_edit.fsr_sharpness, 0.0f,
                            1.0f, "%.2f");
+    }
+    // Renderer: some games only work, or run better, on one of them
+    int rend = g_settings_edit.renderer == CONFIG_DISPLAY_RENDERER_OPENGL   ? 1
+               : g_settings_edit.renderer == CONFIG_DISPLAY_RENDERER_VULKAN ? 2
+                                                                           : 0;
+    if (ImGui::Combo("Renderer", &rend, "Use global\0" "OpenGL\0" "Vulkan\0")) {
+        g_settings_edit.renderer = rend == 1   ? CONFIG_DISPLAY_RENDERER_OPENGL
+                                   : rend == 2 ? CONFIG_DISPLAY_RENDERER_VULKAN
+                                               : -1;
+    }
+    ImGui::SetItemTooltip("Switched when the game starts, and back when it "
+                          "ends");
+    int dyn = g_settings_edit.dynamic_res + 1;
+    if (ImGui::Combo("Dynamic resolution", &dyn,
+                     "Use global\0" "Off\0" "On (experimental)\0")) {
+        g_settings_edit.dynamic_res = dyn - 1;
     }
     ImGui::EndDisabled();
     ImGui::TextDisabled("Applied whenever this game's disc is loaded.");
@@ -5479,6 +5540,10 @@ int GamesWithNewPatches()
     return n;
 }
 
+// From the Homebrew section further down
+const XboxHomebrewApp *NewestHomebrew();
+void HomebrewPlay(const XboxHomebrewApp &a);
+
 void DrawHomeActivity(ImVec2 size, int &tex_budget)
 {
     const float s = g_viewport_mgr.m_scale;
@@ -5498,7 +5563,8 @@ void DrawHomeActivity(ImVec2 size, int &tex_budget)
     int shown = 0;
     float row_h = std::max(48 * s, ImGui::GetFontSize() * 2 + 18 * s);
     int new_patches = GamesWithNewPatches();
-    float reserve = new_patches ? row_h + 10 * s : 0;
+    const XboxHomebrewApp *new_hb = NewestHomebrew();
+    float reserve = (new_patches ? row_h + 10 * s : 0) + (new_hb ? row_h + 10 * s : 0);
     for (auto &r : recent) {
         LibraryEntry *e = FindEntry(r.path);
         if (!e || e->path == g_home_path) {
@@ -5531,6 +5597,44 @@ void DrawHomeActivity(ImVec2 size, int &tex_budget)
     }
     if (!shown) {
         ImGui::TextDisabled("Games you play show up here.");
+    }
+    if (new_hb) {
+        // Newly installed homebrew, one click to play
+        ImGui::SetCursorPosY(std::max(ImGui::GetCursorPosY(),
+                                      ImGui::GetWindowHeight() - 18 * s - row_h -
+                                          (new_patches ? row_h + 6 * s : 0)));
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        XboxHomebrewApp app = *new_hb;
+        bool go = ImGui::Selectable("##newhomebrew", false,
+                                    ImGuiSelectableFlags_NoPadWithHalfSpacing,
+                                    ImVec2(w, row_h));
+        ImGui::SetItemTooltip("Play %s", app.title.c_str());
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        float th = row_h - 8 * s;
+        ShapeFill(dl, ImVec2(p.x + 4 * s, p.y + 4 * s),
+                  ImVec2(p.x + 4 * s + th * 0.8f, p.y + 4 * s + th),
+                  T().neon ? Alpha(T().accent, 70) : IM_COL32(40, 90, 150, 255), 6 * s);
+        ImVec2 is = ImGui::CalcTextSize(ICON_FA_GAMEPAD);
+        dl->AddText(ImVec2(p.x + 4 * s + (th * 0.8f - is.x) / 2,
+                           p.y + 4 * s + (th - is.y) / 2),
+                    IM_COL32_WHITE, ICON_FA_GAMEPAD);
+        float fh = ImGui::GetFontSize();
+        float tx = p.x + th * 0.8f + 16 * s, ty = p.y + (row_h - fh * 2 - 4 * s) / 2;
+        ImVec4 clip(tx, p.y, p.x + w - 70 * s, p.y + row_h);
+        std::string title = "New homebrew: " + app.title;
+        dl->AddText(ImGui::GetFont(), fh, ImVec2(tx, ty), T().text, title.c_str(),
+                    NULL, 0, &clip);
+        std::string sub = "Installed " + FormatLastPlayed(app.installed) +
+                          "  -  " + app.section;
+        dl->AddText(ImGui::GetFont(), fh * 0.88f, ImVec2(tx, ty + fh + 4 * s),
+                    T().dim, sub.c_str(), NULL, 0, &clip);
+        ImVec2 gs = ImGui::CalcTextSize("Play  " ICON_FA_CHEVRON_RIGHT);
+        dl->AddText(ImVec2(p.x + w - gs.x - 8 * s, p.y + (row_h - fh) / 2), T().accent,
+                    "Play  " ICON_FA_CHEVRON_RIGHT);
+        if (go || ActivatedByNav()) {
+            HomebrewPlay(app);
+            SwitchTab(kTabStore); // shows its progress
+        }
     }
     if (new_patches) {
         ImGui::SetCursorPosY(std::max(ImGui::GetCursorPosY(),
@@ -5628,6 +5732,238 @@ void DrawHomeShelf(int &tex_budget)
     ImGui::PopStyleColor();
 }
 
+// --- Setup check ----------------------------------------------------------------
+//
+// What xemu needs before games run (MCPX boot ROM, BIOS, hard disk) and what
+// makes the dashboard useful (a games folder), each with a plain status and
+// a way to fix it. Shown as a card on Home while something's missing, and as
+// a popup from the Settings tab or the welcome window.
+
+struct SetupItem {
+    const char *name;
+    const char *what;   // one line about it
+    const char **path;  // config value, or nullptr (games folder)
+    bool required;
+    int state = 0;      // 0 fine, 1 missing, 2 looks wrong
+    std::string detail; // what's wrong, or the file
+};
+
+bool g_setup_open = false;      // open the popup next frame
+bool g_setup_changed = false;   // a machine file changed: restart needed
+uint64_t g_setup_checked = 0;
+std::vector<SetupItem> g_setup;
+
+uint64_t FileSizeOr(const char *p, bool *exists)
+{
+    std::error_code ec;
+    *exists = p && p[0] && fs::is_regular_file(fs::u8path(p), ec);
+    return *exists ? (uint64_t)fs::file_size(fs::u8path(p), ec) : 0;
+}
+
+std::string SizeText(uint64_t n)
+{
+    if (n >= (1ull << 20)) {
+        return string_format("%.1f MB", n / 1048576.0);
+    }
+    if (n >= 1024) {
+        return string_format("%llu KB", (unsigned long long)(n / 1024));
+    }
+    return string_format("%llu bytes", (unsigned long long)n);
+}
+
+void RefreshSetup(bool force = false)
+{
+    uint64_t now = SDL_GetTicks();
+    if (!force && !g_setup.empty() && now - g_setup_checked < 2000) {
+        return;
+    }
+    g_setup_checked = now;
+    g_setup = {
+        { "MCPX boot ROM", "The Xbox's 512-byte startup code, dumped from your console.",
+          &g_config.sys.files.bootrom_path, true },
+        { "BIOS (flash ROM)", "Your Xbox's BIOS: 256 KB or 1 MB.",
+          &g_config.sys.files.flashrom_path, true },
+        { "Hard disk image", "The Xbox hard drive with its dashboard, saves and "
+          "homebrew (.qcow2 or a raw image).",
+          &g_config.sys.files.hdd_path, true },
+        { "Games folder", "Where your disc images are, for the library.",
+          nullptr, false },
+    };
+    for (auto &it : g_setup) {
+        if (!it.path) {
+            int n = (int)AllFolders().size();
+            it.state = n ? 0 : 1;
+            it.detail = n ? string_format("%d folder%s, %d games", n, n == 1 ? "" : "s",
+                                          (int)g_entries.size())
+                          : "Not set";
+            continue;
+        }
+        const char *p = *it.path;
+        bool exists = false;
+        uint64_t size = FileSizeOr(p, &exists);
+        if (!p || !p[0]) {
+            it.state = 1;
+            it.detail = "Not set";
+            continue;
+        }
+        if (!exists) {
+            it.state = 1;
+            it.detail = "File not found: " + std::string(p);
+            continue;
+        }
+        it.detail = p;
+        if (it.path == &g_config.sys.files.bootrom_path && size != 512) {
+            it.state = 2;
+            it.detail = "Should be 512 bytes, this file is " + SizeText(size) +
+                        ": " + p;
+        } else if (it.path == &g_config.sys.files.flashrom_path &&
+                   size != 256 * 1024 && size != 512 * 1024 &&
+                   size != 1024 * 1024) {
+            it.state = 2;
+            it.detail = "Should be 256 KB or 1 MB, this file is " + SizeText(size) +
+                        ": " + p;
+        } else if (it.path == &g_config.sys.files.hdd_path) {
+            char magic[4] = {};
+            std::ifstream f(fs::u8path(p), std::ios::binary);
+            f.read(magic, 4);
+            bool qcow = memcmp(magic, "QFI\xfb", 4) == 0;
+            if (!qcow && size < (64ull << 20)) {
+                it.state = 2;
+                it.detail = "Too small for an Xbox hard disk (" + SizeText(size) +
+                            "): " + p;
+            }
+        }
+    }
+}
+
+bool SetupNeeded()
+{
+    RefreshSetup();
+    for (auto &it : g_setup) {
+        if (it.required && it.state) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void DrawSetupItems(bool compact)
+{
+    const float s = g_viewport_mgr.m_scale;
+    RefreshSetup();
+    for (size_t i = 0; i < g_setup.size(); i++) {
+        SetupItem &it = g_setup[i];
+        if (compact && !it.state) {
+            continue;
+        }
+        ImGui::PushID((int)i);
+        ImVec4 col = ImGui::ColorConvertU32ToFloat4(
+            it.state == 0 ? T().ok : it.required ? T().bad : T().warn);
+        ImGui::TextColored(col, "%s",
+                           it.state == 0 ? ICON_FA_CHECK : ICON_FA_TRIANGLE_EXCLAMATION);
+        ImGui::SameLine();
+        ImGui::TextUnformatted(it.name);
+        if (!it.required) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(optional)");
+        }
+        ImGui::Indent(24 * s);
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("%s", it.what);
+        if (it.state) {
+            ImGui::TextColored(col, "%s", it.detail.c_str());
+        } else {
+            ImGui::TextDisabled("%s", it.detail.c_str());
+        }
+        ImGui::PopTextWrapPos();
+        const char **path = it.path;
+        if (path) {
+            if (DashButton(it.state ? ICON_FA_FOLDER_OPEN "  Choose file..."
+                                    : ICON_FA_FOLDER_OPEN "  Change...",
+                           it.state ? T().primary : T().glass,
+                           it.state ? T().on_primary : T().white, ImVec2(0, 30 * s))) {
+                ShowOpenFileDialog(nullptr, 0, *path, [path](const char *p) {
+                    xemu_settings_set_string(path, p);
+                    xemu_settings_save();
+                    g_setup_changed = true;
+                    RefreshSetup(true);
+                });
+            }
+        } else if (DashButton(ICON_FA_FOLDER_PLUS "  Add a folder...",
+                              it.state ? T().primary : T().glass,
+                              it.state ? T().on_primary : T().white,
+                              ImVec2(0, 30 * s))) {
+            g_open_folders_popup = true;
+        }
+        ImGui::Unindent(24 * s);
+        ImGui::Dummy(ImVec2(0, 6 * s));
+        ImGui::PopID();
+    }
+    if (g_setup_changed) {
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(T().warn),
+                           ICON_FA_ROTATE "  Restart xemu to use the new files.");
+    }
+    ImGui::TextDisabled("You need files from your own Xbox; they can't be shared.");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Setup guide")) {
+        SDL_OpenURL("https://xemu.app/docs/getting-started/");
+    }
+}
+
+// Home: only while something required is missing
+void DrawSetupCard()
+{
+    if (!SetupNeeded()) {
+        return;
+    }
+    const float s = g_viewport_mgr.m_scale;
+    ImVec2 a = ImGui::GetCursorScreenPos();
+    float w = ImGui::GetContentRegionAvail().x;
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    dl->ChannelsSplit(2);
+    dl->ChannelsSetCurrent(1);
+    ImGui::BeginGroup();
+    ImGui::Dummy(ImVec2(0, 10 * s));
+    ImGui::Indent(18 * s);
+    DashLabel("Setup");
+    DashTitle("A few things before games can run");
+    ImGui::Dummy(ImVec2(0, 4 * s));
+    DrawSetupItems(true);
+    ImGui::Unindent(18 * s);
+    ImGui::Dummy(ImVec2(w - 1, 10 * s));
+    ImGui::EndGroup();
+    dl->ChannelsSetCurrent(0);
+    ImVec2 b(a.x + w, ImGui::GetItemRectMax().y);
+    DashCard(dl, a, b);
+    ShapeStroke(dl, a, b, Alpha(T().warn, 160), T().neon ? 18 * s : 16 * s, 1.5f * s);
+    dl->ChannelsMerge();
+    ImGui::Dummy(ImVec2(0, 10 * s));
+}
+
+void DrawSetupPopup()
+{
+    if (g_setup_open) {
+        g_setup_open = false;
+        RefreshSetup(true);
+        ImGui::OpenPopup("Setup Check");
+    }
+    const float s = g_viewport_mgr.m_scale;
+    ImGui::SetNextWindowSize(ImVec2(560 * s, 0), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal("Setup Check", nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize)) {
+        return;
+    }
+    DrawSetupItems(false);
+    ImGui::Separator();
+    if (ImGui::Button("Done", ImVec2(120 * s, 0)) ||
+        ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+        ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
+        GameLibraryConsumeBack();
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
 void DrawHomeTab(int &tex_budget)
 {
     const float s = g_viewport_mgr.m_scale;
@@ -5639,6 +5975,7 @@ void DrawHomeTab(int &tex_budget)
             g_home_path = g_selected_path;
         }
     }
+    DrawSetupCard();
     LibraryEntry *hero = FindEntry(g_home_path);
     if (!hero) {
         hero = DefaultHomeGame();
@@ -6953,6 +7290,27 @@ void HomebrewRefresh()
     }
 }
 
+// The most recently installed homebrew, if within two weeks (for Home)
+const XboxHomebrewApp *NewestHomebrew()
+{
+    static uint64_t last_try = 0;
+    if (!g_hb.loaded && !XboxExplorerBusy() && SDL_GetTicks() - last_try > 30000) {
+        last_try = SDL_GetTicks(); // reads the drive: not every frame
+        HomebrewRefresh();
+    }
+    const XboxHomebrewApp *best = nullptr;
+    for (auto &a : g_hb.apps) {
+        if (!best || a.installed > best->installed) {
+            best = &a;
+        }
+    }
+    if (!best || best->installed <= 0 ||
+        (int64_t)time(NULL) - best->installed > 14 * 86400) {
+        return nullptr;
+    }
+    return best;
+}
+
 std::string HomebrewDisplayDir(const XboxHomebrewApp &a)
 {
     std::string d = std::string(1, a.vol) + ":" + a.dir;
@@ -7664,6 +8022,11 @@ void DrawDashSettingsTab()
             g_open_folders_popup = true;
         }
         ImGui::SameLine();
+        if (DashButton(ICON_FA_CHECK "  Check setup...", T().glass, T().white,
+                       ImVec2(0, 36 * s))) {
+            g_setup_open = true;
+        }
+        ImGui::SameLine();
         if (DashButton(ICON_FA_IMAGE "  Get covers", T().glass, T().white,
                        ImVec2(0, 36 * s))) {
             StartCoverDownload();
@@ -7766,6 +8129,43 @@ void DrawLibraryTab(int &tex_budget)
         g_online_only = !g_online_only;
     }
     ImGui::SameLine(0, 2 * s);
+    {
+        int active = (g_filter_compat != 0) + (g_filter_played != 0);
+        std::string label = active ? string_format(ICON_FA_SLIDERS "  Filter (%d)", active)
+                                   : std::string(ICON_FA_SLIDERS "  Filter");
+        if (toggle(label.c_str(), active > 0,
+                   "Filter by compatibility rating or whether you've played it")) {
+            ImGui::OpenPopup("##libfilter");
+        }
+        if (ImGui::BeginPopup("##libfilter")) {
+            ImGui::TextDisabled("Compatibility (xemu.app)");
+            const char *compat[] = { "Any", "Playable or Perfect",
+                                     "Has problems (Starts, Intro, Broken)",
+                                     "Not rated yet" };
+            for (int i = 0; i < 4; i++) {
+                if (ImGui::RadioButton(compat[i], g_filter_compat == i)) {
+                    g_filter_compat = i;
+                }
+            }
+            ImGui::Separator();
+            ImGui::TextDisabled("Played");
+            const char *played[] = { "Any", "Played", "Never played" };
+            for (int i = 0; i < 3; i++) {
+                ImGui::PushID(100 + i);
+                if (ImGui::RadioButton(played[i], g_filter_played == i)) {
+                    g_filter_played = i;
+                }
+                ImGui::PopID();
+            }
+            ImGui::Separator();
+            if (ImGui::Button("Clear filters")) {
+                g_filter_compat = g_filter_played = 0;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    }
+    ImGui::SameLine(0, 2 * s);
     if (ImGui::Button("Insignia")) {
         if (ClassicStyle()) {
             g_open_insignia_popup = true;
@@ -7859,9 +8259,14 @@ void DrawLibraryTab(int &tex_budget)
         ImGui::TextDisabled(g_entries.empty() && !g_scan_running
                                 ? "No disc images found in your game folders."
                                 : "No games match.");
+        if ((g_filter_compat || g_filter_played) && !g_entries.empty() &&
+            ImGui::Button("Clear filters")) {
+            g_filter_compat = g_filter_played = 0;
+        }
     }
     if (grid) {
-        if (g_search.empty() && !g_favorites_only) {
+        if (g_search.empty() && !g_favorites_only && !g_filter_compat &&
+            !g_filter_played) {
             DrawRecentRow(tex_budget);
         }
         DrawGrid(items, tex_budget);
@@ -8898,6 +9303,7 @@ void GameLibraryWindow::Draw()
     }
 
     DrawSettingsPopup();
+    DrawSetupPopup();
     DrawFoldersPopup();
     DrawPatchesPopup();
     DrawInsigniaPopup();
@@ -8916,6 +9322,13 @@ void GameLibraryWindow::Draw()
     ImGui::PopStyleColor(theme_count);
     ImGui::PopStyleVar(theme_vars);
     ImGui::PopStyleVar();
+}
+
+void GameLibraryOpenSetup(void)
+{
+    g_setup_open = true;
+    g_dash_tab = kTabHome;
+    game_library_window.Open();
 }
 
 std::string GameLibraryTitleName(uint32_t title_id)
@@ -8983,7 +9396,9 @@ void GameLibraryBeforeSettingsSave(void)
     // Write the user's global values, not a game's overrides
     g_saved_config = { g_config.display.quality.surface_scale,
                        g_config.display.filtering,
-                       g_config.display.fsr_sharpness };
+                       g_config.display.fsr_sharpness,
+                       g_config.display.renderer,
+                       g_config.display.quality.dynamic_resolution };
     if (g_applied.active) {
         const GameOverrides &ov = g_applied.ov;
         if (ov.surface_scale > 0 &&
@@ -8996,6 +9411,13 @@ void GameLibraryBeforeSettingsSave(void)
         if (ov.fsr_sharpness >= 0 &&
             g_config.display.fsr_sharpness == ov.fsr_sharpness) {
             g_config.display.fsr_sharpness = g_applied.base_fsr;
+        }
+        if (ov.renderer >= 0 && g_config.display.renderer == ov.renderer) {
+            g_config.display.renderer = g_applied.base_renderer;
+        }
+        if (ov.dynamic_res >= 0 &&
+            g_config.display.quality.dynamic_resolution == (ov.dynamic_res == 1)) {
+            g_config.display.quality.dynamic_resolution = g_applied.base_dynamic_res;
         }
     }
 }
@@ -9033,5 +9455,7 @@ void GameLibraryAfterSettingsSave(void)
     g_config.display.quality.surface_scale = g_saved_config.scale;
     g_config.display.filtering = g_saved_config.filtering;
     g_config.display.fsr_sharpness = g_saved_config.fsr;
+    g_config.display.renderer = g_saved_config.renderer;
+    g_config.display.quality.dynamic_resolution = g_saved_config.dynamic_res;
     DynamicResAfterSettingsSave();
 }

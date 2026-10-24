@@ -60,6 +60,8 @@ bool GameLibraryInterceptEject(void);
 void GameLibraryAfterSettingsSave(void);
 // A dialog used Esc / B this frame, so the library shouldn't also close
 void GameLibraryConsumeBack(void);
+// The setup check (MCPX, BIOS, hard disk, games folder) on the dashboard
+void GameLibraryOpenSetup(void);
 // Name of the game in the DVD drive ("" if none)
 std::string GameLibraryCurrentTitle(void);
 // Name of a game by title ID, from your library or xemu's compatibility list

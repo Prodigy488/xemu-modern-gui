@@ -36,6 +36,10 @@ finding out why a game is slow, and quality-of-life features.
 |---|---|---|
 | ![Performance Capture](docs/screenshots/perf-capture.jpg) | ![Settings](docs/screenshots/settings.jpg) | ![Setup check](docs/screenshots/setup.jpg) |
 
+| Deutsch | 日本語 | Русский |
+|---|---|---|
+| ![German](docs/screenshots/lang-de.jpg) | ![Japanese](docs/screenshots/lang-ja.jpg) | ![Russian](docs/screenshots/lang-ru.jpg) |
+
 <sub>Screenshots use original placeholder cover art (not the real box art), example compatibility ratings and invented example homebrew. The Performance Capture screenshot shows a real recording of Project Gotham Racing.</sub>
 
 ## Download
@@ -55,6 +59,21 @@ the Home tab that points out any missing files.
 
 ## What's added
 
+- **New in v1.8: languages, easy Insignia setup, voice commands.**
+  - **11 languages:** English, Español, Português (Brasil), Français,
+    Deutsch, Italiano, Polski, Русский, 日本語, 简体中文 and 한국어. It follows
+    your Windows language; change it on the welcome screen, the dashboard's
+    Settings tab or Settings > General. Japanese, Chinese and Korean use
+    fonts Windows already has. Translations were made with AI help and live
+    in [`ui/xui/lang`](ui/xui/lang); corrections are welcome.
+  - **One-click Insignia setup:** "Set up xemu for Insignia" on the
+    Insignia tab turns on networking (NAT) and Insignia's DNS. xemu answers
+    the Xbox's DNS lookups with Insignia's server, so nothing has to be
+    changed in the Xbox dashboard. "Test connection" checks that Insignia's
+    DNS answers from your PC.
+  - **Voice commands for Performance Capture (experimental, off by
+    default):** "Performance capture start", "stop" and "mark", using
+    Windows speech recognition on your PC.
 - **New in v1.7: setup and everyday polish.**
   - **Setup check:** Home shows what's missing (MCPX boot ROM, BIOS, hard
     disk image, games folder) with a button to fix each; also in Settings

@@ -15,8 +15,11 @@
 #include <filesystem>
 #include <fstream>
 
+#include <fpng.h>
+
+#include "common.hh" // first: sets up imgui (and its OpenGL backend)
 #include "actions.hh"
-#include "common.hh"
+#include "font-manager.hh"
 #include "game-library.hh"
 #include "game-shortcut.hh"
 #include "IconsFontAwesome6.h"
@@ -43,6 +46,8 @@ struct State {
     bool have_report = false;
     PerfReport report;
     std::string saved_dir, save_err;
+    bool export_pending = false;
+    std::string export_msg;
 } g;
 
 double NowMs()
@@ -320,6 +325,166 @@ void DrawReport()
 
 } // namespace
 
+namespace
+{
+// A picture of the report for posting: the frame-time graph and the main
+// findings. Drawn with ImGui into an offscreen framebuffer, after the UI
+// has rendered (see PerfCaptureAfterRender).
+bool RenderSummaryPng(const std::string &path, std::string *err)
+{
+    const int W = 1200, H = 675;
+    const PerfReport &r = g.report;
+    ImFont *font = ImGui::GetFont();
+    ImFont *big = g_font_mgr.m_menu_font_medium ? g_font_mgr.m_menu_font_medium : font;
+    ImDrawList dl(ImGui::GetDrawListSharedData());
+    dl._ResetForNewFrame();
+    dl.PushTextureID(ImGui::GetIO().Fonts->TexID);
+    dl.PushClipRect(ImVec2(0, 0), ImVec2(W, H));
+    const ImU32 text = IM_COL32(232, 236, 245, 255), dim = IM_COL32(140, 150, 175, 255),
+                accent = IM_COL32(0, 229, 255, 255), warn = IM_COL32(255, 140, 110, 255),
+                info = IM_COL32(150, 175, 220, 255);
+    dl.AddRectFilled(ImVec2(0, 0), ImVec2(W, H), IM_COL32(14, 16, 24, 255));
+    dl.AddRectFilled(ImVec2(0, 0), ImVec2(W, 6), accent);
+    float x = 40, y = 30;
+    std::string game = g.cap.game.empty() ? std::string("Performance capture") : g.cap.game;
+    dl.AddText(big, 34, ImVec2(x, y), text, game.c_str());
+    y += 44;
+    char line[256];
+    snprintf(line, sizeof(line), "%s  -  %s  -  %.0f s, %d frames",
+             g.cap.renderer.c_str(), g.cap.settings.c_str(), g.cap.duration_ms / 1000,
+             r.frames);
+    dl.AddText(font, 17, ImVec2(x, y), dim, line);
+    y += 26;
+    snprintf(line, sizeof(line),
+             "%.0f fps average, %.0f lowest    Render time %d ms typical, %d ms "
+             "worst    %d slow frames",
+             r.avg_fps, r.low1_fps, r.median_work, r.worst_work, r.slow_frames);
+    dl.AddText(font, 19, ImVec2(x, y), text, line);
+    y += 38;
+    // Frame-time graph
+    ImVec2 ga(x, y), gb(W - 40, y + 170);
+    dl.AddRectFilled(ga, gb, IM_COL32(0, 0, 0, 120), 6);
+    int top = std::max(50, r.worst_work + 5);
+    auto gy = [&](float ms) { return gb.y - (gb.y - ga.y) * std::min(1.0f, ms / top); };
+    for (float ms : { 16.7f, 33.3f }) {
+        dl.AddLine(ImVec2(ga.x, gy(ms)), ImVec2(gb.x, gy(ms)), IM_COL32(255, 255, 255, 40));
+        snprintf(line, sizeof(line), "%.0f fps", 1000 / ms);
+        dl.AddText(font, 14, ImVec2(gb.x - 64, gy(ms) - 17), dim, line);
+    }
+    double dur = std::max(1.0, g.cap.duration_ms);
+    float bw = std::max(1.0f, (gb.x - ga.x) / std::max<size_t>(1, g.cap.frames.size()));
+    for (auto &f : g.cap.frames) {
+        float fx = ga.x + (float)(f.t_ms / dur) * (gb.x - ga.x);
+        bool slow = f.work_ms > r.slow_threshold;
+        dl.AddLine(ImVec2(fx, gb.y), ImVec2(fx, gy((float)f.work_ms)),
+                   slow ? IM_COL32(255, 80, 70, 230) : IM_COL32(90, 200, 120, 170), bw);
+    }
+    for (double m : g.cap.marks_ms) {
+        float fx = ga.x + (float)(m / dur) * (gb.x - ga.x);
+        dl.AddLine(ImVec2(fx, ga.y), ImVec2(fx, gb.y), IM_COL32(255, 210, 0, 255), 2);
+    }
+    dl.AddText(font, 14, ImVec2(ga.x, gb.y + 6), dim,
+               "Each frame's render time (red = slow, yellow = glitch marked)");
+    y = gb.y + 34;
+    // The main findings
+    int shown = 0;
+    for (auto &f : r.findings) {
+        if (shown >= 3 || y > H - 90) {
+            break;
+        }
+        ImU32 col = f.severity == 2 ? warn : f.severity == 1 ? IM_COL32(240, 200, 80, 255) : info;
+        dl.AddText(font, 21, ImVec2(x, y), col, f.title.c_str());
+        y += 28;
+        ImVec2 ts = font->CalcTextSizeA(17, FLT_MAX, W - 2 * x, f.detail.c_str());
+        // The lead finding in full, the rest briefly
+        float h = std::min(ts.y, 17.0f * 1.2f * (shown == 0 ? 4 : 2));
+        dl.PushClipRect(ImVec2(x, y), ImVec2(W - x, y + h), true);
+        dl.AddText(font, 17, ImVec2(x, y), text, f.detail.c_str(), nullptr, W - 2 * x);
+        dl.PopClipRect();
+        y += h + 16;
+        shown++;
+    }
+    dl.AddText(font, 14, ImVec2(x, H - 30), dim,
+               "xemu Modern GUI Performance Capture  -  experimental, unofficial xemu "
+               "fork, not supported by the xemu project");
+    dl.PopClipRect();
+    dl.PopTextureID();
+
+    ImDrawData dd;
+    dd.Valid = true;
+    dd.DisplayPos = ImVec2(0, 0);
+    dd.DisplaySize = ImVec2(W, H);
+    dd.FramebufferScale = ImVec2(1, 1);
+    dd.OwnerViewport = ImGui::GetMainViewport();
+    dd.AddDrawList(&dl);
+
+    GLint prev_fb = 0, prev_viewport[4];
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fb);
+    glGetIntegerv(GL_VIEWPORT, prev_viewport);
+    GLuint fb = 0, tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, W, H, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glGenFramebuffers(1, &fb);
+    glBindFramebuffer(GL_FRAMEBUFFER, fb);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    bool ok_fb = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    std::vector<uint8_t> px((size_t)W * H * 4), flip((size_t)W * H * 4);
+    if (ok_fb) {
+        glViewport(0, 0, W, H);
+        glClearColor(0, 0, 0, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        ImGui_ImplOpenGL3_RenderDrawData(&dd);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, prev_fb);
+    glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
+    glDeleteFramebuffers(1, &fb);
+    glDeleteTextures(1, &tex);
+    if (!ok_fb) {
+        *err = "Couldn't draw the summary picture";
+        return false;
+    }
+    for (int row = 0; row < H; row++) {
+        memcpy(&flip[(size_t)row * W * 4], &px[(size_t)(H - 1 - row) * W * 4], W * 4);
+    }
+    for (size_t i = 3; i < flip.size(); i += 4) {
+        flip[i] = 255;
+    }
+    std::vector<uint8_t> png;
+    if (!fpng::fpng_encode_image_to_memory(flip.data(), W, H, 4, png)) {
+        *err = "Couldn't encode the picture";
+        return false;
+    }
+    if (!WriteText(fs::u8path(path), std::string((const char *)png.data(), png.size()))) {
+        *err = "Couldn't save " + path;
+        return false;
+    }
+    return true;
+}
+} // namespace
+
+void PerfCaptureAfterRender(void)
+{
+    if (!g.export_pending) {
+        return;
+    }
+    g.export_pending = false;
+    if (g.saved_dir.empty()) {
+        g.export_msg = "Record and save a capture first";
+        return;
+    }
+    std::string path = (fs::u8path(g.saved_dir) / "summary.png").u8string();
+    std::string err;
+    if (RenderSummaryPng(path, &err)) {
+        g.export_msg = "Saved summary.png in the capture folder";
+        RevealFileInFolder(path);
+    } else {
+        g.export_msg = err;
+    }
+}
+
 bool PerfCaptureRecording(void)
 {
     return g.recording;
@@ -469,6 +634,15 @@ void PerfCaptureDraw(void)
             xemu_queue_notification("Report copied");
         }
         ImGui::SetItemTooltip("Paste it into an issue or a message");
+        ImGui::SameLine();
+        if (ImGui::Button(ICON_FA_IMAGE " Save picture")) {
+            g.export_pending = true; // drawn after this frame's UI
+        }
+        ImGui::SetItemTooltip("summary.png: the graph and main findings, for "
+                              "posting");
+        if (!g.export_msg.empty()) {
+            ImGui::TextDisabled("%s", g.export_msg.c_str());
+        }
         ImGui::SameLine();
         ImGui::TextDisabled("trace.json opens in ui.perfetto.dev");
         ImGui::Spacing();

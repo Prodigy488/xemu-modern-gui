@@ -19,6 +19,8 @@
 void PerfCaptureUpdate(void);
 // The window and the recording indicator
 void PerfCaptureDraw(void);
+// After the UI has rendered: draws a requested summary picture
+void PerfCaptureAfterRender(void);
 
 void PerfCaptureOpenWindow(void);
 void PerfCaptureToggleRecording(void);

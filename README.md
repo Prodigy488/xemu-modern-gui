@@ -21,7 +21,7 @@ quality-of-life features on top of the official release.
 |---|---|---|
 | ![Blades](docs/screenshots/blades.jpg) | ![Metro](docs/screenshots/metro.jpg) | ![Classic](docs/screenshots/classic.jpg) |
 
-<sub>Screenshots use placeholder cover art and example compatibility ratings.</sub>
+<sub>Screenshots use original placeholder cover art (not the real box art) and example compatibility ratings.</sub>
 
 ## Download
 

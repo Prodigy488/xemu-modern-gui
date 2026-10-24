@@ -147,12 +147,14 @@ void Save()
     g.saved_dir = dir.u8string();
 }
 
+void PollFrames();
+
 void Stop()
 {
     if (!g.recording) {
         return;
     }
-    PerfCaptureUpdate(); // pick up the last frames
+    PollFrames(); // the last frames (not PerfCaptureUpdate: it calls Stop)
     g.recording = false;
     g.cap.duration_ms = NowMs();
     g.report = AnalyzePerf(g.cap);
@@ -328,11 +330,11 @@ void PerfCaptureMarkGlitch(void)
     xemu_queue_notification("Glitch marked");
 }
 
-void PerfCaptureUpdate(void)
+namespace
 {
-    if (!g.recording) {
-        return;
-    }
+// Copy frames the profiler finished since the last look
+void PollFrames()
+{
     double now = NowMs();
     // New frames since the last look (the profiler keeps the last 300)
     unsigned int count = g_nv2a_stats.frame_count;
@@ -356,8 +358,17 @@ void PerfCaptureUpdate(void)
         g.cap.samples.push_back({ now, (int)g_nv2a_stats.increment_fps,
                                   ImGui::GetIO().Framerate });
     }
+}
+} // namespace
+
+void PerfCaptureUpdate(void)
+{
+    if (!g.recording) {
+        return;
+    }
+    PollFrames();
     int len = kLengths[g.length];
-    if ((len && now >= len * 1000.0) || g.cap.frames.size() > 200000) {
+    if ((len && NowMs() >= len * 1000.0) || g.cap.frames.size() > 200000) {
         Stop();
     }
 }

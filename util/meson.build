@@ -67,9 +67,8 @@ util_ss.add(files('int128.c'))
 util_ss.add(files('memalign.c'))
 util_ss.add(files('interval-tree.c'))
 util_ss.add(files('lockcnt.c'))
-if host_os == 'windows'
-  util_ss.add(files('miniz/miniz.c'))
-endif
+# miniz: updater (Windows) and homebrew store downloads (all platforms)
+util_ss.add(files('miniz/miniz.c'))
 util_ss.add(files('fast-hash.c'))
 
 if have_user

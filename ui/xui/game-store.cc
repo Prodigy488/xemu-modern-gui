@@ -13,7 +13,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <nlohmann/json.hpp>
+
+extern "C" {
+#include "util/miniz/miniz.h"
+}
 
 using json = nlohmann::json;
 
@@ -306,4 +312,82 @@ std::string StoreSafeFolderName(const std::string &name)
         }
     }
     return out.empty() ? "App" : out;
+}
+
+namespace fs = std::filesystem;
+
+namespace
+{
+size_t WriteToStream(void *opaque, mz_uint64 ofs, const void *buf, size_t n)
+{
+    (void)ofs;
+    auto *o = static_cast<std::ofstream *>(opaque);
+    o->write((const char *)buf, (std::streamsize)n);
+    return o->good() ? n : 0;
+}
+} // namespace
+
+bool StoreExtractZip(const std::string &zip_path, const std::string &dest_dir,
+                     std::string *err)
+{
+    std::ifstream in(fs::u8path(zip_path), std::ios::binary);
+    std::string data((std::istreambuf_iterator<char>(in)), {});
+    if (data.size() < 4 || data.compare(0, 2, "PK") != 0) {
+        *err = "The download isn't a zip file";
+        return false;
+    }
+    mz_zip_archive zip;
+    mz_zip_zero_struct(&zip);
+    if (!mz_zip_reader_init_mem(&zip, data.data(), data.size(), 0)) {
+        *err = "The zip file is damaged";
+        return false;
+    }
+    std::error_code ec;
+    fs::path dest = fs::u8path(dest_dir);
+    fs::create_directories(dest, ec);
+    bool ok = true;
+    mz_uint n = mz_zip_reader_get_num_files(&zip);
+    for (mz_uint i = 0; i < n && ok; i++) {
+        mz_zip_archive_file_stat st;
+        if (!mz_zip_reader_file_stat(&zip, i, &st)) {
+            continue;
+        }
+        std::string name = st.m_filename;
+        std::replace(name.begin(), name.end(), '\\', '/');
+        fs::path rel = fs::u8path(name).lexically_normal();
+        if (name.empty() || rel.is_absolute() || name[0] == '/' ||
+            (!rel.empty() && *rel.begin() == "..") || name.find(':') != std::string::npos) {
+            *err = "The zip file contains an unsafe path: " + name;
+            ok = false;
+            break;
+        }
+        fs::path out = dest / rel;
+        if (mz_zip_reader_is_file_a_directory(&zip, i)) {
+            fs::create_directories(out, ec);
+            continue;
+        }
+        fs::create_directories(out.parent_path(), ec);
+        std::ofstream o(out, std::ios::binary | std::ios::trunc);
+        if (!o || !mz_zip_reader_extract_to_callback(&zip, i, WriteToStream, &o, 0)) {
+            *err = "Couldn't unpack " + name;
+            ok = false;
+        }
+    }
+    mz_zip_reader_end(&zip);
+    return ok;
+}
+
+std::string StoreAppRoot(const std::string &dir)
+{
+    std::error_code ec;
+    fs::path only;
+    int count = 0;
+    for (auto &e : fs::directory_iterator(fs::u8path(dir), ec)) {
+        count++;
+        only = e.path();
+    }
+    if (count == 1 && fs::is_directory(only, ec)) {
+        return only.u8string();
+    }
+    return dir;
 }

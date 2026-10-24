@@ -71,3 +71,12 @@ std::string StoreDriveConfirmUrl(const std::string &html);
 std::string StoreSafeFolderName(const std::string &name);
 
 std::string StoreUrlEncode(const std::string &s);
+
+// Unpack a zip file into dest_dir (created). Entries that would land outside
+// it ("..", absolute paths) are refused. False with *err on failure.
+bool StoreExtractZip(const std::string &zip_path, const std::string &dest_dir,
+                     std::string *err);
+
+// If dir holds nothing but a single folder, that folder (zips often wrap
+// the app in one); otherwise dir itself
+std::string StoreAppRoot(const std::string &dir);

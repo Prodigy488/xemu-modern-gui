@@ -17,6 +17,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <set>
@@ -30,8 +31,10 @@
 #include "game-library-scan.hh"
 #include "rtx-video.hh"
 #include "xbox-drive-explorer.hh"
+#include "xbox-drive.hh"
 #include "game-patches.hh"
 #include "game-compat.hh"
+#include "game-store.hh"
 #include "game-preview.hh"
 #include "insignia-titles.hh"
 #include "jmp-index.hh"
@@ -1194,6 +1197,22 @@ const Box3DArt *Get3DArt(const LibraryEntry &e)
     return &b;
 }
 
+// Homebrew store covers and screenshots ("c:<id>", "s:<id>")
+struct StoreImage {
+    GLuint tex = 0;
+    int w = 0, h = 0;
+    bool requested = false;
+};
+std::map<std::string, StoreImage> g_store_images;
+
+void FreeStoreImages()
+{
+    for (auto &kv : g_store_images) {
+        DeleteTextureLater(kv.second.tex);
+    }
+    g_store_images.clear();
+}
+
 void FreeBox3DArt()
 {
     for (auto &kv : g_box3d) {
@@ -1215,6 +1234,16 @@ void UploadDecodedImages(int max_uploads)
     for (auto &r : ready) {
         if (r.key.compare(0, 5, "shot:") == 0) {
             StoreScreenshotThumb(r.key.substr(5), r);
+            continue;
+        }
+        if (r.key.compare(0, 6, "store:") == 0) {
+            auto it = g_store_images.find(r.key.substr(6));
+            if (it != g_store_images.end() && !r.rgba.empty()) {
+                DeleteTextureLater(it->second.tex);
+                it->second.tex = UploadTexture(r.rgba.data(), r.w, r.h);
+                it->second.w = r.w;
+                it->second.h = r.h;
+            }
             continue;
         }
         if (r.key.compare(0, 6, "box3d:") == 0) {
@@ -4505,14 +4534,14 @@ void UpdateDiscordPresence()
 
 // ---------------------------------------------------------------------------
 // Dashboard: a console-style home screen with tabs (Home, Library, Insignia,
-// Media, Patches, Settings), switched with LB/RB
+// Media, Drive, Store, Patches, Settings), switched with LB/RB
 // ---------------------------------------------------------------------------
 
 enum DashTab { kTabHome, kTabLibrary, kTabInsignia, kTabMedia, kTabDrive,
-               kTabPatches, kTabSettings, kTabCount };
-const char *const kTabNames[kTabCount] = { "Home",    "Library", "Insignia",
-                                           "Media",   "Drive",   "Patches",
-                                           "Settings" };
+               kTabStore, kTabPatches, kTabSettings, kTabCount };
+const char *const kTabNames[kTabCount] = { "Home",  "Library", "Insignia",
+                                           "Media", "Drive",   "Store",
+                                           "Patches", "Settings" };
 int g_dash_tab = kTabHome;
 
 std::string g_home_path;        // game shown in the Home hero
@@ -5879,6 +5908,903 @@ void DrawMediaTab(int &tex_budget)
     (void)tex_budget;
 }
 
+// --- Homebrew store ------------------------------------------------------------
+//
+// XboxHomebrew.store (Team Resurgent): browse homebrew, download it, unpack
+// it and copy it to E:\Apps on the Xbox hard drive. Network work runs on
+// background queues; results are applied on the main thread by StorePump().
+
+constexpr int kStorePage = 40;
+
+// A background thread running posted work in order. Heap-allocated and never
+// freed: a queue may be in the middle of a download when xemu exits.
+class StoreQueue
+{
+public:
+    void Post(std::function<void()> fn)
+    {
+        std::lock_guard<std::mutex> lock(m_);
+        q_.push_back(std::move(fn));
+        if (!started_) {
+            started_ = true;
+            std::thread([this] { Run(); }).detach();
+        }
+        cv_.notify_one();
+    }
+    void Clear()
+    {
+        std::lock_guard<std::mutex> lock(m_);
+        q_.clear();
+    }
+
+private:
+    void Run()
+    {
+        Error *err = NULL;
+        if (!ensure_libcurl_initialized(&err) && err) {
+            error_free(err);
+        }
+        for (;;) {
+            std::function<void()> fn;
+            {
+                std::unique_lock<std::mutex> lock(m_);
+                cv_.wait(lock, [this] { return !q_.empty(); });
+                fn = std::move(q_.front());
+                q_.pop_front();
+            }
+            fn();
+        }
+    }
+    std::mutex m_;
+    std::condition_variable cv_;
+    std::deque<std::function<void()>> q_;
+    bool started_ = false;
+};
+
+StoreQueue *const g_store_api = new StoreQueue; // lists and versions
+StoreQueue *const g_store_img = new StoreQueue; // covers and screenshots
+StoreQueue *const g_store_dl = new StoreQueue;  // installs
+
+std::mutex g_store_main_mutex;
+std::vector<std::function<void()>> *const g_store_main =
+    new std::vector<std::function<void()>>;
+
+void StoreOnMain(std::function<void()> fn)
+{
+    std::lock_guard<std::mutex> lock(g_store_main_mutex);
+    g_store_main->push_back(std::move(fn));
+}
+
+// Download progress, shared with the download thread
+struct StoreTransfer {
+    std::atomic<uint64_t> now{ 0 }, total{ 0 };
+    std::atomic<bool> cancel{ false };
+    std::atomic<int> phase{ 0 }; // 0 downloading, 1 unpacking
+    std::atomic<int> file{ 0 };
+    int files = 1;
+    uint64_t last_now = 0, last_change = 0; // stall detection (download thread)
+};
+
+int StoreProgressCb(http_progress_cb_info *p)
+{
+    auto *t = static_cast<StoreTransfer *>(p->userptr);
+    uint64_t ms = SDL_GetTicks();
+    if (p->dlnow != t->last_now || !t->last_change) {
+        t->last_now = p->dlnow;
+        t->last_change = ms;
+    }
+    t->now = p->dlnow;
+    t->total = p->dltotal;
+    // Give up on a connection that has gone quiet for 30 s
+    return (t->cancel || ms - t->last_change > 30000) ? 1 : 0;
+}
+
+// GET into *body; the HTTP status, or <= 0 if the server couldn't be reached
+int StoreGet(const std::string &url, std::string *body, StoreTransfer *t = nullptr)
+{
+    StoreTransfer local;
+    if (!t) {
+        t = &local;
+    }
+    t->last_change = 0;
+    http_progress_cb_info pi = {};
+    pi.progress = StoreProgressCb;
+    pi.userptr = t;
+    GByteArray *b = g_byte_array_new();
+    int code = http_get(url.c_str(), b, &pi, NULL);
+    body->assign((const char *)b->data, b->len);
+    g_byte_array_unref(b);
+    return code;
+}
+
+std::string StoreHttpError(int code)
+{
+    if (code <= 0) {
+        return "Couldn't reach XboxHomebrew.store. Check your internet "
+               "connection.";
+    }
+    return string_format("XboxHomebrew.store answered with an error (HTTP %d).",
+                         code);
+}
+
+// Ids are base64url; keep file names to that
+std::string StoreFileId(const std::string &id)
+{
+    std::string out;
+    for (char c : id) {
+        out += (isalnum((unsigned char)c) || c == '-' || c == '_') ? c : '_';
+    }
+    return out.empty() ? "_" : out;
+}
+
+fs::path StoreCacheDir()
+{
+    return IconCacheDir() / "store";
+}
+
+bool WriteFileAtomic(const fs::path &path, const std::string &data)
+{
+    std::error_code ec;
+    fs::create_directories(path.parent_path(), ec);
+    fs::path tmp = path;
+    tmp += ".tmp";
+    {
+        std::ofstream o(tmp, std::ios::binary | std::ios::trunc);
+        o.write(data.data(), (std::streamsize)data.size());
+        if (!o) {
+            return false;
+        }
+    }
+    fs::rename(tmp, path, ec);
+    return !ec;
+}
+
+struct StoreState {
+    bool started = false;
+    std::vector<StoreCategory> cats;
+    std::string category; // "" for all
+    char search[64] = {};
+    std::string search_applied;
+    double search_edit_t = -1;
+
+    std::vector<StoreApp> apps;
+    int offset = 0;
+    bool more = false, loading = false;
+    std::string err;
+    uint32_t gen = 0;
+
+    std::string sel; // selected app id
+    std::vector<StoreVersion> versions;
+    bool versions_loading = false;
+    std::string versions_err;
+    int ver = 0;
+
+    // Install
+    enum Phase { Idle, Downloading, Copying, Done, Failed } phase = Idle;
+    std::shared_ptr<StoreTransfer> xfer;
+    std::string inst_app, inst_name, inst_msg;
+    fs::path staging;
+    bool confirm = false;
+} g_store;
+
+const StoreApp *StoreSelected()
+{
+    for (auto &a : g_store.apps) {
+        if (a.id == g_store.sel) {
+            return &a;
+        }
+    }
+    return nullptr;
+}
+
+void QueueStoreImage(const std::string &key, const fs::path &file, int max_h)
+{
+    ImageJob job{ "store:" + key, { file }, max_h };
+    {
+        std::lock_guard<std::mutex> lock(g_img_mutex);
+        if (g_img_quit) {
+            return;
+        }
+        g_img_jobs.push_back(std::move(job));
+    }
+    if (!g_img_thread.joinable()) {
+        g_img_thread = std::thread(ImageWorker);
+    }
+    g_img_cv.notify_one();
+}
+
+// Cover ("c:<id>") or screenshot ("s:<id>"), downloaded once into the cache
+const StoreImage *GetStoreImage(const std::string &id, bool screenshot)
+{
+    std::string key = (screenshot ? "s:" : "c:") + id;
+    StoreImage &img = g_store_images[key];
+    if (img.requested) {
+        return &img;
+    }
+    img.requested = true;
+    fs::path file = StoreCacheDir() / (screenshot ? "screens" : "covers") /
+                    (StoreFileId(id) + ".img");
+    std::string url = screenshot ? StoreUrlScreenshot(id, 640, 360)
+                                 : StoreUrlCover(id, 240, 336);
+    int max_h = screenshot ? 360 : 336;
+    g_store_img->Post([key, file, url, max_h] {
+        std::error_code ec;
+        if (!fs::exists(file, ec)) {
+            std::string body;
+            int w, h, n;
+            if (StoreGet(url, &body) != 200 ||
+                !stbi_info_from_memory((const stbi_uc *)body.data(),
+                                       (int)body.size(), &w, &h, &n) ||
+                !WriteFileAtomic(file, body)) {
+                return;
+            }
+        }
+        StoreOnMain([key, file, max_h] { QueueStoreImage(key, file, max_h); });
+    });
+    return &img;
+}
+
+void StoreFetchApps(bool reset)
+{
+    if (reset) {
+        g_store.apps.clear();
+        g_store.offset = 0;
+        g_store.more = false;
+        g_store.gen++;
+    }
+    g_store.loading = true;
+    g_store.err.clear();
+    uint32_t gen = g_store.gen;
+    std::string url = StoreUrlApps(g_store.offset, kStorePage, g_store.category,
+                                   g_store.search_applied);
+    g_store_api->Post([gen, url] {
+        std::string body;
+        int code = StoreGet(url, &body);
+        std::vector<StoreApp> apps;
+        bool ok = code == 200 && ParseStoreApps(body, &apps);
+        StoreOnMain([gen, ok, code, apps] {
+            if (gen != g_store.gen) {
+                return; // the filter changed meanwhile
+            }
+            g_store.loading = false;
+            if (!ok) {
+                g_store.err = code == 200 ? "The store sent something unexpected."
+                                          : StoreHttpError(code);
+                return;
+            }
+            g_store.offset += (int)apps.size();
+            g_store.more = (int)apps.size() >= kStorePage;
+            for (auto &a : apps) {
+                if (StoreAppAllowed(a)) {
+                    g_store.apps.push_back(a);
+                }
+            }
+        });
+    });
+}
+
+void StoreStart()
+{
+    if (g_store.started) {
+        return;
+    }
+    g_store.started = true;
+    g_store_api->Post([] {
+        std::string body;
+        std::vector<StoreCategory> cats;
+        if (StoreGet(StoreUrlCategories(), &body) != 200 ||
+            !ParseStoreCategories(body, &cats)) {
+            return; // the app list reports connection problems
+        }
+        StoreOnMain([cats] {
+            g_store.cats.clear();
+            for (auto &c : cats) {
+                if (StoreCategoryAllowed(c.name)) {
+                    g_store.cats.push_back(c);
+                }
+            }
+        });
+    });
+    StoreFetchApps(true);
+}
+
+void StoreSelect(const std::string &id)
+{
+    if (g_store.sel == id) {
+        return;
+    }
+    g_store.sel = id;
+    g_store.versions.clear();
+    g_store.versions_err.clear();
+    g_store.versions_loading = true;
+    g_store.ver = 0;
+    g_store_api->Post([id] {
+        std::string body;
+        int code = StoreGet(StoreUrlVersions(id), &body);
+        std::vector<StoreVersion> versions;
+        bool ok = code == 200 && ParseStoreVersions(body, &versions);
+        StoreOnMain([id, ok, code, versions] {
+            if (g_store.sel != id) {
+                return;
+            }
+            g_store.versions_loading = false;
+            if (!ok) {
+                g_store.versions_err = StoreHttpError(code);
+                return;
+            }
+            g_store.versions = versions;
+            g_store.ver = 0;
+            const StoreApp *app = StoreSelected();
+            for (size_t i = 0; app && i < versions.size(); i++) {
+                if (versions[i].id == app->latest_version) {
+                    g_store.ver = (int)i;
+                }
+            }
+        });
+    });
+}
+
+bool StoreInstallBusy()
+{
+    return g_store.phase == StoreState::Downloading ||
+           g_store.phase == StoreState::Copying;
+}
+
+void StoreDownloadDone(const std::string &err, const fs::path &content)
+{
+    if (!err.empty()) {
+        g_store.phase = StoreState::Failed;
+        g_store.inst_msg = err;
+        std::error_code ec;
+        fs::remove_all(g_store.staging, ec);
+        return;
+    }
+    std::string e;
+    if (!XboxExplorerInstallFolder(content.u8string(), 'E', "/Apps", g_store.inst_name,
+                                   "Installing " + g_store.inst_app +
+                                       " to E:\\Apps\\" + g_store.inst_name,
+                                   &e)) {
+        g_store.phase = StoreState::Failed;
+        g_store.inst_msg = e;
+        std::error_code ec;
+        fs::remove_all(g_store.staging, ec);
+        return;
+    }
+    g_store.phase = StoreState::Copying;
+}
+
+void StoreInstall(const StoreApp &app, const StoreVersion &v)
+{
+    if (StoreInstallBusy()) {
+        return;
+    }
+    g_store.inst_app = app.name;
+    g_store.inst_name =
+        StoreSafeFolderName(v.folder_name.empty() ? app.name : v.folder_name);
+    g_store.inst_msg.clear();
+    g_store.staging = StoreCacheDir() / "downloads" / StoreFileId(v.id);
+    std::error_code ec;
+    fs::remove_all(g_store.staging, ec);
+    auto xfer = std::make_shared<StoreTransfer>();
+    xfer->files = std::max<int>(1, (int)v.files.size());
+    g_store.xfer = xfer;
+    g_store.phase = StoreState::Downloading;
+    fs::path stage = g_store.staging;
+    std::string vid = v.id;
+    std::vector<std::string> files = v.files;
+    g_store_dl->Post([xfer, stage, vid, files] {
+        std::string err;
+        fs::path content = stage / "content";
+        std::error_code ec;
+        fs::create_directories(content, ec);
+        for (int i = 0; i < xfer->files && err.empty(); i++) {
+            xfer->file = i;
+            xfer->phase = 0;
+            xfer->now = 0;
+            xfer->total = 0;
+            std::string body;
+            int code = StoreGet(StoreUrlDownload(vid, i), &body, xfer.get());
+            bool zip = body.size() >= 4 && body.compare(0, 4, "PK\x03\x04") == 0;
+            if (code == 200 && !zip) {
+                // Large files on Google Drive answer with a confirmation page
+                std::string confirm = StoreDriveConfirmUrl(body);
+                if (!confirm.empty()) {
+                    code = StoreGet(confirm, &body, xfer.get());
+                    zip = body.size() >= 4 && body.compare(0, 4, "PK\x03\x04") == 0;
+                }
+            }
+            if (xfer->cancel) {
+                err = "Cancelled.";
+                break;
+            }
+            if (code != 200 || body.empty()) {
+                err = code == 200   ? std::string("The download was empty.")
+                      : code <= 0 ? StoreHttpError(code)
+                                  : string_format("The download failed (HTTP %d). "
+                                                  "Try again later.",
+                                                  code);
+                break;
+            }
+            if (zip) {
+                xfer->phase = 1;
+                fs::path z = stage / "download.zip";
+                if (!WriteFileAtomic(z, body)) {
+                    err = "Couldn't save the download (is the disk full?)";
+                    break;
+                }
+                body.clear();
+                body.shrink_to_fit();
+                // Each zip on its own first: one wrapped in a single folder
+                // ("2H4Ux/default.xbe") is unwrapped
+                fs::path unz = stage / string_format("zip%d", i);
+                if (!StoreExtractZip(z.u8string(), unz.u8string(), &err)) {
+                    break;
+                }
+                fs::remove(z, ec);
+                fs::path root = fs::u8path(StoreAppRoot(unz.u8string()));
+                for (auto &e : fs::directory_iterator(root, ec)) {
+                    fs::path to = content / e.path().filename();
+                    fs::remove_all(to, ec);
+                    fs::rename(e.path(), to, ec);
+                    if (ec) {
+                        err = "Couldn't unpack the download (is the disk full?)";
+                        break;
+                    }
+                }
+                fs::remove_all(unz, ec);
+                continue;
+            }
+            size_t lead = body.find_first_not_of(" \t\r\n");
+            if (lead != std::string::npos && body[lead] == '<') {
+                err = "The download link gave a web page instead of the file. "
+                      "Try again later.";
+                break;
+            }
+            std::string name = i < (int)files.size() && !files[i].empty()
+                                   ? fs::u8path(files[i]).filename().u8string()
+                                   : std::string("download.bin");
+            std::string why;
+            if (!XboxValidName(name, &why)) {
+                name = StoreSafeFolderName(name);
+            }
+            if (!WriteFileAtomic(content / fs::u8path(name), body)) {
+                err = "Couldn't save the download (is the disk full?)";
+            }
+        }
+        StoreOnMain([err, content] { StoreDownloadDone(err, content); });
+    });
+}
+
+// Every frame (also while the store isn't shown)
+void StorePump()
+{
+    std::vector<std::function<void()>> fns;
+    {
+        std::lock_guard<std::mutex> lock(g_store_main_mutex);
+        fns.swap(*g_store_main);
+    }
+    for (auto &fn : fns) {
+        fn();
+    }
+    if (g_store.phase == StoreState::Copying && !XboxExplorerBusy()) {
+        bool error = false;
+        std::string status = XboxExplorerStatus(&error);
+        g_store.phase = error ? StoreState::Failed : StoreState::Done;
+        g_store.inst_msg =
+            error ? status
+                  : g_store.inst_app + " is in E:\\Apps\\" + g_store.inst_name +
+                        ". Start it from a dashboard that lists apps, such as "
+                        "XBMC4Gamers, or from the Drive tab's E: drive.";
+        std::error_code ec;
+        fs::remove_all(g_store.staging, ec);
+    }
+}
+
+std::string StoreSize(uint64_t n)
+{
+    if (n >= (1ull << 30)) {
+        return string_format("%.2f GB", n / 1073741824.0);
+    }
+    if (n >= (1ull << 20)) {
+        return string_format("%.1f MB", n / 1048576.0);
+    }
+    return string_format("%.0f KB", std::max<uint64_t>(n, 1) / 1024.0 + 0.5);
+}
+
+// Image scaled to cover [a, b], cropped to keep its shape
+void StoreImageFill(ImDrawList *dl, const StoreImage *img, ImVec2 a, ImVec2 b, float r)
+{
+    float bw = b.x - a.x, bh = b.y - a.y;
+    float ia = (float)img->w / img->h, ba = bw / bh;
+    ImVec2 uv0(0, 0), uv1(1, 1);
+    if (ia > ba) {
+        float u = ba / ia;
+        uv0.x = (1 - u) / 2;
+        uv1.x = 1 - uv0.x;
+    } else {
+        float v = ia / ba;
+        uv0.y = (1 - v) / 2;
+        uv1.y = 1 - uv0.y;
+    }
+    ShapeImage(dl, (ImTextureID)(intptr_t)img->tex, a, b, uv0, uv1,
+               IM_COL32_WHITE, r);
+}
+
+// Placeholder: the app's initials on a tinted card
+void StorePlaceholder(ImDrawList *dl, const std::string &name, ImVec2 a, ImVec2 b,
+                      float r)
+{
+    uint32_t h = 2166136261u;
+    for (char c : name) {
+        h = (h ^ (uint8_t)c) * 16777619u;
+    }
+    ImU32 col = IM_COL32(40 + h % 60, 50 + (h >> 8) % 60, 70 + (h >> 16) % 70, 255);
+    ShapeFill(dl, a, b, col, r);
+    std::string ini;
+    for (size_t i = 0; i < name.size() && ini.size() < 2; i++) {
+        if (isalnum((unsigned char)name[i]) &&
+            (i == 0 || name[i - 1] == ' ' || ini.empty())) {
+            ini += (char)toupper((unsigned char)name[i]);
+        }
+    }
+    ImFont *f = FontOr(g_font_mgr.m_menu_font_medium);
+    float fs_ = f->FontSize;
+    ImVec2 ts = f->CalcTextSizeA(fs_, FLT_MAX, 0, ini.c_str());
+    dl->AddText(f, fs_, ImVec2((a.x + b.x - ts.x) / 2, (a.y + b.y - ts.y) / 2),
+                IM_COL32(255, 255, 255, 170), ini.c_str());
+}
+
+// One app card; true when chosen
+bool StoreCard(const StoreApp &app, float w)
+{
+    const float s = g_viewport_mgr.m_scale;
+    float cover_h = w * 1.4f;
+    float h = cover_h + ImGui::GetFontSize() * 2.6f;
+    ImVec2 a = ImGui::GetCursorScreenPos();
+    ImGui::PushID(app.id.c_str());
+    bool pressed = ImGui::InvisibleButton("##card", ImVec2(w, h),
+                                          ImGuiButtonFlags_EnableNav);
+    bool hovered = ImGui::IsItemHovered() || ImGui::IsItemFocused();
+    if (ImGui::IsItemFocused() && g_store.sel != app.id &&
+        ImGui::GetIO().NavVisible) {
+        StoreSelect(app.id); // follow the controller
+    }
+    ImGui::PopID();
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 cb(a.x + w, a.y + cover_h);
+    float r = 10 * s;
+    if (ImGui::IsRectVisible(a, ImVec2(a.x + w, a.y + h))) {
+        const StoreImage *img = GetStoreImage(app.id, false);
+        if (img->tex) {
+            StoreImageFill(dl, img, a, cb, r);
+        } else {
+            StorePlaceholder(dl, app.name, a, cb, r);
+        }
+        bool sel = g_store.sel == app.id;
+        if (sel || hovered) {
+            ShapeStroke(dl, a, cb, sel ? T().accent : Alpha(T().accent, 140), r,
+                        (sel ? 3.0f : 2.0f) * s);
+        }
+        float ty = cb.y + 6 * s;
+        ImGui::PushClipRect(ImVec2(a.x, ty), ImVec2(a.x + w, a.y + h), true);
+        dl->AddText(ImVec2(a.x + 2 * s, ty), T().text, app.name.c_str());
+        dl->AddText(ImVec2(a.x + 2 * s, ty + ImGui::GetFontSize() * 1.15f), T().dim,
+                    app.author.empty() ? app.category.c_str() : app.author.c_str());
+        ImGui::PopClipRect();
+    }
+    return pressed;
+}
+
+void DrawStoreDetails(const StoreApp &app, float w)
+{
+    const float s = g_viewport_mgr.m_scale;
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    // Screenshot banner, cover over its corner
+    ImVec2 a = ImGui::GetCursorScreenPos();
+    float bh = w * 9 / 16;
+    const StoreImage *shot = GetStoreImage(app.id, true);
+    ImVec2 bb(a.x + w, a.y + bh);
+    if (shot->tex) {
+        StoreImageFill(dl, shot, a, bb, 12 * s);
+    } else {
+        ShapeFill(dl, a, bb, Alpha(T().accent, 26), 12 * s);
+    }
+    dl->AddRectFilledMultiColor(ImVec2(a.x, a.y + bh * 0.45f), bb, IM_COL32(0, 0, 0, 0),
+                                IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 200),
+                                IM_COL32(0, 0, 0, 200));
+    float cw = std::min(110 * s, w * 0.28f), ch = cw * 1.4f;
+    ImVec2 ca(a.x + 14 * s, bb.y - ch * 0.6f), cbb(ca.x + cw, ca.y + ch);
+    const StoreImage *cover = GetStoreImage(app.id, false);
+    if (cover->tex) {
+        StoreImageFill(dl, cover, ca, cbb, 8 * s);
+    } else {
+        StorePlaceholder(dl, app.name, ca, cbb, 8 * s);
+    }
+    ShapeStroke(dl, ca, cbb, IM_COL32(255, 255, 255, 60), 8 * s, 1.0f * s);
+    ImGui::SetCursorScreenPos(ImVec2(cbb.x + 14 * s, bb.y + 8 * s));
+    ImGui::BeginGroup();
+    ImGui::PushFont(FontOr(g_font_mgr.m_menu_font_small));
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextUnformatted(app.name.c_str());
+    ImGui::PopTextWrapPos();
+    ImGui::PopFont();
+    ImGui::TextDisabled("%s%s%s", app.author.empty() ? "" : "by ",
+                        app.author.c_str(),
+                        app.category.empty() ? ""
+                                             : ("  -  " + app.category).c_str());
+    ImGui::EndGroup();
+    ImGui::SetCursorScreenPos(ImVec2(a.x, std::max(cbb.y, ImGui::GetItemRectMax().y) +
+                                              12 * s));
+
+    // Version, install
+    const StoreVersion *v = nullptr;
+    if (g_store.versions_loading) {
+        ImGui::TextDisabled("Loading versions...");
+    } else if (!g_store.versions_err.empty()) {
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(T().warn), "%s",
+                           g_store.versions_err.c_str());
+    } else if (g_store.versions.empty()) {
+        ImGui::TextDisabled("No downloads for this app yet.");
+    } else {
+        g_store.ver = std::min(g_store.ver, (int)g_store.versions.size() - 1);
+        v = &g_store.versions[g_store.ver];
+    }
+    if (v) {
+        if (g_store.versions.size() > 1) {
+            ImGui::SetNextItemWidth(std::min(220 * s, w));
+            std::string label = "Version " + v->version;
+            if (ImGui::BeginCombo("##storever", label.c_str())) {
+                for (int i = 0; i < (int)g_store.versions.size(); i++) {
+                    std::string l = g_store.versions[i].version;
+                    if (!g_store.versions[i].release_date.empty()) {
+                        l += "   (" + g_store.versions[i].release_date + ")";
+                    }
+                    if (ImGui::Selectable(l.c_str(), i == g_store.ver)) {
+                        g_store.ver = i;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            v = &g_store.versions[g_store.ver];
+        } else {
+            ImGui::Text("Version %s", v->version.c_str());
+        }
+        std::string meta;
+        auto add = [&](const std::string &t) {
+            if (!t.empty()) {
+                meta += (meta.empty() ? "" : "   ") + t;
+            }
+        };
+        add(v->release_date);
+        add(v->size ? StoreSize(v->size) : "");
+        add(v->region == "GLO" ? "All regions" : v->region);
+        ImGui::TextDisabled("%s", meta.c_str());
+        ImGui::Dummy(ImVec2(0, 4 * s));
+
+        bool busy = StoreInstallBusy();
+        bool this_one = busy && g_store.inst_app == app.name;
+        if (this_one && g_store.phase == StoreState::Downloading) {
+            StoreTransfer &t = *g_store.xfer;
+            float frac = t.total ? (float)((double)t.now / t.total) : 0.0f;
+            std::string label =
+                t.phase == 1 ? std::string("Unpacking...")
+                : t.total
+                    ? string_format("Downloading %s / %s", StoreSize(t.now).c_str(),
+                                    StoreSize(t.total).c_str())
+                    : std::string("Downloading...");
+            if (t.files > 1) {
+                label += string_format("  (file %d of %d)", t.file + 1, t.files);
+            }
+            ImGui::ProgressBar(t.phase == 1 ? 1.0f : frac,
+                               ImVec2(w - 110 * s, 0), label.c_str());
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", ImVec2(100 * s, 0))) {
+                t.cancel = true;
+            }
+        } else if (this_one && g_store.phase == StoreState::Copying) {
+            ImGui::ProgressBar(XboxExplorerProgress(), ImVec2(w, 0),
+                               "Copying to the Xbox...");
+        } else {
+            ImGui::BeginDisabled(busy || XboxExplorerBusy());
+            if (DashButton(ICON_FA_DOWNLOAD "  Install to Xbox", T().primary,
+                           T().on_primary, ImVec2(0, 38 * s))) {
+                g_store.confirm = true;
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine(0, 12 * s);
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() +
+                                 (38 * s - ImGui::GetFontSize()) / 2);
+            ImGui::TextDisabled("to E:\\Apps\\%s",
+                                StoreSafeFolderName(v->folder_name.empty()
+                                                        ? app.name
+                                                        : v->folder_name)
+                                    .c_str());
+        }
+        if (!busy && !g_store.inst_msg.empty() && g_store.inst_app == app.name) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(
+                                   g_store.phase == StoreState::Failed ? T().bad
+                                                                       : T().ok),
+                               "%s %s",
+                               g_store.phase == StoreState::Failed
+                                   ? ICON_FA_TRIANGLE_EXCLAMATION
+                                   : ICON_FA_CHECK,
+                               g_store.inst_msg.c_str());
+            ImGui::PopTextWrapPos();
+        }
+    }
+    ImGui::Dummy(ImVec2(0, 8 * s));
+    ImGui::PushTextWrapPos(0.0f);
+    if (!app.description.empty()) {
+        ImGui::TextUnformatted(app.description.c_str());
+    }
+    if (v && !v->changelog.empty()) {
+        ImGui::Dummy(ImVec2(0, 6 * s));
+        DashLabel("What's new");
+        ImGui::TextDisabled("%s", v->changelog.c_str());
+    }
+    ImGui::PopTextWrapPos();
+
+    // Confirmation
+    if (g_store.confirm) {
+        g_store.confirm = false;
+        ImGui::OpenPopup("##store-confirm");
+    }
+    if (ImGui::BeginPopupModal("##store-confirm", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        std::string folder = v ? StoreSafeFolderName(v->folder_name.empty()
+                                                         ? app.name
+                                                         : v->folder_name)
+                               : "";
+        ImGui::Text("Install %s%s?", app.name.c_str(),
+                    v ? (" " + v->version).c_str() : "");
+        ImGui::TextDisabled("Goes to E:\\Apps\\%s%s", folder.c_str(),
+                            v && v->size ? ("  (" + StoreSize(v->size) + ")").c_str()
+                                         : "");
+        ImGui::Spacing();
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30);
+        ImGui::TextWrapped(
+            "When the download is done the Xbox pauses while the files are "
+            "copied, then restarts. Progress in a running game that hasn't been "
+            "saved will be lost. An older copy in that folder is replaced.");
+        ImGui::PopTextWrapPos();
+        if (ImGui::Button(ICON_FA_DOWNLOAD " Install") && v) {
+            ImGui::CloseCurrentPopup();
+            StoreInstall(app, *v);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+            ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
+            GameLibraryConsumeBack();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+}
+
+void DrawStoreTab()
+{
+    const float s = g_viewport_mgr.m_scale;
+    StoreStart();
+    DashLabel("Homebrew store");
+    DashTitle("Homebrew apps and games from XboxHomebrew.store");
+    ImGui::TextDisabled("Run by Team Resurgent. Installs go to E:\\Apps on the "
+                        "Xbox hard drive.");
+    ImGui::Dummy(ImVec2(0, 4 * s));
+
+    // Search and categories
+    ImGui::SetNextItemWidth(260 * s);
+    if (ImGui::InputTextWithHint("##storesearch", ICON_FA_MAGNIFYING_GLASS " Search",
+                                 g_store.search, sizeof(g_store.search))) {
+        g_store.search_edit_t = ImGui::GetTime();
+    }
+    if (g_store.search_edit_t >= 0 && ImGui::GetTime() - g_store.search_edit_t > 0.4) {
+        g_store.search_edit_t = -1;
+        if (g_store.search_applied != g_store.search) {
+            g_store.search_applied = g_store.search;
+            StoreFetchApps(true);
+        }
+    }
+    auto chip = [&](const std::string &name, const std::string &label) {
+        bool on = g_store.category == name;
+        ImGui::SameLine(0, 6 * s);
+        ImGui::PushStyleColor(ImGuiCol_Button, on ? ImGui::ColorConvertU32ToFloat4(
+                                                        Alpha(T().accent, 90))
+                                                  : T().glass);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 12 * s);
+        if (ImGui::Button(label.c_str()) && !on) {
+            g_store.category = name;
+            StoreFetchApps(true);
+        }
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+    };
+    chip("", "All");
+    for (auto &c : g_store.cats) {
+        chip(c.name, c.count ? string_format("%s  %d", c.name.c_str(), c.count)
+                             : c.name);
+    }
+    ImGui::Dummy(ImVec2(0, 6 * s));
+
+    // Grid, and the selected app beside it
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    const StoreApp *sel = StoreSelected();
+    float gap = 18 * s;
+    float detail_w = sel ? std::min(460 * s, avail.x * 0.42f) : 0;
+    float grid_w = avail.x - (sel ? detail_w + gap : 0);
+    ImVec2 a = ImGui::GetCursorScreenPos();
+    DashCard(ImGui::GetWindowDrawList(), a, ImVec2(a.x + grid_w, a.y + avail.y));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18 * s, 16 * s));
+    ImGui::BeginChild("##storegrid", ImVec2(grid_w, avail.y),
+                      ImGuiChildFlags_AlwaysUseWindowPadding |
+                          ImGuiChildFlags_NavFlattened);
+    float inner = ImGui::GetContentRegionAvail().x;
+    float card_gap = 14 * s;
+    int cols = std::max(1, (int)((inner + card_gap) / (150 * s + card_gap)));
+    float card_w = std::floor((inner - card_gap * (cols - 1)) / cols);
+    for (size_t i = 0; i < g_store.apps.size(); i++) {
+        if (i % cols) {
+            ImGui::SameLine(0, card_gap);
+        }
+        if (StoreCard(g_store.apps[i], card_w)) {
+            StoreSelect(g_store.apps[i].id);
+        }
+        if (i % cols == (size_t)cols - 1) {
+            ImGui::Dummy(ImVec2(0, 4 * s));
+        }
+    }
+    if (g_store.apps.size() % cols) {
+        ImGui::Dummy(ImVec2(0, 4 * s));
+    }
+    if (g_store.loading) {
+        ImGui::TextDisabled("Loading...");
+    } else if (!g_store.err.empty()) {
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(T().warn), "%s",
+                           g_store.err.c_str());
+        if (ImGui::Button("Try again")) {
+            g_store.err.clear();
+            if (g_store.cats.empty()) {
+                g_store.started = false;
+                StoreStart();
+            } else {
+                StoreFetchApps(g_store.apps.empty());
+            }
+        }
+    } else if (g_store.apps.empty()) {
+        ImGui::TextDisabled(g_store.search_applied.empty()
+                                ? "Nothing here yet."
+                                : "No apps match your search.");
+    } else if (g_store.more) {
+        // Also loads by itself when scrolled to the end
+        if (DashButton("Load more", T().glass, T().white, ImVec2(160 * s, 34 * s)) ||
+            (ImGui::GetScrollMaxY() > 0 &&
+             ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 40 * s)) {
+            StoreFetchApps(false);
+        }
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+
+    if (sel) {
+        ImGui::SameLine(0, gap);
+        ImVec2 da = ImGui::GetCursorScreenPos();
+        DashCard(ImGui::GetWindowDrawList(), da,
+                 ImVec2(da.x + detail_w, da.y + avail.y));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16 * s, 16 * s));
+        ImGui::BeginChild("##storedetail", ImVec2(detail_w, avail.y),
+                          ImGuiChildFlags_AlwaysUseWindowPadding |
+                              ImGuiChildFlags_NavFlattened);
+        StoreApp copy = *sel; // the list can change while drawing
+        DrawStoreDetails(copy, ImGui::GetContentRegionAvail().x);
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+    }
+}
+
 // --- Patches -------------------------------------------------------------------
 
 void DrawDriveTab()
@@ -6512,6 +7438,7 @@ static std::vector<RecentGame> GetRecentGamesUncached(int max_count)
 
 void GameLibraryWindow::Update()
 {
+    StorePump();
     if (g_compat_downloaded.exchange(false)) {
         LoadCompatCache();
     }
@@ -6600,6 +7527,9 @@ void DrawTabContent(int tab, int &tex_budget)
         break;
     case kTabDrive:
         DrawDriveTab();
+        break;
+    case kTabStore:
+        DrawStoreTab();
         break;
     case kTabPatches:
         DrawPatchesTab(tex_budget);
@@ -6691,14 +7621,14 @@ ImU32 SectionColor(int tab)
     static const ImU32 green[kTabCount] = {
         IM_COL32(86, 178, 22, 255),  IM_COL32(32, 132, 72, 255),
         IM_COL32(0, 150, 136, 255),  IM_COL32(52, 120, 200, 255),
-        IM_COL32(110, 90, 190, 255), IM_COL32(214, 120, 30, 255),
-        IM_COL32(96, 110, 104, 255),
+        IM_COL32(110, 90, 190, 255), IM_COL32(196, 64, 96, 255),
+        IM_COL32(214, 120, 30, 255), IM_COL32(96, 110, 104, 255),
     };
     static const ImU32 neon[kTabCount] = {
         IM_COL32(0, 200, 230, 255),  IM_COL32(40, 110, 255, 255),
         IM_COL32(57, 210, 130, 255), IM_COL32(150, 70, 255, 255),
-        IM_COL32(255, 46, 136, 255), IM_COL32(255, 160, 0, 255),
-        IM_COL32(110, 116, 150, 255),
+        IM_COL32(255, 46, 136, 255), IM_COL32(255, 90, 60, 255),
+        IM_COL32(255, 160, 0, 255),  IM_COL32(110, 116, 150, 255),
     };
     int i = tab < 0 ? 0 : (tab >= kTabCount ? kTabCount - 1 : tab);
     return (T().neon ? neon : green)[i];
@@ -7283,6 +8213,9 @@ void GameLibraryWindow::Draw()
             break;
         case kTabDrive:
             DrawDriveTab();
+            break;
+        case kTabStore:
+            DrawStoreTab();
             break;
         case kTabPatches:
             DrawPatchesTab(tex_budget);

@@ -690,6 +690,43 @@ JmpFit CheckJmp(const JmpPatch &patch, const std::vector<uint8_t> &stock_xbe,
     return JmpFit::Unverified;
 }
 
+bool JmpOptionIs60Fps(const JmpOption &option)
+{
+    if (option.other_xbe) {
+        return false;
+    }
+    std::string n;
+    for (char c : option.name) {
+        n += (char)tolower((unsigned char)c);
+    }
+    size_t i = n.find_first_not_of(" \t");
+    if (i == std::string::npos) {
+        return false;
+    }
+    // "1. 768x672 render, 60FPS VSync..." style presets pick a whole video
+    // mode; leave those to the Patches window
+    size_t d = i;
+    while (d < n.size() && isdigit((unsigned char)n[d])) {
+        d++;
+    }
+    if (d > i && d < n.size() && n[d] == '.') {
+        return false;
+    }
+    for (size_t p = n.find("60"); p != std::string::npos; p = n.find("60", p + 1)) {
+        if (p > 0 && isdigit((unsigned char)n[p - 1])) {
+            continue;
+        }
+        size_t q = p + 2;
+        while (q < n.size() && (n[q] == ' ' || n[q] == '-')) {
+            q++;
+        }
+        if (n.compare(q, 3, "fps") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 const char *JmpFitLabel(JmpFit fit)
 {
     switch (fit) {

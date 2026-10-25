@@ -310,14 +310,14 @@ void ShowMainMenu()
             }
 
             ImGui::Combo(tr("Display Mode"), &g_config.display.ui.fit,
-                         tr_items("Center\0Scale\0Stretch\0"));
+                         tr_items("Center\0Scale\0Stretch\0Integer (pixel-perfect)\0"));
             ImGui::SameLine();
             HelpMarker(tr("Controls how the rendered content should be scaled "
                        "into the window"));
             ImGui::Combo(tr("Filter Method"), &g_config.display.filtering,
                          tr_items("Linear\0Nearest\0AMD FSR 1.0\0Bicubic\0"
                          "Lanczos\0Snapdragon GSR\0NVIDIA NIS\0"
-                         "NVIDIA RTX Video (AI)\0"));
+                         "NVIDIA RTX Video (AI)\0CRT TV\0Scanlines\0"));
             ImGui::Combo(tr("Aspect Ratio"), &g_config.display.ui.aspect_ratio,
                          tr_items("Native\0Auto\0""4:3\0""16:9\0"));
             if (ImGui::MenuItem(tr("Fullscreen"), "F11",

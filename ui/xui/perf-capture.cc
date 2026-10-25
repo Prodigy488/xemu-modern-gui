@@ -68,6 +68,8 @@ const char *FilterName(int f)
     case CONFIG_DISPLAY_FILTERING_SGSR: return "Snapdragon GSR";
     case CONFIG_DISPLAY_FILTERING_NIS: return "NVIDIA NIS";
     case CONFIG_DISPLAY_FILTERING_RTX: return "NVIDIA RTX Video";
+    case CONFIG_DISPLAY_FILTERING_CRT: return "CRT TV";
+    case CONFIG_DISPLAY_FILTERING_SCANLINES: return "Scanlines";
     default: return "Linear";
     }
 }

@@ -50,6 +50,7 @@ enum class ShaderType {
     Lanczos, // Lanczos-3 with anti-ringing
     Bicubic, // Catmull-Rom bicubic
     Nis,     // NVIDIA Image Scaling (NVScaler)
+    Crt,     // CRT TV look: scanline beams, aperture grille, curved glass
 };
 
 typedef struct DecalShader_
@@ -72,6 +73,7 @@ typedef struct DecalShader_
     GLint sharpness_loc;
     GLint viewport_info_loc;
     GLint coef_loc;
+    GLint crt_loc;
     GLint nis_loc[3];
     GLint palette_loc[256];
 } DecalShader;
@@ -84,7 +86,8 @@ static DecalShader *g_decal_shader,
                    *g_sgsr_shader,
                    *g_lanczos_shader,
                    *g_bicubic_shader,
-                   *g_nis_shader;
+                   *g_nis_shader,
+                   *g_crt_shader;
 
 // NVIDIA Image Scaling filter banks (6 taps x 64 phases), loaded once
 static GLuint g_nis_coef_tex;
@@ -956,6 +959,80 @@ void main()
 }
 )";
 
+
+    // CRT look, written for xemu Modern GUI. The source is the Xbox picture
+    // at its internal resolution; in_Crt.x is the number of lines the Xbox
+    // actually sends (480, 576, 720...), so the beams follow those lines at
+    // any internal resolution scale.
+    //   in_Crt = (lines, strength 0..1, curvature 0/1, shadow mask 0/1)
+    const char *crt_frag_src = R"(
+#version 400 core
+uniform sampler2D tex;
+uniform vec2 in_InSize;
+uniform vec2 in_OutSize;
+uniform vec4 in_Crt;
+out vec4 out_Color;
+
+vec3 ToLinear(vec3 c) { return pow(max(c, vec3(0.0)), vec3(2.2)); }
+vec3 ToGamma(vec3 c) { return pow(max(c, vec3(0.0)), vec3(1.0 / 2.2)); }
+
+// One scanline's light at a distance d (in lines) from its centre: a
+// gaussian beam that gets wider on bright parts, like a real CRT
+vec3 Beam(vec3 c, float d)
+{
+    vec3 sigma = mix(vec3(0.24), vec3(0.42), sqrt(c));
+    return c * exp(-0.5 * (d * d) / (sigma * sigma));
+}
+
+void main()
+{
+    vec2 uv = gl_FragCoord.xy / in_OutSize;
+    float lines = max(in_Crt.x, 1.0);
+    float strength = clamp(in_Crt.y, 0.0, 1.0);
+    // Fewer than ~2 screen pixels per line can't show scanlines cleanly
+    float room = clamp(in_OutSize.y / lines - 1.0, 0.0, 1.0);
+    float scan = strength * room;
+
+    float edge = 1.0;
+    if (in_Crt.z > 0.5) {
+        // Curved glass: gentle barrel distortion and soft rounded corners
+        vec2 c = uv * 2.0 - 1.0;
+        float k = 0.035 + 0.035 * strength;
+        c *= 1.0 + k * vec2(c.y * c.y, c.x * c.x);
+        uv = c * 0.5 + 0.5;
+        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+            out_Color = vec4(0.0, 0.0, 0.0, 1.0);
+            return;
+        }
+        vec2 v = uv * (1.0 - uv.yx);
+        edge = clamp(pow(v.x * v.y * 40.0, 0.25), 0.0, 1.0);
+    }
+
+    // The two nearest lines and how far this pixel is from each
+    float y = uv.y * lines - 0.5;
+    float base = floor(y);
+    float f = y - base;
+    vec3 c0 = ToLinear(texture(tex, vec2(uv.x, (base + 0.5) / lines)).rgb);
+    vec3 c1 = ToLinear(texture(tex, vec2(uv.x, (base + 1.5) / lines)).rgb);
+    vec3 plain = ToLinear(texture(tex, uv).rgb);
+    // The beams leave dark gaps; 1.33 brings the average back up
+    vec3 beams = (Beam(c0, f) + Beam(c1, 1.0 - f)) * 1.33;
+    vec3 col = mix(plain, beams, scan);
+
+    if (in_Crt.w > 0.5) {
+        // Aperture grille: red, green and blue stripes, one per pixel
+        int m = int(mod(gl_FragCoord.x, 3.0));
+        vec3 mask = vec3(m == 0 ? 1.0 : 0.0, m == 1 ? 1.0 : 0.0, m == 2 ? 1.0 : 0.0);
+        // Stripes at (1.45, 0.55, 0.55): average 0.85, made up afterwards
+        float ms = 0.35 * strength;
+        col *= mix(vec3(1.0), mask * 0.9 + 0.55, ms) / (1.0 - ms * 0.15);
+        // A little glow, as phosphors bleed light
+        col += plain * 0.06 * strength;
+    }
+    out_Color = vec4(ToGamma(col) * edge, 1.0);
+}
+)";
+
     const char *frag_src = NULL;
     switch (type) {
     case ShaderType::Mask: frag_src = mask_frag_src; break;
@@ -968,6 +1045,7 @@ void main()
     case ShaderType::Lanczos: frag_src = lanczos_frag_src; break;
     case ShaderType::Bicubic: frag_src = bicubic_frag_src; break;
     case ShaderType::Nis: frag_src = nis_frag_src; break;
+    case ShaderType::Crt: frag_src = crt_frag_src; break;
     default: assert(0);
     }
     GLuint frag = Shader(GL_FRAGMENT_SHADER, frag_src);
@@ -1000,6 +1078,7 @@ void main()
     s->sharpness_loc = glGetUniformLocation(s->prog, "in_Sharpness");
     s->viewport_info_loc = glGetUniformLocation(s->prog, "in_ViewportInfo");
     s->coef_loc = glGetUniformLocation(s->prog, "coef");
+    s->crt_loc = glGetUniformLocation(s->prog, "in_Crt");
     s->nis_loc[0] = glGetUniformLocation(s->prog, "in_Nis0");
     s->nis_loc[1] = glGetUniformLocation(s->prog, "in_Nis1");
     s->nis_loc[2] = glGetUniformLocation(s->prog, "in_Nis2");
@@ -1156,6 +1235,7 @@ void InitCustomRendering(void)
     g_sgsr_shader = NewDecalShader(ShaderType::Sgsr);
     g_lanczos_shader = NewDecalShader(ShaderType::Lanczos);
     g_bicubic_shader = NewDecalShader(ShaderType::Bicubic);
+    g_crt_shader = NewDecalShader(ShaderType::Crt);
     g_nis_shader = NewDecalShader(ShaderType::Nis);
     g_nis_coef_tex = CreateNisCoefTexture();
 }
@@ -1840,7 +1920,8 @@ static bool RenderFramebufferUpscaled(GLint tex, int width, int height,
 
     int dw = (int)(scale[0] * width + 0.5f);
     int dh = (int)(scale[1] * height + 0.5f);
-    if (tw < 1 || th < 1 || dw < 1 || dh < 1 || (dw <= tw && dh <= th)) {
+    bool crt = scaler == g_crt_shader;
+    if (tw < 1 || th < 1 || dw < 1 || dh < 1 || (dw <= tw && dh <= th && !crt)) {
         return false;
     }
 
@@ -1893,6 +1974,14 @@ static bool RenderFramebufferUpscaled(GLint tex, int width, int height,
         glUniform2f(scaler->in_size_loc, tw, th);
         glUniform2f(scaler->out_size_loc, dw, dh);
         glUniform4f(scaler->viewport_info_loc, 1.0f / tw, 1.0f / th, tw, th);
+        if (crt) {
+            // The lines the Xbox sends: the picture's height at 1x
+            unsigned int ss = nv2a_get_surface_scale_factor();
+            float lines = (float)th / (float)(ss ? ss : 1);
+            bool tv = g_config.display.filtering == CONFIG_DISPLAY_FILTERING_CRT;
+            glUniform4f(scaler->crt_loc, lines, g_config.display.crt_strength,
+                        tv ? 1.0f : 0.0f, tv ? 1.0f : 0.0f);
+        }
         if (nis) {
             glUniform1i(scaler->coef_loc, 1);
             SetNisUniforms(scaler, g_config.display.fsr_sharpness);
@@ -1921,8 +2010,9 @@ static bool RenderFramebufferUpscaled(GLint tex, int width, int height,
     // Sharpening strength 0..1 (0 = off, 1 = AMD's maximum)
     float sharp = g_config.display.fsr_sharpness;
     sharp = sharp < 0.0f ? 0.0f : (sharp > 1.0f ? 1.0f : sharp);
-    if (nis || rtx_ok) {
-        sharp = 0.0f; // NIS and RTX Video sharpen themselves; RCAS just copies
+    if (nis || rtx_ok || crt) {
+        sharp = 0.0f; // NIS and RTX Video sharpen themselves, and CRT shouldn't
+                      // be sharpened; RCAS just copies
     }
     glUseProgram(g_fsr_rcas_shader->prog);
     glUniform2f(g_fsr_rcas_shader->in_size_loc, dw, dh);
@@ -1949,6 +2039,8 @@ void RenderFramebuffer(GLint tex, int width, int height, bool flip, float scale[
     case CONFIG_DISPLAY_FILTERING_BICUBIC: scaler = g_bicubic_shader; break;
     case CONFIG_DISPLAY_FILTERING_NIS: scaler = g_nis_shader; break;
     case CONFIG_DISPLAY_FILTERING_RTX: scaler = g_nis_shader; rtx = true; break;
+    case CONFIG_DISPLAY_FILTERING_CRT:
+    case CONFIG_DISPLAY_FILTERING_SCANLINES: scaler = g_crt_shader; break;
     default: break;
     }
     if (scaler && !nv2a_get_screen_off() &&
@@ -2020,6 +2112,23 @@ void RenderFramebuffer(GLint tex, int width, int height, bool flip)
         // Stretch to fit
         scale[0] = 1.0;
         scale[1] = 1.0;
+    } else if (g_config.display.ui.fit == CONFIG_DISPLAY_UI_FIT_INTEGER) {
+        // Pixel-perfect: the Xbox's picture at a whole-number multiple of
+        // its own size (lines line up exactly), as big as fits
+        unsigned int ss = nv2a_get_surface_scale_factor();
+        float nh = (float)th / (float)(ss ? ss : 1);
+        float nw = nh * GetDisplayAspectRatio(tw, th);
+        int k = (int)fminf(floorf((float)width / nw), floorf((float)height / nh));
+        if (k < 1) {
+            // Window smaller than the picture: just fit it
+            float t_ratio = GetDisplayAspectRatio(tw, th);
+            float w_ratio = (float)width / (float)height;
+            scale[0] = w_ratio >= t_ratio ? t_ratio / w_ratio : 1.0f;
+            scale[1] = w_ratio >= t_ratio ? 1.0f : w_ratio / t_ratio;
+        } else {
+            scale[0] = k * nw / (float)width;
+            scale[1] = k * nh / (float)height;
+        }
     } else if (g_config.display.ui.fit == CONFIG_DISPLAY_UI_FIT_CENTER) {
         // Centered
         float t_ratio = GetDisplayAspectRatio(tw, th);

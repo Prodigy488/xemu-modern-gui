@@ -61,6 +61,13 @@ void GameLibraryShowAllSettings(void);
 // resume point and then eject itself.
 bool GameLibraryInterceptEject(void);
 void GameLibraryAfterSettingsSave(void);
+
+// Quick save (or load) for the game in the drive: one snapshot per game,
+// from the controller (Back + LB / Back + RB)
+void GameLibraryQuickSave(bool load);
+
+// Where game save backups go on the PC (a folder per backup)
+std::string GameLibrarySaveBackupDir(void);
 // A dialog used Esc / B this frame, so the library shouldn't also close
 void GameLibraryConsumeBack(void);
 // The setup check (MCPX, BIOS, hard disk, games folder) on the dashboard

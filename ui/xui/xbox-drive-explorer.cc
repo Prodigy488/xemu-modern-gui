@@ -200,6 +200,7 @@ bool g_paused_for_job = false;
 
 // Confirmation before a job that writes to the Xbox drive
 std::unique_ptr<Job> g_pending_write;
+bool g_open_saves = false; // open the Game saves window
 
 bool HostToXboxSteps(const fs::path &src, const std::string &xdir, Job *job,
                      std::string *err)
@@ -720,6 +721,12 @@ void DrawToolbar()
         ImGui::OpenPopup("##xdrive-delete");
     }
     ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button(tr(ICON_FA_FLOPPY_DISK " Game saves"))) {
+        g_open_saves = true;
+    }
+    ImGui::SetItemTooltip("%s", tr("Back up the Xbox's game saves to your PC, or put "
+                                   "a backup back"));
     ImGui::EndDisabled();
 }
 
@@ -879,8 +886,169 @@ bool NamePopup(const char *id, const char *title, const char *button,
     return done;
 }
 
+// ---- Game saves window ----
+
+struct SaveBackup {
+    std::string name, path;
+    uint64_t bytes = 0;
+    int files = 0;
+};
+std::vector<SaveBackup> g_backups;
+std::string g_restore_path; // asking to restore this one
+
+void ListBackups()
+{
+    g_backups.clear();
+    std::error_code ec;
+    fs::path dir = fs::u8path(GameLibrarySaveBackupDir());
+    for (auto &e : fs::directory_iterator(dir, ec)) {
+        if (!e.is_directory(ec)) {
+            continue;
+        }
+        SaveBackup b;
+        b.name = e.path().filename().u8string();
+        b.path = e.path().u8string();
+        for (auto &f : fs::recursive_directory_iterator(e.path(), ec)) {
+            if (f.is_regular_file(ec)) {
+                b.bytes += f.file_size(ec);
+                b.files++;
+            }
+        }
+        g_backups.push_back(b);
+    }
+    // Named by date and time, so newest first is reverse order
+    std::sort(g_backups.begin(), g_backups.end(),
+              [](const SaveBackup &a, const SaveBackup &b) { return a.name > b.name; });
+}
+
+void OpenHostFolder(const std::string &path)
+{
+    std::string url = "file:///" + fs::u8path(path).generic_u8string();
+    SDL_OpenURL(url.c_str());
+}
+
+void DrawSavesPopup()
+{
+    const float s = g_viewport_mgr.m_scale;
+    if (g_open_saves) {
+        g_open_saves = false;
+        ListBackups();
+        ImGui::OpenPopup(trid("Game saves"));
+    }
+    ImGui::SetNextWindowSize(ImVec2(560 * s, 0), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal(trid("Game saves"), nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize)) {
+        return;
+    }
+    ImGui::PushTextWrapPos(540 * s);
+    ImGui::TextUnformatted(tr("Copies the Xbox's game saves (E:\\UDATA and E:\\TDATA) to "
+                              "a folder on your PC, so you can get them back if a save "
+                              "or the hard disk image goes wrong."));
+    ImGui::PopTextWrapPos();
+    ImGui::Dummy(ImVec2(0, 4 * s));
+    bool busy = XboxExplorerBusy();
+    ImGui::BeginDisabled(busy);
+    if (ImGui::Button(tr(ICON_FA_FLOPPY_DISK "  Back up now"))) {
+        char stamp[32];
+        time_t now = time(NULL);
+        struct tm *tm = localtime(&now);
+        strftime(stamp, sizeof(stamp), "%Y-%m-%d %H.%M.%S", tm ? tm : gmtime(&now));
+        std::string err;
+        std::string dest = (fs::u8path(GameLibrarySaveBackupDir()) / stamp).u8string();
+        if (!XboxExplorerBackupSaves(dest, &err)) {
+            SetStatus(err, true);
+        }
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button(tr(ICON_FA_FOLDER_OPEN "  Open backups folder"))) {
+        std::error_code ec;
+        fs::create_directories(fs::u8path(GameLibrarySaveBackupDir()), ec);
+        OpenHostFolder(GameLibrarySaveBackupDir());
+    }
+    // Progress and the result of the last backup or restore
+    bool status_err = false;
+    std::string status = XboxExplorerStatus(&status_err);
+    if (busy) {
+        ImGui::ProgressBar(XboxExplorerProgress(), ImVec2(-FLT_MIN, 0), status.c_str());
+    } else if (!status.empty()) {
+        ImGui::TextColored(status_err ? ImVec4(1, 0.45f, 0.4f, 1) : ImVec4(0.6f, 0.9f, 0.5f, 1),
+                           "%s", status.c_str());
+    }
+    static bool was_busy = false;
+    if (was_busy && !busy) {
+        ListBackups(); // a backup just finished
+    }
+    was_busy = busy;
+
+    ImGui::Separator();
+    if (g_backups.empty()) {
+        ImGui::TextDisabled(tr("No backups yet."));
+    } else {
+        ImGui::TextDisabled(tr("Backups (newest first)"));
+        float rows = ImGui::GetFrameHeightWithSpacing() * g_backups.size();
+        ImGui::BeginChild("##backups", ImVec2(0, std::min(260 * s, rows + 4 * s)),
+                          ImGuiChildFlags_NavFlattened);
+        for (auto &b : g_backups) {
+            ImGui::PushID(b.path.c_str());
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(b.name.c_str());
+            ImGui::SameLine();
+            ImGui::TextDisabled(tr("%d files, %s"), b.files, FormatSize(b.bytes).c_str());
+            float bw = ImGui::CalcTextSize(tr("Restore")).x + ImGui::CalcTextSize(tr("Show")).x +
+                       ImGui::GetStyle().FramePadding.x * 4 + ImGui::GetStyle().ItemSpacing.x;
+            ImGui::SameLine(ImGui::GetContentRegionMax().x - bw);
+            ImGui::BeginDisabled(busy);
+            if (ImGui::Button(tr("Restore"))) {
+                g_restore_path = b.path;
+                ImGui::OpenPopup("##restore-saves");
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (ImGui::Button(tr("Show"))) {
+                OpenHostFolder(b.path);
+            }
+            if (ImGui::BeginPopupModal("##restore-saves", nullptr,
+                                       ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::Text(tr("Put back the game saves from %s?"),
+                            fs::u8path(g_restore_path).filename().u8string().c_str());
+                ImGui::PushTextWrapPos(460 * s);
+                ImGui::TextDisabled("%s", tr("The saves on the Xbox are replaced by the "
+                                             "backup: anything saved since then is lost. "
+                                             "Back up first if you're not sure. The Xbox "
+                                             "pauses and restarts, so save your game "
+                                             "first."));
+                ImGui::PopTextWrapPos();
+                if (ImGui::Button(tr("Restore"))) {
+                    std::string err;
+                    if (!XboxExplorerRestoreSaves(g_restore_path, &err)) {
+                        SetStatus(err, true);
+                    }
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button(tr("Cancel")) ||
+                    ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndChild();
+    }
+    ImGui::Separator();
+    if (ImGui::Button(tr("Close")) ||
+        (!ImGui::IsPopupOpen("##restore-saves", ImGuiPopupFlags_AnyPopupId) &&
+         ImGui::IsKeyPressed(ImGuiKey_Escape, false))) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
 void DrawPopups()
 {
+    DrawSavesPopup();
     std::string name;
     if (NamePopup("##xdrive-newfolder", tr("New folder name:"), tr("Create"), &name)) {
         std::string path = XboxJoin(g_path, name);
@@ -1209,6 +1377,158 @@ void ReadXbeTitle(char vol, const std::string &xbe, XboxHomebrewApp *app)
     }
 }
 } // namespace
+
+// ---- Game save backups -------------------------------------------------------
+
+namespace
+{
+const char *const kSaveFolders[] = { "UDATA", "TDATA" };
+
+bool SameNoCase(const std::string &a, const char *b)
+{
+    size_t n = strlen(b);
+    if (a.size() != n) {
+        return false;
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (tolower((unsigned char)a[i]) != tolower((unsigned char)b[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The name a folder has on E: ("UDATA", "udata"...), or ""
+std::string SaveFolderOnXbox(const std::vector<XboxFileInfo> &root, const char *want)
+{
+    for (auto &f : root) {
+        if (f.dir && SameNoCase(f.name, want)) {
+            return f.name;
+        }
+    }
+    return "";
+}
+} // namespace
+
+bool XboxExplorerBackupSaves(const std::string &host_dir, std::string *err)
+{
+    if (g_job) {
+        *err = tr("Another copy is still running");
+        return false;
+    }
+    if (!EnsureOpen()) {
+        *err = g_open_err.empty() ? std::string(tr("Can't open the Xbox hard drive")) : g_open_err;
+        return false;
+    }
+    std::vector<XboxFileInfo> root;
+    if (!g_drive.List('E', "/", &root, err)) {
+        return false;
+    }
+    std::error_code ec;
+    fs::create_directories(fs::u8path(host_dir), ec);
+    if (ec) {
+        *err = string_format(tr("Can't make the folder %s"), host_dir.c_str());
+        return false;
+    }
+    auto job = std::make_unique<Job>();
+    job->vol = 'E';
+    for (const char *want : kSaveFolders) {
+        std::string name = SaveFolderOnXbox(root, want);
+        if (name.empty()) {
+            continue;
+        }
+        XboxFileInfo fi;
+        for (auto &f : root) {
+            if (f.name == name) {
+                fi = f;
+            }
+        }
+        if (!XboxToHostSteps('E', XboxJoin("/", name), fi, fs::u8path(host_dir), job.get(),
+                             err)) {
+            return false;
+        }
+    }
+    if (job->steps.empty()) {
+        fs::remove(fs::u8path(host_dir), ec);
+        *err = tr("There are no game saves on this Xbox hard drive yet");
+        return false;
+    }
+    job->title = tr("Backing up game saves");
+    StartJob(std::move(job));
+    return true;
+}
+
+bool XboxExplorerRestoreSaves(const std::string &host_dir, std::string *err)
+{
+    if (g_job) {
+        *err = tr("Another copy is still running");
+        return false;
+    }
+    if (!EnsureOpen()) {
+        *err = g_open_err.empty() ? std::string(tr("Can't open the Xbox hard drive")) : g_open_err;
+        return false;
+    }
+    if (!XboxDiskEmulatedWritable()) {
+        *err = tr("The hard disk image is read-only");
+        return false;
+    }
+    std::vector<XboxFileInfo> root;
+    if (!g_drive.List('E', "/", &root, err)) {
+        return false;
+    }
+    // A backup with no files in it would only wipe the saves: refuse
+    std::error_code ec;
+    int files = 0;
+    for (auto &e : fs::recursive_directory_iterator(fs::u8path(host_dir), ec)) {
+        files += e.is_regular_file(ec) ? 1 : 0;
+    }
+    if (!files) {
+        *err = tr("This backup has no game saves in it");
+        return false;
+    }
+    auto job = std::make_unique<Job>();
+    job->writes = true;
+    job->vol = 'E';
+    for (const char *want : kSaveFolders) {
+        fs::path src;
+        for (auto &e : fs::directory_iterator(fs::u8path(host_dir), ec)) {
+            if (e.is_directory(ec) &&
+                SameNoCase(e.path().filename().u8string(), want)) {
+                src = e.path();
+            }
+        }
+        if (src.empty()) {
+            continue;
+        }
+        // The folder on the Xbox goes first, then the backup's copy
+        std::string name = SaveFolderOnXbox(root, want);
+        if (!name.empty()) {
+            XboxFileInfo fi;
+            for (auto &f : root) {
+                if (f.name == name) {
+                    fi = f;
+                }
+            }
+            if (!DeleteSteps('E', XboxJoin("/", name), fi, job.get(), err)) {
+                return false;
+            }
+        }
+        if (!HostToXboxSteps(src, "/", job.get(), err)) {
+            return false;
+        }
+    }
+    if (job->steps.empty()) {
+        *err = tr("This backup has no game saves in it");
+        return false;
+    }
+    job->title = tr("Restoring game saves");
+    StartJob(std::move(job));
+    if (!g_job) {
+        *err = g_status;
+        return false;
+    }
+    return true;
+}
 
 bool XboxExplorerMakeXiso(char vol, const std::string &dir,
                           const std::string &iso_path, bool *ready,

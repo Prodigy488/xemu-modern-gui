@@ -88,6 +88,10 @@ JmpFit CheckJmp(const JmpPatch &patch, const std::vector<uint8_t> &stock_xbe,
                 uint32_t title_id);
 const char *JmpFitLabel(JmpFit fit);
 
+// Is this option a 60 FPS patch? ("60 FPS", "60FPS", "HUD fix & 60FPS"...,
+// but not numbered render-mode presets or options for other XBEs)
+bool JmpOptionIs60Fps(const JmpOption &option);
+
 struct PatchSpec {
     std::string path;
     std::vector<int> toggled; // .jmp: option indices flipped from default

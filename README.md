@@ -108,6 +108,8 @@ see the [Releases](../../releases) page.
   off** option and **save states** with thumbnails and a right-click menu.
 - **Discord status** showing the game you're playing, with its cover and
   play time.
+- **Quick save and load from the controller:** Back + LB saves the game
+  you're playing, Back + RB loads it (one quick save per game).
 
 ### Patches
 
@@ -116,6 +118,9 @@ see the [Releases](../../releases) page.
 - Download widescreen, 60 FPS and HD patches from
   [Jay's Magic Patches](https://github.com/JayYardley/Xbox-Magic-Patches-by-Jay)
   for your whole library at once.
+- **One-click 60 FPS:** games with a community 60 FPS patch (over 70 games)
+  get a badge and a switch; xemu downloads the patch if needed and turns
+  on just its 60 FPS options.
 
 ### Homebrew and the Xbox hard drive
 
@@ -130,6 +135,8 @@ see the [Releases](../../releases) page.
   partitions. Copy files and folders in and out, rename and delete, with
   game names shown next to save folders (uses
   [libfatx](https://github.com/mborgerson/fatx)).
+- **Game save backups:** copy the Xbox's saves (`E:\UDATA`, `E:\TDATA`) to
+  a dated folder on your PC and put a backup back in one click.
 
 ### Online play with Insignia
 
@@ -150,8 +157,21 @@ see the [Releases](../../releases) page.
 - **Upscaling filters:** AMD FidelityFX FSR 1.0, **NVIDIA RTX Video (AI)**
   (RTX cards), NVIDIA Image Scaling (NIS), Snapdragon GSR 1, Lanczos and
   Bicubic, with a sharpening control.
+- **CRT TV and Scanlines:** the look of an old TV (scanlines that follow
+  the Xbox's own lines, an aperture-grille mask and curved glass), with a
+  strength slider, and an **Integer (pixel-perfect)** display mode.
 - **Video mode switches:** widescreen, 480p, 720p and 1080i, the same as
   the Xbox dashboard's settings.
+
+### Sound and controllers
+
+- **Output device:** send the game's sound to headphones, speakers or the
+  TV without changing the Windows default.
+- **Background audio:** keep playing, play quieter or mute when xemu isn't
+  the active window.
+- **Per-game volume** for games that are much louder or quieter than the
+  rest.
+- **Rumble strength** for every controller, from full to off.
 
 ### Performance tools and stability
 

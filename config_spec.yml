@@ -93,6 +93,14 @@ input:
     type: bool
     default: true
   background_input_capture: bool
+  # Scales every controller's rumble (0-1)
+  rumble_strength:
+    type: number
+    default: 1
+  # Back + LB quick save, Back + RB quick load
+  quick_save_buttons:
+    type: bool
+    default: true
   keyboard_controller_scancode_map:
     # Scancode reference : https://github.com/libsdl-org/SDL/blob/main/include/SDL_scancode.h
     a:
@@ -275,11 +283,14 @@ display:
       default: false
   filtering:
     type: enum
-    values: [linear, nearest, fsr, bicubic, lanczos, sgsr, nis, rtx]
+    values: [linear, nearest, fsr, bicubic, lanczos, sgsr, nis, rtx, crt, scanlines]
     default: linear
   fsr_sharpness:
     type: number
     default: 0.8
+  crt_strength:
+    type: number
+    default: 0.6
   window:
     fullscreen_on_startup: bool
     fullscreen_exclusive: bool
@@ -321,7 +332,7 @@ display:
       default: true
     fit:
       type: enum
-      values: [center, scale, stretch]
+      values: [center, scale, stretch, integer]
       default: scale
     aspect_ratio:
       type: enum
@@ -372,6 +383,13 @@ audio:
   volume_limit:
     type: number
     default: 1
+  # Playback device by name; empty = the Windows default
+  output_device: string
+  # When xemu isn't the active window
+  background:
+    type: enum
+    values: [play, quieter, mute]
+    default: play
 
 net:
   enable: bool

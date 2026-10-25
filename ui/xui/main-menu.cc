@@ -34,6 +34,7 @@
 #include "actions.hh"
 
 #include "../xemu-input.h"
+#include "play-extras.hh"
 #include "../xemu-notifications.h"
 #include "../xemu-settings.h"
 #include "../xemu-monitor.h"
@@ -620,6 +621,13 @@ void MainMenuInputView::Draw()
     Toggle(tr("Background controller input capture"),
            &g_config.input.background_input_capture,
            tr("Capture even if window is unfocused (requires restart)"));
+    Toggle(tr("Quick save buttons"), &g_config.input.quick_save_buttons,
+           tr("Back + LB saves the game you're playing, Back + RB loads it "
+              "(one quick save per game)"));
+    char rumble[96];
+    snprintf(rumble, sizeof(rumble), tr("How strong controllers rumble (%d%%)"),
+             (int)(g_config.input.rumble_strength * 100 + 0.5f));
+    Slider(tr("Rumble strength"), &g_config.input.rumble_strength, rumble);
 }
 
 void MainMenuInputView::Hide()
@@ -823,15 +831,23 @@ void MainMenuDisplayView::Draw()
                  "Lanczos\0"
                  "Snapdragon GSR 1\0"
                  "NVIDIA Image Scaling (NIS)\0"
-                 "NVIDIA RTX Video (AI)\0"),
+                 "NVIDIA RTX Video (AI)\0"
+                 "CRT TV\0"
+                 "Scanlines\0"),
                  tr("How the image is scaled up to fit the window. FSR, NIS and "
                  "Snapdragon GSR sharpen edges, Lanczos and Bicubic are "
-                 "classic sharp filters"));
+                 "classic sharp filters. CRT TV and Scanlines give the look of "
+                 "an old TV"));
     if (g_config.display.filtering == CONFIG_DISPLAY_FILTERING_RTX) {
         ImGui::TextWrapped(tr("RTX Video: %s"), RtxVideoStatus());
         if (ImGui::Button(tr("Check again"))) {
             RtxVideoRetry();
         }
+    } else if (g_config.display.filtering >= CONFIG_DISPLAY_FILTERING_CRT) {
+        char buf[160];
+        snprintf(buf, sizeof(buf), tr("How strong the TV look is (%d%%)"),
+                 (int)(g_config.display.crt_strength * 100));
+        Slider(tr("CRT strength"), &g_config.display.crt_strength, buf);
     } else if (g_config.display.filtering >= CONFIG_DISPLAY_FILTERING_FSR) {
         char buf[160];
         snprintf(buf, sizeof(buf), tr("Sharpening strength (%d%%, %s)"),
@@ -902,8 +918,11 @@ void MainMenuDisplayView::Draw()
     ChevronCombo(tr("Display mode"), &g_config.display.ui.fit,
                  tr_items("Center\0"
                  "Scale\0"
-                 "Stretch\0"),
-                 tr("Select how the framebuffer should fit or scale into the window"));
+                 "Stretch\0"
+                 "Integer (pixel-perfect)\0"),
+                 tr("Select how the framebuffer should fit or scale into the window. "
+                 "Integer scales by whole numbers only, for even pixels and "
+                 "scanlines"));
     ChevronCombo(tr("Aspect ratio"), &g_config.display.ui.aspect_ratio,
                  tr_items("Native\0"
                  "Auto (Default)\0"
@@ -919,6 +938,44 @@ void MainMenuAudioView::Draw()
     snprintf(buf, sizeof(buf), tr("Limit output volume (%d%%)"),
              (int)(g_config.audio.volume_limit * 100));
     Slider(tr("Output volume limit"), &g_config.audio.volume_limit, buf);
+
+    SectionTitle(tr("Output"));
+    {
+        // Playback devices, re-read every few seconds (they come and go)
+        static std::vector<std::string> devices;
+        static uint64_t listed_at = 0;
+        uint64_t now = SDL_GetTicks();
+        if (devices.empty() || now - listed_at > 3000) {
+            devices = AudioOutputDevices();
+            listed_at = now;
+        }
+        const char *cur = g_config.audio.output_device ? g_config.audio.output_device : "";
+        std::string items = std::string(tr("Windows default")) + '\0';
+        int sel = 0;
+        for (size_t i = 1; i < devices.size(); i++) {
+            items += devices[i] + '\0';
+            if (devices[i] == cur) {
+                sel = (int)i;
+            }
+        }
+        if (cur[0] && !sel) {
+            // Chosen before, not connected now
+            items += string_format(tr("%s (not connected)"), cur) + '\0';
+            sel = (int)devices.size();
+        }
+        items += '\0';
+        int was = sel;
+        if (ChevronCombo(tr("Output device"), &sel, items.c_str(),
+                         tr("Where the game's sound plays")) &&
+            sel != was && sel < (int)devices.size()) {
+            xemu_settings_set_string(&g_config.audio.output_device,
+                                     devices[sel].c_str());
+            AudioOutputDeviceApply();
+        }
+    }
+    ChevronCombo(tr("When xemu is in the background"), &g_config.audio.background,
+                 tr_items("Keep playing\0" "Quieter\0" "Mute\0"),
+                 tr("Sound while another window is active"));
 
     SectionTitle(tr("Quality"));
     Toggle(tr("Real-time DSP processing"), &g_config.audio.use_dsp,

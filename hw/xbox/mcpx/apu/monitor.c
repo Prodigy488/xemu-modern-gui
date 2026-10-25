@@ -18,8 +18,50 @@
  */
 
 #include "apu_int.h"
+#include "apu_output.h"
+#include "qemu/atomic.h"
+#include "qemu/error-report.h"
 
-void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
+/* Output device requests from the UI, applied on the audio thread */
+static QemuMutex device_lock;
+static char device_name[256];
+static int device_gen;
+static int ui_gain_milli = 1000; /* qatomic needs an integer */
+
+void mcpx_apu_monitor_set_device(const char *name)
+{
+    qemu_mutex_lock(&device_lock);
+    g_strlcpy(device_name, name ? name : "", sizeof(device_name));
+    qatomic_inc(&device_gen);
+    qemu_mutex_unlock(&device_lock);
+}
+
+void mcpx_apu_monitor_set_ui_gain(float gain)
+{
+    qatomic_set(&ui_gain_milli, (int)(fmaxf(0.0f, fminf(gain, 1.0f)) * 1000 + 0.5f));
+}
+
+/* The playback device with this name, or the default */
+static SDL_AudioDeviceID find_device(const char *name)
+{
+    SDL_AudioDeviceID found = SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;
+    if (!name || !name[0]) {
+        return found;
+    }
+    int count = 0;
+    SDL_AudioDeviceID *ids = SDL_GetAudioPlaybackDevices(&count);
+    for (int i = 0; ids && i < count; i++) {
+        const char *n = SDL_GetAudioDeviceName(ids[i]);
+        if (n && !strcmp(n, name)) {
+            found = ids[i];
+            break;
+        }
+    }
+    SDL_free(ids);
+    return found;
+}
+
+static void open_stream(MCPXAPUState *d, const char *name, Error **errp)
 {
     SDL_AudioSpec spec = {
         .freq = 48000,
@@ -27,15 +69,13 @@ void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
         .channels = 2,
     };
 
-    d->monitor.stream = NULL;
-
-    if (!SDL_Init(SDL_INIT_AUDIO)) {
-        error_setg(errp, "SDL_Init failed: %s", SDL_GetError());
-        return;
+    d->monitor.stream = SDL_OpenAudioDeviceStream(find_device(name), &spec,
+                                                  NULL, NULL);
+    if (d->monitor.stream == NULL && name && name[0]) {
+        /* Unplugged or renamed: fall back to the default */
+        d->monitor.stream = SDL_OpenAudioDeviceStream(
+            SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
     }
-
-    d->monitor.stream = SDL_OpenAudioDeviceStream(
-        SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
     if (d->monitor.stream == NULL) {
         error_setg(errp, "SDL_OpenAudioDeviceStream failed: %s",
                    SDL_GetError());
@@ -60,6 +100,22 @@ void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
     SDL_ResumeAudioDevice(dev);
 }
 
+void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
+{
+    d->monitor.stream = NULL;
+    qemu_mutex_init(&device_lock);
+    g_strlcpy(device_name, g_config.audio.output_device ?
+              g_config.audio.output_device : "", sizeof(device_name));
+    d->monitor.device_gen = qatomic_read(&device_gen);
+
+    if (!SDL_Init(SDL_INIT_AUDIO)) {
+        error_setg(errp, "SDL_Init failed: %s", SDL_GetError());
+        return;
+    }
+
+    open_stream(d, device_name, errp);
+}
+
 void mcpx_apu_monitor_finalize(MCPXAPUState *d)
 {
     if (d->monitor.stream) {
@@ -73,8 +129,29 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
         return;
     }
 
+    int gen = qatomic_read(&device_gen);
+    if (gen != d->monitor.device_gen) {
+        /* Another output device was chosen: reopen on this thread, the
+         * only one that uses the stream */
+        char name[sizeof(device_name)];
+        qemu_mutex_lock(&device_lock);
+        g_strlcpy(name, device_name, sizeof(name));
+        qemu_mutex_unlock(&device_lock);
+        d->monitor.device_gen = gen;
+        if (d->monitor.stream) {
+            SDL_DestroyAudioStream(d->monitor.stream);
+            d->monitor.stream = NULL;
+        }
+        Error *err = NULL;
+        open_stream(d, name, &err);
+        if (err) {
+            warn_report_err(err);
+        }
+    }
+
     if (d->monitor.stream) {
-        float vu = pow(fmax(0.0, fmin(g_config.audio.volume_limit, 1.0)), M_E);
+        float vu = pow(fmax(0.0, fmin(g_config.audio.volume_limit, 1.0)), M_E) *
+                   qatomic_read(&ui_gain_milli) / 1000.0;
         SDL_SetAudioStreamGain(d->monitor.stream, vu);
         SDL_PutAudioStreamData(d->monitor.stream, d->monitor.frame_buf,
                             sizeof(d->monitor.frame_buf));

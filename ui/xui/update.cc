@@ -36,7 +36,7 @@ using json = nlohmann::json;
 // This unofficial build updates from its own releases, so updating never
 // replaces it with official xemu (which doesn't have its features)
 const char *releases_url = "https://api.github.com/repos/Prodigy488/xemu-modern-gui/releases/latest";
-const char *const kModernGuiVersion = "1.9";
+const char *const kModernGuiVersion = "2.0";
 
 #if defined(__x86_64__)
 #define PACKAGE_ARCH "x86_64"

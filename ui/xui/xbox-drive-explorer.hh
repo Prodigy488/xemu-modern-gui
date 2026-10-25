@@ -64,6 +64,12 @@ bool XboxExplorerFindHomebrew(std::vector<XboxHomebrewApp> *out, std::string *er
 bool XboxExplorerDeleteFolder(char vol, const std::string &dir,
                               const std::string &title, std::string *err);
 
+// Game saves: copy E:\UDATA and E:\TDATA to host_dir (a new folder; the
+// Xbox keeps running), or put a backup back (replacing those folders; the
+// Xbox pauses and restarts). False with *err if it can't start.
+bool XboxExplorerBackupSaves(const std::string &host_dir, std::string *err);
+bool XboxExplorerRestoreSaves(const std::string &host_dir, std::string *err);
+
 // Last status line ("Copying...", "... - done.", an error), and progress 0-1
 std::string XboxExplorerStatus(bool *is_error);
 float XboxExplorerProgress(void);

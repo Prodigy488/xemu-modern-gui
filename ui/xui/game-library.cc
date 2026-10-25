@@ -28,6 +28,7 @@
 
 #include "common.hh"
 #include "osk.hh"
+#include "play-extras.hh"
 #include "game-library.hh"
 #include "game-library-scan.hh"
 #include "rtx-video.hh"
@@ -124,6 +125,7 @@ struct GameOverrides {
     float fsr_sharpness = -1; // < 0 = use global
     int renderer = -1;        // -1 = use global, else CONFIG_DISPLAY_RENDERER_*
     int dynamic_res = -1;     // -1 = use global, 0 off, 1 on
+    float volume = -1;        // < 0 = use global, else 0-1
 };
 
 std::vector<LibraryEntry> g_entries;
@@ -140,6 +142,15 @@ struct PatchItem {
 // because they don't fit the user's copy), so bulk downloads skip them
 std::set<std::string> g_jmp_fetched;
 std::map<uint32_t, std::vector<PatchItem>> g_patches;
+// Per downloaded .jmp file: its 60 FPS options and their defaults. Cleared
+// whenever a game's patch folder is re-read (SyncPatches).
+struct SixtyOpts {
+    std::vector<int> idx;
+    std::vector<bool> default_on;
+};
+std::map<std::string, SixtyOpts> g_sixty_cache;
+std::set<uint32_t> g_sixty_want; // switched on before the patch was here
+bool Has60Fps(const struct LibraryEntry &e);
 std::map<std::string, std::string> g_overlay_to_original; // overlay -> image
 bool g_loaded = false;
 bool g_dirty = false;
@@ -306,6 +317,7 @@ struct AppliedOverrides {
     float base_fsr = 0.8f;
     int base_renderer = 0;
     bool base_dynamic_res = false;
+    float base_volume = 1.0f;
 } g_applied;
 
 struct SavedConfig {
@@ -313,6 +325,7 @@ struct SavedConfig {
     float fsr;
     int renderer;
     bool dynamic_res;
+    float volume;
 } g_saved_config;
 
 // UI state
@@ -321,6 +334,7 @@ bool g_favorites_only = false;
 bool g_online_only = false;
 int g_filter_compat = 0; // 0 any, 1 Playable or better, 2 with problems, 3 not rated
 int g_filter_played = 0; // 0 any, 1 played, 2 never played
+bool g_filter_60 = false; // only games with a 60 FPS patch
 bool g_open_insignia_popup = false;
 
 // Insignia website status: checked on demand (when its panel is shown), at
@@ -622,6 +636,7 @@ void LoadLibrary()
             ov.fsr_sharpness = o.value("fsr_sharpness", -1.0f);
             ov.renderer = o.value("renderer", -1);
             ov.dynamic_res = o.value("dynamic_res", -1);
+            ov.volume = o.value("volume", -1.0f);
             g_overrides[(uint32_t)strtoul(id.c_str(), NULL, 16)] = ov;
         }
     } catch (const std::exception &ex) {
@@ -665,7 +680,8 @@ void SaveLibrary()
                                 { "filtering", o.filtering },
                                 { "fsr_sharpness", o.fsr_sharpness },
                                 { "renderer", o.renderer },
-                                { "dynamic_res", o.dynamic_res } };
+                                { "dynamic_res", o.dynamic_res },
+                                { "volume", o.volume } };
     }
     j["overrides"] = ovs;
     j["primary_recursive"] = g_primary_recursive;
@@ -1433,6 +1449,14 @@ void SyncPatches(uint32_t title_id)
         }
     }
     std::sort(sorted.begin(), sorted.end());
+    for (auto it = g_sixty_cache.begin(); it != g_sixty_cache.end();) {
+        // Re-read this game's files next time (they may have changed)
+        if (fs::u8path(it->first).parent_path() == PatchDir(title_id)) {
+            it = g_sixty_cache.erase(it);
+        } else {
+            ++it;
+        }
+    }
     std::vector<PatchItem> &items = g_patches[title_id];
     size_t before = items.size();
     items.erase(std::remove_if(items.begin(), items.end(),
@@ -1589,6 +1613,9 @@ void RestoreBaseline()
         g_config.display.quality.dynamic_resolution == (ov.dynamic_res == 1)) {
         g_config.display.quality.dynamic_resolution = g_applied.base_dynamic_res;
     }
+    if (ov.volume >= 0 && g_config.audio.volume_limit == ov.volume) {
+        g_config.audio.volume_limit = g_applied.base_volume;
+    }
     g_applied.active = false;
 }
 
@@ -1612,6 +1639,7 @@ void ApplyOverridesFor(const std::string &path)
     g_applied.base_fsr = g_config.display.fsr_sharpness;
     g_applied.base_renderer = g_config.display.renderer;
     g_applied.base_dynamic_res = g_config.display.quality.dynamic_resolution;
+    g_applied.base_volume = g_config.audio.volume_limit;
 
     if (ov.surface_scale > 0 &&
         ov.surface_scale != g_config.display.quality.surface_scale) {
@@ -1628,6 +1656,9 @@ void ApplyOverridesFor(const std::string &path)
     }
     if (ov.dynamic_res >= 0) {
         g_config.display.quality.dynamic_resolution = ov.dynamic_res == 1;
+    }
+    if (ov.volume >= 0) {
+        g_config.audio.volume_limit = ov.volume;
     }
     xemu_queue_notification(tr("Per-game settings applied"));
 }
@@ -1860,6 +1891,9 @@ void SortedFiltered(std::vector<LibraryEntry *> &out)
                 continue;
             }
         }
+        if (g_filter_60 && !Has60Fps(e)) {
+            continue;
+        }
         if (g_filter_played) {
             const GameStats &st = g_stats[e.path];
             bool played = st.last_played > 0 || st.play_seconds > 0;
@@ -2000,6 +2034,240 @@ std::vector<std::string> OnlinePatchPaths(uint32_t title_id)
 int OnlinePatchCount(uint32_t title_id)
 {
     return title_id ? (int)OnlinePatchPaths(title_id).size() : 0;
+}
+
+// ---------------------------------------------------------------------------
+// 60 FPS: games whose Magic Patches have a "60 FPS" option get a badge and a
+// one-click switch. The switch downloads the patch if needed and turns on
+// just those options (the rest of the patch file stays as the user set it).
+// ---------------------------------------------------------------------------
+
+// A 60 FPS patch for this game in Jay's collection (built-in list)
+bool Online60Fps(uint32_t title_id)
+{
+    const JmpIndexEntry *begin = kJmp60Fps;
+    const JmpIndexEntry *end = kJmp60Fps + sizeof(kJmp60Fps) / sizeof(kJmp60Fps[0]);
+    const JmpIndexEntry *it = std::lower_bound(
+        begin, end, title_id,
+        [](const JmpIndexEntry &a, uint32_t id) { return a.title_id < id; });
+    return title_id && it != end && it->title_id == title_id;
+}
+
+
+const SixtyOpts &SixtyOptionsIn(uint32_t title_id, const PatchItem &pi)
+{
+    fs::path p = PatchDir(title_id) / fs::u8path(pi.file);
+    std::string key = p.u8string();
+    auto it = g_sixty_cache.find(key);
+    if (it != g_sixty_cache.end()) {
+        return it->second;
+    }
+    SixtyOpts &o = g_sixty_cache[key];
+    if (Lower(p.extension().u8string()) != ".jmp") {
+        return o;
+    }
+    std::ifstream f(p, std::ios::binary);
+    std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    JmpPatch jmp;
+    std::string err;
+    if (!ParseJmp(text, jmp, err) || jmp.other_target) {
+        return o;
+    }
+    for (size_t k = 0; k < jmp.options.size(); k++) {
+        if (JmpOptionIs60Fps(jmp.options[k])) {
+            o.idx.push_back((int)k);
+            o.default_on.push_back(jmp.options[k].default_on);
+        }
+    }
+    return o;
+}
+
+struct SixtyState {
+    bool installed = false; // a downloaded patch has a 60 FPS option
+    bool on = false;        // and it's switched on
+};
+
+SixtyState SixtyFor(uint32_t title_id)
+{
+    SixtyState st;
+    auto it = g_patches.find(title_id);
+    if (!title_id || it == g_patches.end()) {
+        return st;
+    }
+    for (auto &pi : it->second) {
+        const SixtyOpts &o = SixtyOptionsIn(title_id, pi);
+        if (o.idx.empty()) {
+            continue;
+        }
+        st.installed = true;
+        if (!pi.enabled) {
+            continue;
+        }
+        bool all = true;
+        for (size_t k = 0; k < o.idx.size(); k++) {
+            bool flipped = std::find(pi.toggled.begin(), pi.toggled.end(), o.idx[k]) !=
+                           pi.toggled.end();
+            all &= o.default_on[k] != flipped;
+        }
+        st.on |= all;
+    }
+    return st;
+}
+
+// Turn the 60 FPS options on or off in the downloaded patches. False if no
+// downloaded patch has them.
+bool Set60FpsInstalled(uint32_t title_id, bool on)
+{
+    auto it = g_patches.find(title_id);
+    if (it == g_patches.end()) {
+        return false;
+    }
+    bool any = false;
+    bool first = true;
+    for (auto &pi : it->second) {
+        const SixtyOpts &o = SixtyOptionsIn(title_id, pi);
+        if (o.idx.empty()) {
+            continue;
+        }
+        any = true;
+        // Several files can have one (other versions, other authors): use
+        // the first and leave the others off, so they don't fight
+        bool want = on && first;
+        first = false;
+        if (want) {
+            pi.enabled = true;
+        }
+        for (size_t k = 0; k < o.idx.size(); k++) {
+            auto t = std::find(pi.toggled.begin(), pi.toggled.end(), o.idx[k]);
+            bool flipped = t != pi.toggled.end();
+            bool is_on = o.default_on[k] != flipped;
+            if (is_on != want) {
+                if (flipped) {
+                    pi.toggled.erase(t);
+                } else {
+                    pi.toggled.push_back(o.idx[k]);
+                }
+            }
+        }
+        std::sort(pi.toggled.begin(), pi.toggled.end());
+        // A file that was only on for 60 FPS goes off with it
+        if (!want && pi.enabled) {
+            bool other_on = false;
+            std::ifstream f(PatchDir(title_id) / fs::u8path(pi.file), std::ios::binary);
+            std::string text((std::istreambuf_iterator<char>(f)),
+                             std::istreambuf_iterator<char>());
+            JmpPatch jmp;
+            std::string err;
+            if (ParseJmp(text, jmp, err)) {
+                std::vector<bool> states = JmpOptionStates(jmp, pi.toggled);
+                for (size_t k = 0; k < jmp.options.size(); k++) {
+                    other_on |= states[k] && !jmp.options[k].other_xbe;
+                }
+            }
+            if (!other_on) {
+                pi.enabled = false;
+            }
+        }
+    }
+    if (any) {
+        g_dirty = true;
+    }
+    return any;
+}
+
+bool IsCurrentDisc(const LibraryEntry &e);
+void StartPatchDownload(uint32_t only_title, bool check_new);
+
+// The switch: on or off, downloading the patch first if needed
+void Set60Fps(LibraryEntry &e, bool on)
+{
+    if (!e.valid) {
+        return;
+    }
+    if (!Set60FpsInstalled(e.title_id, on)) {
+        if (!on) {
+            g_sixty_want.erase(e.title_id);
+            return;
+        }
+        if (!Online60Fps(e.title_id)) {
+            return;
+        }
+        g_sixty_want.insert(e.title_id);
+        StartPatchDownload(e.title_id, false);
+        return;
+    }
+    SaveLibrary();
+    xemu_queue_notification(
+        IsCurrentDisc(e)
+            ? (on ? tr("60 FPS is on. It starts the next time you start the game.")
+                  : tr("60 FPS is off. It goes back to normal the next time you "
+                       "start the game."))
+            : (on ? tr("60 FPS is on") : tr("60 FPS is off")));
+}
+
+// After a download: finish switching on what was asked for
+void SixtyAfterDownload()
+{
+    std::set<uint32_t> want;
+    want.swap(g_sixty_want);
+    for (uint32_t id : want) {
+        SyncPatches(id);
+        LibraryEntry *e = nullptr;
+        for (auto &x : g_entries) {
+            if (x.valid && x.title_id == id) {
+                e = &x;
+                break;
+            }
+        }
+        if (!e) {
+            continue;
+        }
+        if (SixtyFor(id).installed) {
+            Set60Fps(*e, true);
+        } else {
+            xemu_queue_error_message(
+                string_format(tr("The 60 FPS patch for %s doesn't fit your copy of "
+                                 "the game (another version or region)."),
+                              e->DisplayName().c_str())
+                    .c_str());
+        }
+    }
+}
+
+bool Has60Fps(const LibraryEntry &e)
+{
+    return e.valid && (Online60Fps(e.title_id) || SixtyFor(e.title_id).installed);
+}
+
+// The 60 FPS line in a game's details, with its switch
+template <typename Row> void Draw60FpsRow(LibraryEntry &e, Row &row)
+{
+    if (!Has60Fps(e)) {
+        return;
+    }
+    SixtyState st = SixtyFor(e.title_id);
+    bool busy = g_sixty_want.count(e.title_id) > 0;
+    row(tr("60 FPS"), busy       ? tr("Downloading the patch...")
+                      : st.on    ? tr("On (a community patch)")
+                                 : tr("Available (a community patch)"));
+    ImGui::BeginDisabled(busy);
+    if (ImGui::SmallButton(st.on ? tr("Turn off 60 FPS") : tr("Turn on 60 FPS"))) {
+        Set60Fps(e, !st.on);
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("%s", tr("Makes the game run at 60 frames per second with "
+                                   "a patch from Jay's Magic Patches. It needs a "
+                                   "fast PC: the Xbox is emulated working twice as "
+                                   "hard. If the game misbehaves, turn it off."));
+}
+
+// ---------------------------------------------------------------------------
+// Quick save / quick load: one snapshot per game, "Quick save <TITLE ID>"
+// ---------------------------------------------------------------------------
+
+std::string QuickSaveName(uint32_t title_id)
+{
+    return "Quick save " + FormatTitleId(title_id);
 }
 
 std::string UrlEncodePath(const std::string &path)
@@ -2294,6 +2562,7 @@ void MergePatchResults()
     if (!finished) {
         return;
     }
+    SixtyAfterDownload();
     int new_count = 0;
     if (!new_index.empty()) {
         for (auto &[path, id] : new_index) {
@@ -3222,6 +3491,26 @@ void DrawTile(LibraryEntry &e, float tile_w, int &tex_budget)
                 dl->AddText(bf, fs, p, IM_COL32(255, 255, 255, 255), badge);
             }
         }
+        if (Has60Fps(e)) {
+            // "60 FPS" under the ONLINE badge: bright when on
+            bool on = SixtyFor(e.title_id).on;
+            const char *badge = "60 FPS";
+            ImFont *bf = ImGui::GetFont();
+            float fs = font_h * 0.75f;
+            ImVec2 ts = bf->CalcTextSizeA(fs, FLT_MAX, 0, badge);
+            float y0 = SupportsOnline(e) ? fs + 10 * s : 0;
+            ImVec2 p(a.x + 6 * s, a.y + 6 * s + y0);
+            ImVec2 b0(p.x - 3 * s, p.y - 2 * s), b1(p.x + ts.x + 3 * s, p.y + ts.y + 2 * s);
+            ImU32 col = T().accent;
+            if (T().neon) {
+                ShapeFill(dl, b0, b1, on ? Alpha(col, 230) : IM_COL32(10, 6, 16, 220), 4 * s);
+                ShapeStroke(dl, b0, b1, col, 4 * s, 1.0f * s);
+                dl->AddText(bf, fs, p, on ? IM_COL32(4, 10, 14, 255) : col, badge);
+            } else {
+                dl->AddRectFilled(b0, b1, on ? Alpha(col, 235) : IM_COL32(0, 0, 0, 170), 3 * s);
+                dl->AddText(bf, fs, p, on ? IM_COL32(8, 20, 4, 255) : col, badge);
+            }
+        }
         CompatStatus tcs = CompatFor(e);
         if (tcs != CompatStatus::None && tcs != CompatStatus::Unknown) {
             // Compatibility dot in the bottom-left corner of the art
@@ -3421,6 +3710,22 @@ void DrawSettingsPopup()
     ImGui::TextDisabled("%s  -  %s", FormatTitleId(e->title_id).c_str(),
                         FormatRegion(e->region).c_str());
     ImGui::Separator();
+    if (Has60Fps(*e)) {
+        bool sixty = SixtyFor(e->title_id).on;
+        bool busy = g_sixty_want.count(e->title_id) > 0;
+        ImGui::BeginDisabled(busy);
+        if (ImGui::Checkbox(busy ? tr("60 FPS (downloading the patch...)") : tr("60 FPS"),
+                            &sixty)) {
+            Set60Fps(*e, sixty);
+        }
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip("%s", tr("Makes the game run at 60 frames per second "
+                                       "with a patch from Jay's Magic Patches. It "
+                                       "needs a fast PC: the Xbox is emulated "
+                                       "working twice as hard. If the game "
+                                       "misbehaves, turn it off."));
+        ImGui::Separator();
+    }
     ImGui::Checkbox(tr("Use custom settings for this game"), &g_settings_edit.enabled);
     ImGui::BeginDisabled(!g_settings_edit.enabled);
 
@@ -3435,7 +3740,8 @@ void DrawSettingsPopup()
                      tr_items("Use global\0" "Linear\0" "Nearest\0"
                      "AMD FidelityFX FSR 1.0\0" "Bicubic (Catmull-Rom)\0"
                      "Lanczos\0" "Snapdragon GSR 1\0"
-                     "NVIDIA Image Scaling (NIS)\0" "NVIDIA RTX Video (AI)\0"))) {
+                     "NVIDIA Image Scaling (NIS)\0" "NVIDIA RTX Video (AI)\0"
+                     "CRT TV\0" "Scanlines\0"))) {
         g_settings_edit.filtering = filter - 1;
     }
     bool custom_sharp = g_settings_edit.fsr_sharpness >= 0;
@@ -3462,6 +3768,18 @@ void DrawSettingsPopup()
     if (ImGui::Combo(tr("Dynamic resolution"), &dyn,
                      tr_items("Use global\0" "Off\0" "On (experimental)\0"))) {
         g_settings_edit.dynamic_res = dyn - 1;
+    }
+    bool custom_vol = g_settings_edit.volume >= 0;
+    if (ImGui::Checkbox(tr("Custom volume"), &custom_vol)) {
+        g_settings_edit.volume = custom_vol ? g_config.audio.volume_limit : -1.0f;
+    }
+    ImGui::SetItemTooltip(tr("For games that are much louder or quieter than "
+                          "the rest"));
+    if (custom_vol) {
+        int pct = (int)(g_settings_edit.volume * 100 + 0.5f);
+        if (ImGui::SliderInt(tr("Volume"), &pct, 0, 100, "%d%%")) {
+            g_settings_edit.volume = pct / 100.0f;
+        }
     }
     ImGui::EndDisabled();
     ImGui::TextDisabled(tr("Applied whenever this game's disc is loaded."));
@@ -4621,6 +4939,7 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
             ImGui::SetItemTooltip(tr("Widescreen, 60 FPS, HD and other patches "
                                   "from Jay's Magic Patches collection"));
         }
+        Draw60FpsRow(e, row);
     }
     row(tr("File"), fs::u8path(e.path).filename().u8string());
     row(tr("Size"), string_format(tr("%.2f GB"), e.file_size / 1e9));
@@ -5477,6 +5796,10 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
     if (SupportsOnline(e)) {
         ImGui::SameLine(0, 18 * s);
         DashPill(tr("ONLINE"), T().online);
+    }
+    if (e.valid && SixtyFor(e.title_id).on) {
+        ImGui::SameLine(0, 10 * s);
+        DashPill("60 FPS", T().accent);
     }
     CompatStatus hcs = CompatFor(e);
     if (hcs != CompatStatus::None && hcs != CompatStatus::Unknown) {
@@ -8390,17 +8713,28 @@ void DrawDashSettingsTab()
         ImGui::Combo("##filter", &g_config.display.filtering,
                      tr_items("Linear\0Nearest\0AMD FidelityFX FSR 1.0\0Bicubic (Catmull-Rom)\0"
                      "Lanczos\0Snapdragon GSR 1\0NVIDIA Image Scaling (NIS)\0"
-                     "NVIDIA RTX Video (AI)\0"));
+                     "NVIDIA RTX Video (AI)\0CRT TV\0Scanlines\0"));
         if (g_config.display.filtering == CONFIG_DISPLAY_FILTERING_RTX) {
             ImGui::TextWrapped(tr("RTX Video: %s"), RtxVideoStatus());
             if (DashButton(tr("Check again"), T().glass, T().white, ImVec2(0, 30 * s))) {
                 RtxVideoRetry();
             }
+        } else if (g_config.display.filtering >= CONFIG_DISPLAY_FILTERING_CRT) {
+            label(tr("CRT strength"));
+            ImGui::SliderFloat("##crt", &g_config.display.crt_strength, 0.0f, 1.0f,
+                               "%.2f");
+            ImGui::TextDisabled(tr("Looks best at 1440p or 4K, or with Integer "
+                                   "display mode"));
         } else if (g_config.display.filtering >= 2) {
             label(tr("Sharpening"));
             ImGui::SliderFloat("##sharp", &g_config.display.fsr_sharpness, 0.0f, 1.0f,
                                "%.2f");
         }
+        label(tr("Display mode"));
+        ImGui::Combo("##fit", &g_config.display.ui.fit,
+                     tr_items("Center\0Scale\0Stretch\0Integer (pixel-perfect)\0"));
+        ImGui::SetItemTooltip("%s", tr("Integer scales the picture by whole numbers "
+                                       "only, so every pixel and scanline is even"));
         ImGui::Dummy(ImVec2(0, 8 * s));
         ImGui::Checkbox(tr("Performance overlay (F9)"),
                         &g_config.display.ui.show_perf_overlay);
@@ -8474,6 +8808,34 @@ void DrawDashSettingsTab()
             ImGui::TextDisabled(tr("Same as the Xbox dashboard's video settings. "
                                 "Games read them when they start."));
         }
+        ImGui::Dummy(ImVec2(0, 14 * s));
+        DashLabel(tr("Sound"));
+        DashTitle(tr("Audio"));
+        label(tr("Volume"));
+        {
+            int pct = (int)(g_config.audio.volume_limit * 100 + 0.5f);
+            if (ImGui::SliderInt("##volume", &pct, 0, 100, "%d%%")) {
+                g_config.audio.volume_limit = pct / 100.0f;
+            }
+        }
+        label(tr("Output device"));
+        AudioOutputDeviceCombo("##outdev");
+        label(tr("When xemu is in the background"));
+        ImGui::Combo("##bgaudio", &g_config.audio.background,
+                     tr_items("Keep playing\0" "Quieter\0" "Mute\0"));
+        ImGui::Dummy(ImVec2(0, 14 * s));
+        DashLabel(tr("Controller"));
+        DashTitle(tr("Rumble and quick saves"));
+        label(tr("Rumble strength"));
+        {
+            int pct = (int)(g_config.input.rumble_strength * 100 + 0.5f);
+            if (ImGui::SliderInt("##rumble", &pct, 0, 100, "%d%%")) {
+                g_config.input.rumble_strength = pct / 100.0f;
+            }
+        }
+        ImGui::Checkbox(tr("Quick save buttons"), &g_config.input.quick_save_buttons);
+        ImGui::TextDisabled(tr("Back + LB saves the game you're playing, Back + RB "
+                            "loads it (one quick save per game)."));
     });
     if (!two_col) {
         return; // the second card only fits side by side
@@ -8648,7 +9010,7 @@ void DrawLibraryTab(int &tex_budget)
     }
     ImGui::SameLine(0, 2 * s);
     {
-        int active = (g_filter_compat != 0) + (g_filter_played != 0);
+        int active = (g_filter_compat != 0) + (g_filter_played != 0) + g_filter_60;
         std::string label = active ? string_format(tr(ICON_FA_SLIDERS "  Filter (%d)"), active)
                                    : std::string(tr(ICON_FA_SLIDERS "  Filter"));
         if (toggle(label.c_str(), active > 0,
@@ -8676,8 +9038,11 @@ void DrawLibraryTab(int &tex_budget)
                 ImGui::PopID();
             }
             ImGui::Separator();
+            ImGui::Checkbox(tr("Has a 60 FPS patch"), &g_filter_60);
+            ImGui::Separator();
             if (ImGui::Button(tr("Clear filters"))) {
                 g_filter_compat = g_filter_played = 0;
+                g_filter_60 = false;
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
@@ -8776,14 +9141,15 @@ void DrawLibraryTab(int &tex_budget)
         ImGui::TextDisabled(g_entries.empty() && !g_scan_running
                                 ? tr("No disc images found in your game folders.")
                                 : tr("No games match."));
-        if ((g_filter_compat || g_filter_played) && !g_entries.empty() &&
+        if ((g_filter_compat || g_filter_played || g_filter_60) && !g_entries.empty() &&
             ImGui::Button(tr("Clear filters"))) {
             g_filter_compat = g_filter_played = 0;
+            g_filter_60 = false;
         }
     }
     if (grid) {
         if (g_search.empty() && !g_favorites_only && !g_filter_compat &&
-            !g_filter_played) {
+            !g_filter_played && !g_filter_60) {
             DrawRecentRow(tex_budget);
         }
         DrawGrid(items, tex_budget);
@@ -10022,7 +10388,8 @@ void GameLibraryBeforeSettingsSave(void)
                        g_config.display.filtering,
                        g_config.display.fsr_sharpness,
                        g_config.display.renderer,
-                       g_config.display.quality.dynamic_resolution };
+                       g_config.display.quality.dynamic_resolution,
+                       g_config.audio.volume_limit };
     if (g_applied.active) {
         const GameOverrides &ov = g_applied.ov;
         if (ov.surface_scale > 0 &&
@@ -10042,6 +10409,9 @@ void GameLibraryBeforeSettingsSave(void)
         if (ov.dynamic_res >= 0 &&
             g_config.display.quality.dynamic_resolution == (ov.dynamic_res == 1)) {
             g_config.display.quality.dynamic_resolution = g_applied.base_dynamic_res;
+        }
+        if (ov.volume >= 0 && g_config.audio.volume_limit == ov.volume) {
+            g_config.audio.volume_limit = g_applied.base_volume;
         }
     }
 }
@@ -10074,6 +10444,55 @@ static void GameLibraryShutdown(void)
     }
 }
 
+void GameLibraryQuickSave(bool load)
+{
+    LibraryEntry *e = CurrentGame();
+    uint32_t id = e ? e->title_id : 0;
+    std::string game = e ? e->DisplayName() : "";
+    if (!id) {
+        // Not from the library (a disc loaded another way): the running XBE
+        struct xbe *xbe = xemu_get_xbe_info();
+        if (xbe && xbe->cert) {
+            memcpy(&id, &xbe->cert->m_titleid, 4);
+        }
+    }
+    if (!id || !runstate_is_running()) {
+        xemu_queue_notification(tr("Quick save works while a game is running"));
+        return;
+    }
+    std::string name = QuickSaveName(id);
+    if (load) {
+        g_snapshot_mgr.Refresh();
+        bool found = false;
+        for (int i = 0; i < g_snapshot_mgr.m_snapshots_len; i++) {
+            found |= name == g_snapshot_mgr.m_snapshots[i].name;
+        }
+        if (!found) {
+            xemu_queue_notification(tr("No quick save for this game yet. Back + LB "
+                                       "saves one."));
+            return;
+        }
+        ActionLoadSnapshotChecked(name.c_str());
+        xemu_queue_notification(tr(ICON_FA_CLOCK_ROTATE_LEFT "  Quick save loaded"));
+        return;
+    }
+    Error *err = NULL;
+    xemu_snapshots_save(name.c_str(), &err);
+    if (err) {
+        std::string msg = std::string(tr("Quick save failed: ")) + error_get_pretty(err);
+        xemu_queue_error_message(msg.c_str());
+        error_free(err);
+        return;
+    }
+    g_snapshot_mgr.Refresh();
+    xemu_queue_notification(tr(ICON_FA_FLOPPY_DISK "  Quick saved. Back + RB loads it."));
+}
+
+std::string GameLibrarySaveBackupDir(void)
+{
+    return (BasePath() / "save-backups").u8string();
+}
+
 void GameLibraryAfterSettingsSave(void)
 {
     g_config.display.quality.surface_scale = g_saved_config.scale;
@@ -10081,5 +10500,6 @@ void GameLibraryAfterSettingsSave(void)
     g_config.display.fsr_sharpness = g_saved_config.fsr;
     g_config.display.renderer = g_saved_config.renderer;
     g_config.display.quality.dynamic_resolution = g_saved_config.dynamic_res;
+    g_config.audio.volume_limit = g_saved_config.volume;
     DynamicResAfterSettingsSave();
 }

@@ -52,6 +52,7 @@
 #include "../xemu-net.h"
 #include "perf-voice.hh"
 #include "osk.hh"
+#include "play-extras.hh"
 #include "compat.hh"
 #include "xbox-drive-explorer.hh"
 #include "perf-capture.hh"
@@ -216,6 +217,7 @@ void xemu_hud_update(void)
     game_library_window.Update();
     XboxExplorerUpdate();
     PerfCaptureUpdate();
+    PlayExtrasUpdate();
     xemu_net_sync_dns();
     static bool library_startup_checked = false;
     if (!library_startup_checked) {
@@ -309,6 +311,9 @@ void xemu_hud_update(void)
             (buttons & CONTROLLER_BUTTON_START)) {
             menu_button = true;
         }
+
+        // Back + LB / Back + RB: quick save / quick load
+        PlayExtrasButtons(buttons);
 
         if (ImGui::IsKeyPressed(ImGuiKey_F1)) {
             g_scene_mgr.PushScene(g_main_menu);

@@ -1,7 +1,7 @@
 # xemu Modern GUI: an experimental xemu fork
 
 > [!IMPORTANT]
-> Vive Coded using Claude Code (Anthropic, Claude Opus 5.5)
+> Vibe Coded using Claude Code (Anthropic, Claude Opus 5.5)
 **This is an experimental fork of [xemu](https://xemu.app) for trying out
 > user interface improvements.** It is not official xemu, and it is not made,
 > endorsed or supported by the xemu project. Some of these ideas may never

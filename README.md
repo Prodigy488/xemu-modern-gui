@@ -17,7 +17,8 @@
 This fork is based on xemu 0.8.139. Emulation is unchanged except where noted
 under Performance and stability; the work here is on the interface: a
 console-style dashboard in 11 languages that works fully with a controller
-(on-screen keyboard included), a homebrew tab and store, upscaling options,
+(on-screen keyboard and quick saves included), one-click 60 FPS patches,
+upscaling and CRT TV filters, a homebrew tab and store, game save backups,
 tools for finding out why a game is slow, a guided Insignia setup, and
 quality-of-life features.
 
@@ -37,6 +38,10 @@ quality-of-life features.
 | On-screen keyboard | Performance Capture | Settings | Setup check |
 |---|---|---|---|
 | ![On-screen keyboard](docs/screenshots/keyboard.jpg) | ![Performance Capture](docs/screenshots/perf-capture.jpg) | ![Settings](docs/screenshots/settings.jpg) | ![Setup check](docs/screenshots/setup.jpg) |
+
+| 60 FPS games | Game saves |
+|---|---|
+| ![60 FPS games](docs/screenshots/sixty-fps.jpg) | ![Game saves](docs/screenshots/game-saves.jpg) |
 
 | Deutsch | 日本語 | Русский |
 |---|---|---|

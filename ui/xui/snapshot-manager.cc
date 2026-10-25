@@ -18,9 +18,14 @@
 //
 
 #include "common.hh"
+#include "game-library.hh"
+#include "misc.hh"
 #include "notifications.hh"
 #include "snapshot-manager.hh"
+#include "viewport-manager.hh"
 #include "xemu-hud.h"
+
+#include <ctime>
 
 SnapshotManager g_snapshot_mgr;
 
@@ -57,6 +62,37 @@ void SnapshotManager::Refresh()
 }
 
 void SnapshotManager::LoadSnapshotChecked(const char *name)
+{
+    Refresh();
+
+    for (int i = 0; i < m_snapshots_len; i++) {
+        if (!strcmp(m_snapshots[i].name, name)) {
+            // Made before changes to the Xbox hard drive? Loading it would
+            // put the drive back the way it was then
+            auto changes = GameLibraryDriveChangesSince(m_snapshots[i].date_sec);
+            if (!changes.empty()) {
+                m_drive_changes.clear();
+                for (auto &c : changes) {
+                    char when[64] = "";
+                    time_t t = (time_t)c.time;
+                    struct tm *tm = localtime(&t);
+                    if (tm) {
+                        strftime(when, sizeof(when), "%Y-%m-%d %H:%M", tm);
+                    }
+                    m_drive_changes.push_back(std::string(when) + "  " + c.what);
+                }
+                m_drive_load_name = name;
+                m_drive_disc_path = m_extra_data[i].disc_path ? m_extra_data[i].disc_path : "";
+                m_drive_open_pending = true;
+                return;
+            }
+            break;
+        }
+    }
+    LoadSnapshotCheckedDisc(name);
+}
+
+void SnapshotManager::LoadSnapshotCheckedDisc(const char *name)
 {
     Refresh();
 
@@ -109,6 +145,59 @@ void SnapshotManager::LoadSnapshot(const char *name)
 void SnapshotManager::Draw()
 {
     DrawSnapshotDiscLoadDialog();
+    DrawDriveChangesDialog();
+}
+
+void SnapshotManager::DrawDriveChangesDialog()
+{
+    if (m_drive_open_pending) {
+        ImGui::OpenPopup(trid("Load an older save state?"));
+        m_drive_open_pending = false;
+    }
+    ImGui::SetNextWindowSize(ImVec2(560 * g_viewport_mgr.m_scale, 0), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal(trid("Load an older save state?"), NULL,
+                                ImGuiWindowFlags_AlwaysAutoResize)) {
+        return;
+    }
+    float wrap = 540 * g_viewport_mgr.m_scale;
+    ImGui::PushTextWrapPos(wrap);
+    ImGui::TextUnformatted(tr("A save state puts the whole Xbox back the way it was, "
+                              "hard drive included. This one was made before these "
+                              "changes to the Xbox hard drive, so loading it would "
+                              "undo them:"));
+    ImGui::PopTextWrapPos();
+    ImGui::Spacing();
+    ImGui::Indent();
+    for (auto &c : m_drive_changes) {
+        ImGui::BulletText("%s", c.c_str());
+    }
+    ImGui::Unindent();
+    ImGui::Spacing();
+    ImGui::PushTextWrapPos(wrap);
+    ImGui::TextDisabled("%s", tr("Homebrew installed since then would have to be "
+                                 "installed again. Game saves made since then in "
+                                 "other games are also undone."));
+    ImGui::PopTextWrapPos();
+    ImGui::Dummy(ImVec2(0, 8 * g_viewport_mgr.m_scale));
+    if (!m_drive_disc_path.empty()) {
+        if (ImGui::Button(tr("Start the game without it"))) {
+            // Boots the game fresh; the hard drive stays as it is
+            GameLibraryStartFresh(m_drive_disc_path.c_str());
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SetItemTooltip("%s", tr("Keeps everything on the hard drive"));
+        ImGui::SameLine();
+    }
+    if (ImGui::Button(tr("Load anyway"))) {
+        std::string name = m_drive_load_name;
+        ImGui::CloseCurrentPopup();
+        LoadSnapshotCheckedDisc(name.c_str());
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(tr("Cancel")) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 void SnapshotManager::DrawSnapshotDiscLoadDialog()

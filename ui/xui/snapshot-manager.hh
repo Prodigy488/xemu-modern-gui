@@ -19,6 +19,7 @@
 
 #pragma once
 #include <string>
+#include <vector>
 #include "../xemu-snapshots.h"
 
 class SnapshotManager
@@ -34,14 +35,23 @@ public:
     std::string m_current_disc_path;
     std::string m_target_disc_path;
 
+    // Loading a save state older than changes to the Xbox hard drive would
+    // undo them: asked first
+    bool m_drive_open_pending = false;
+    std::string m_drive_load_name, m_drive_disc_path;
+    std::vector<std::string> m_drive_changes;
+
     SnapshotManager();
     ~SnapshotManager();
     void Refresh();
     void LoadSnapshot(const char *name);
     void LoadSnapshotChecked(const char *name);
+    // After the hard drive question: the disc check, then load
+    void LoadSnapshotCheckedDisc(const char *name);
 
     void Draw();
     void DrawSnapshotDiscLoadDialog();
+    void DrawDriveChangesDialog();
 };
 
 extern SnapshotManager g_snapshot_mgr;

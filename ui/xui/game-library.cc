@@ -293,6 +293,7 @@ std::string g_leave_launch_path;
 // A snapshot restores RAM, including the running kernel, but not the
 // flash ROM, so resuming under a different BIOS can crash the guest.
 std::map<uint32_t, std::string> g_resume_machine;
+std::vector<DriveChange> g_drive_changes; // newest last, see GameLibraryNoteDriveChange
 std::string g_resume_warn_name;      // snapshot awaiting confirmation
 std::string g_resume_warn_saved_with;
 bool g_open_resume_warning = false;
@@ -543,6 +544,12 @@ void LoadLibrary()
         json stats = j.value("stats", json::object());
         json overrides = j.value("overrides", json::object());
         g_primary_recursive = j.value("primary_recursive", true);
+        g_drive_changes.clear();
+        for (auto &c : j.value("drive_changes", json::array())) {
+            if (c.is_array() && c.size() == 2 && c[0].is_number() && c[1].is_string()) {
+                g_drive_changes.push_back({ c[0].get<int64_t>(), c[1].get<std::string>() });
+            }
+        }
         json resume_machine = j.value("resume_machine", json::object());
         for (auto &[id, sig] : resume_machine.items()) {
             if (sig.is_string()) {
@@ -690,6 +697,11 @@ void SaveLibrary()
         resume_machine[TitleIdHex(id)] = sig;
     }
     j["resume_machine"] = resume_machine;
+    json changes = json::array();
+    for (auto &c : g_drive_changes) {
+        changes.push_back({ c.time, c.what });
+    }
+    j["drive_changes"] = changes;
     j["files"] = g_extra_files;
     j["hidden"] = g_hidden;
     json missing = json::array();
@@ -2175,7 +2187,6 @@ bool Set60FpsInstalled(uint32_t title_id, bool on)
     return any;
 }
 
-bool IsCurrentDisc(const LibraryEntry &e);
 void StartPatchDownload(uint32_t only_title, bool check_new);
 
 // The switch: on or off, downloading the patch first if needed
@@ -10486,6 +10497,38 @@ void GameLibraryQuickSave(bool load)
     }
     g_snapshot_mgr.Refresh();
     xemu_queue_notification(tr(ICON_FA_FLOPPY_DISK "  Quick saved. Back + RB loads it."));
+}
+
+void GameLibraryNoteDriveChange(const std::string &what)
+{
+    g_drive_changes.push_back({ (int64_t)time(NULL), what });
+    // Only recent ones matter (save states older than these are rare)
+    if (g_drive_changes.size() > 30) {
+        g_drive_changes.erase(g_drive_changes.begin(),
+                              g_drive_changes.end() - 30);
+    }
+    if (g_loaded) {
+        SaveLibrary();
+    }
+}
+
+std::vector<DriveChange> GameLibraryDriveChangesSince(int64_t since)
+{
+    std::vector<DriveChange> out;
+    for (auto it = g_drive_changes.rbegin(); it != g_drive_changes.rend(); ++it) {
+        if (it->time > since) {
+            out.push_back(*it);
+        }
+    }
+    return out;
+}
+
+void GameLibraryStartFresh(const char *disc_path)
+{
+    if (!disc_path || !disc_path[0]) {
+        return;
+    }
+    game_library_window.Launch(OriginalDiscPath(disc_path));
 }
 
 std::string GameLibrarySaveBackupDir(void)

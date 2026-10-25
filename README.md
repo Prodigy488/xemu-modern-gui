@@ -142,6 +142,10 @@ see the [Releases](../../releases) page.
   [libfatx](https://github.com/mborgerson/fatx)).
 - **Game save backups:** copy the Xbox's saves (`E:\UDATA`, `E:\TDATA`) to
   a dated folder on your PC and put a backup back in one click.
+- **Safe save states:** a save state puts the whole Xbox back, hard drive
+  included, so loading one made before you installed homebrew or changed
+  the drive would undo that. xemu remembers those changes and asks first,
+  with "Start the game without it" to keep the drive as it is.
 
 ### Online play with Insignia
 

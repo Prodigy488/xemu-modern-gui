@@ -68,6 +68,20 @@ void GameLibraryQuickSave(bool load);
 
 // Where game save backups go on the PC (a folder per backup)
 std::string GameLibrarySaveBackupDir(void);
+
+// Changes made to the Xbox hard drive from xemu (homebrew installed, files
+// copied, saves restored). Loading a save state puts the whole Xbox back,
+// hard drive included, so loading one older than these would undo them:
+// the snapshot manager asks first.
+void GameLibraryNoteDriveChange(const std::string &what);
+struct DriveChange {
+    int64_t time; // unix time
+    std::string what;
+};
+// Changes made after unix time `since`, newest first
+std::vector<DriveChange> GameLibraryDriveChangesSince(int64_t since);
+// Start the game on this disc without its save state (resume point)
+void GameLibraryStartFresh(const char *disc_path);
 // A dialog used Esc / B this frame, so the library shouldn't also close
 void GameLibraryConsumeBack(void);
 // The setup check (MCPX, BIOS, hard disk, games folder) on the dashboard

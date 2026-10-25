@@ -364,6 +364,10 @@ void FinishJob()
         g_drive.UpdateFreeSpace(j.vol);
         XboxRestart();
         g_paused_for_job = false;
+        if (j.i > 0) {
+            // Remembered so loading an older save state asks first
+            GameLibraryNoteDriveChange(j.title);
+        }
     }
     if (!j.err.empty()) {
         SetStatus(j.err, true);
@@ -590,6 +594,9 @@ void SimpleWrite(const std::string &title, std::function<bool(std::string *)> op
     g_drive.Flush();
     XboxRestart();
     g_paused_for_job = false;
+    if (ok) {
+        GameLibraryNoteDriveChange(title);
+    }
     SetStatus(ok ? title + " - " + tr("done. The Xbox restarted to load the change.")
                  : (err.empty() ? g_open_err : err),
               !ok);

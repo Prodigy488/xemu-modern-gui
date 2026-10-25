@@ -14,7 +14,7 @@
 >   the problem.
 > - For the official emulator, downloads and support, go to
 >   [xemu.app](https://xemu.app).
-
+Vibe Coded using Claude Code (Anthropic, Claude Opus 5.5)
 This fork is based on xemu 0.8.139. Emulation is unchanged except where noted
 under Performance and stability; the work here is on the interface: a
 console-style dashboard in 11 languages that works fully with a controller

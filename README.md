@@ -101,8 +101,8 @@ see the [Releases](../../releases) page.
 
 ### A console-style dashboard
 
-- **Five styles**, switchable any time: the tabbed **Dashboard**, **Blades**
-  (sliding side-by-side panels), **Metro** (slim XBMC4Gamers-style lists), **Original Xbox** (a from-scratch homage to the first Xbox's menu with a glowing wireframe globe; no Microsoft artwork)
+- **Six styles**, switchable any time: the tabbed **Dashboard**, **Blades**
+  (sliding side-by-side panels), **Metro** (slim XBMC4Gamers-style lists), **Original Xbox** (a from-scratch homage to the first Xbox's menu with a glowing wireframe globe; no Microsoft artwork) and **Original Blades** (the same look with the sections as tall, swaying green fins)
   and the **Classic** single library window.
 - **Two themes:** **Neon** (near-black with cyan and magenta, cut-corner
   panels and HUD labels) and **Green** (the rounded look in xemu green).

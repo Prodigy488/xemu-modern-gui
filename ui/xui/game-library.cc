@@ -9984,7 +9984,7 @@ void DrawDashSettingsTab()
         ImGui::Combo("##style", &g_config.general.library.style,
                      tr_items("Dashboard (tabs)\0Classic (library window)\0"
                      "Blades (sliding panels)\0Metro (live tiles)\0"
-                     "Original Xbox (menu and globe)\0Original Blades (glass blades)\0"));
+                     "Original Xbox (menu and globe)\0Original Blades (green fins)\0"));
         label(tr("Dashboard theme"));
         ImGui::Combo("##theme", &g_config.general.library.theme,
                      tr_items("Neon (dark, cyan and magenta)\0Green (xemu)\0"));
@@ -10947,11 +10947,12 @@ void DrawXboxFrame(int &tex_budget)
 
 // ---- Original Blades ----
 
-// The look of the original Xbox 360 dashboard's blades: a green backdrop with
-// silky ribbons of light, and every section a tall glass blade standing in a
-// row on the left. The blade you are on rises and lights up, and its window
-// opens beside the row, so all the blades stay in view as you flip through
-// them (LB / RB, or click one).
+// Fins in the look of the original Xbox's menu: black and green with the
+// glowing wireframe globe behind. Every section is a tall, thin, see-through
+// green fin in a row on the left, swaying a little; the fin you are on is
+// pulled forward and lit, and its window opens beside the row over the globe,
+// so all the fins stay in view as you flip through them (LB / RB, or click
+// one).
 void DrawXBladesFrame(int &tex_budget)
 {
     const float s = g_viewport_mgr.m_scale;
@@ -10959,40 +10960,30 @@ void DrawXBladesFrame(int &tex_budget)
     ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
     ImVec2 wb(wp.x + ws.x, wp.y + ws.y);
     const double now = ImGui::GetTime();
+    const bool anim = Animations();
+    const ImU32 green = IM_COL32(133, 204, 36, 255);
 
-    // Backdrop: deep green, a bright pool of light at the top right, ribbons
-    dl->AddRectFilledMultiColor(wp, wb, IM_COL32(40, 96, 16, 250), IM_COL32(28, 74, 14, 250),
-                                IM_COL32(4, 18, 6, 252), IM_COL32(4, 18, 6, 252));
-    for (int i = 0; i < 9; i++) {
-        dl->AddCircleFilled(ImVec2(wp.x + ws.x * 0.80f, wp.y + ws.y * 0.05f),
-                            ws.x * (0.10f + i * 0.06f), IM_COL32(170, 240, 90, 6), 64);
-    }
-    if (Animations()) {
-        float t = (float)now;
-        DrawRibbon(dl, wp, wb, t, 0.78f, 0.06f, 0.9f, 0.20f, 0.07f, 0.0f,
-                   IM_COL32(210, 255, 170, 54));
-        DrawRibbon(dl, wp, wb, t, 0.84f, 0.05f, 1.2f, 0.15f, 0.05f, 2.3f,
-                   IM_COL32(150, 235, 80, 48));
-        DrawRibbon(dl, wp, wb, t, 0.70f, 0.05f, 0.7f, 0.11f, 0.035f, 4.1f,
-                   IM_COL32(255, 255, 255, 30));
-    }
+    XboxDashBackground(dl, wp, wb, s, now, true, anim);
+    XboxDashGlobe(dl, ImVec2(wp.x + ws.x * 0.70f, wp.y + ws.y * 0.50f),
+                  std::min(ws.y * 0.30f, ws.x * 0.19f), now, 0.0f, anim);
 
     const float pad = 20 * s;
     ImFont *big = FontOr(g_font_mgr.m_menu_font);
     ImFont *label_font = FontOr(g_font_mgr.m_menu_font_small);
-    dl->AddText(big, big->FontSize, ImVec2(wp.x + pad, wp.y + 12 * s),
-                IM_COL32(240, 250, 235, 255), "xemu");
+    dl->AddText(label_font, label_font->FontSize, ImVec2(wp.x + pad + 4 * s, wp.y + 26 * s),
+                Alpha(green, 235), "xemu");
     DrawStyleStatus(wb.x - pad, wp.y + 12 * s);
 
-    // The row of blades
+    // The row of fins: tall, thin, see-through green slabs that sway a little.
+    // The one you are on is pulled forward, wider, straight and lit.
     const float hints_h = ImGui::GetFontSize() * 2.2f;
     const float rise = 16 * s;
-    ImVec2 a(wp.x + pad, wp.y + 58 * s + rise), b(wb.x - pad, wb.y - hints_h - 4 * s);
-    const float sw = std::min(56.0f * s, ws.x * 0.034f), gap = 5 * s;
+    ImVec2 a(wp.x + pad, wp.y + 62 * s + rise), b(wb.x - pad, wb.y - hints_h - 4 * s);
+    const float sw = std::min(52.0f * s, ws.x * 0.032f), gap = 9 * s;
     static float lift[kTabCount];
     for (int i = 0; i < kTabCount; i++) {
         float target = i == g_dash_tab ? 1.0f : 0.0f;
-        if (Animations()) {
+        if (anim) {
             lift[i] += (target - lift[i]) * (1.0f - expf(-14.0f * ImGui::GetIO().DeltaTime));
             if (fabsf(target - lift[i]) < 0.003f) {
                 lift[i] = target;
@@ -11001,67 +10992,67 @@ void DrawXBladesFrame(int &tex_budget)
             lift[i] = target;
         }
     }
+    const float fin_t = anim ? (float)now : 0.0f;
     for (int i = 0; i < kTabCount; i++) {
-        float x0 = a.x + i * (sw + gap);
-        ImU32 col = SectionColor(i);
-        float up = lift[i] * rise;
-        ImVec2 p(x0, a.y - up), q(x0 + sw, b.y);
-        ImGui::SetCursorScreenPos(p);
+        float x0 = a.x + i * (sw + gap) - lift[i] * 4 * s;
+        float w = sw + lift[i] * 8 * s;
+        float sway = sinf(fin_t * 0.55f + i * 0.7f);
+        float lean = sway * 7 * s * (1.0f - lift[i]);
+        float top = a.y - lift[i] * rise + (1.0f - lift[i]) * (0.5f + 0.5f * sinf(fin_t * 0.4f + i * 1.1f)) * 14 * s;
+        float bot = b.y;
+        ImGui::SetCursorScreenPos(ImVec2(x0 - 8 * s, top));
         ImGui::PushID(i);
-        bool clicked = ImGui::InvisibleButton("##xblade", ImVec2(sw, q.y - p.y));
+        bool clicked = ImGui::InvisibleButton("##xfin", ImVec2(w + 16 * s, bot - top));
         bool hov = ImGui::IsItemHovered();
         ImGui::PopID();
-        int body = (int)(150 + 70 * lift[i]) + (hov ? 20 : 0);
-        dl->AddRectFilled(p, q, IM_COL32(8, 22, 10, std::min(body, 245)), 9 * s);
-        // Colour washing down from the top; stronger on the lit blade
-        dl->AddRectFilledMultiColor(p, ImVec2(q.x, p.y + (q.y - p.y) * 0.55f),
-                                    Alpha(col, (int)(70 + 110 * lift[i])),
-                                    Alpha(col, (int)(70 + 110 * lift[i])), Alpha(col, 0),
-                                    Alpha(col, 0));
-        // Glass shine down the left edge and across the top
-        dl->AddRectFilledMultiColor(p, ImVec2(p.x + sw * 0.35f, q.y), IM_COL32(255, 255, 255, 34),
-                                    IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 0),
-                                    IM_COL32(255, 255, 255, 6));
-        dl->AddRect(p, q, Alpha(col, (int)(110 + 120 * lift[i]) + (hov ? 40 : 0)), 9 * s, 0,
+        float on = std::min(1.0f, lift[i] + (hov ? 0.3f : 0.0f));
+        // The slab: slices from top to bottom, clearer toward the foot
+        const int N = 28;
+        for (int k = 0; k < N; k++) {
+            float t0 = (float)k / N, t1 = (float)(k + 1) / N;
+            float y0 = top + (bot - top) * t0, y1 = top + (bot - top) * t1;
+            float o0 = lean * (1.0f - t0), o1 = lean * (1.0f - t1);
+            float f = 1.0f - 0.5f * (t0 + t1);
+            int al = (int)((30 + 120 * on) * (0.25f + 0.75f * powf(f, 1.3f)));
+            ImVec2 q[4] = { ImVec2(x0 + o0, y0), ImVec2(x0 + w + o0, y0),
+                            ImVec2(x0 + w + o1, y1), ImVec2(x0 + o1, y1) };
+            dl->AddConvexPolyFilled(q, 4, Alpha(green, al));
+        }
+        // Edges and a bright rim across the top
+        float al_edge = 70 + 170 * on;
+        dl->AddLine(ImVec2(x0 + lean, top), ImVec2(x0, bot), Alpha(green, (int)al_edge),
                     (1.0f + lift[i]) * s);
-        dl->AddCircleFilled(ImVec2(p.x + sw / 2, p.y + 18 * s), (4.0f + 2.0f * lift[i]) * s,
-                            Alpha(col, 255), 16);
-        dl->AddCircle(ImVec2(p.x + sw / 2, p.y + 18 * s), (8.0f + 2.0f * lift[i]) * s,
-                      Alpha(col, 120), 20, 1.0f * s);
+        dl->AddLine(ImVec2(x0 + w + lean, top), ImVec2(x0 + w, bot),
+                    Alpha(green, (int)(al_edge * 0.7f)), 1.0f * s);
+        dl->AddLine(ImVec2(x0 + lean, top), ImVec2(x0 + w + lean, top),
+                    Alpha(green, (int)(120 + 135 * on)), (1.5f + lift[i]) * s);
+        // Light down the middle of the lit fin
+        if (on > 0.05f) {
+            dl->AddRectFilledMultiColor(ImVec2(x0 + w * 0.42f, top), ImVec2(x0 + w * 0.58f, bot),
+                                        Alpha(green, (int)(70 * on)), Alpha(green, (int)(70 * on)),
+                                        Alpha(green, 0), Alpha(green, 0));
+        }
         std::string name = XuiLower(tr(kTabNames[i]));
         float fs = label_font->FontSize;
-        AddTextVertical(dl, label_font, fs, ImVec2(p.x + (sw - fs) / 2, q.y - 16 * s),
-                        IM_COL32(240, 250, 240, (int)(170 + 85 * lift[i]) + (hov ? 20 : 0)),
-                        name.c_str());
+        AddTextVertical(dl, label_font, fs, ImVec2(x0 + (w - fs) / 2, bot - 16 * s),
+                        IM_COL32(235, 250, 235, (int)(130 + 125 * on)), name.c_str());
         if (clicked) {
             SwitchTab(i);
         }
     }
 
-    // The window beside the row, tinted to the blade
-    float wx0 = a.x + kTabCount * (sw + gap) + 10 * s;
-    ImVec2 p(wx0, a.y), q(b.x, b.y);
-    ImU32 col = SectionColor(g_dash_tab);
-    dl->AddRectFilled(p, q, IM_COL32(6, 18, 9, 226), 10 * s);
-    dl->AddRectFilledMultiColor(p, ImVec2(q.x, p.y + 110 * s), Alpha(col, 84), Alpha(col, 26),
-                                Alpha(col, 0), Alpha(col, 0));
-    dl->AddRect(p, q, Alpha(col, 190), 10 * s, 0, 1.4f * s);
-    // A pointer from the lit blade to the window
-    float cy = a.y + 18 * s;
-    dl->AddTriangleFilled(ImVec2(wx0 - 9 * s, cy), ImVec2(wx0 + 1 * s, cy - 7 * s),
-                          ImVec2(wx0 + 1 * s, cy + 7 * s), Alpha(col, 230));
+    // The window beside the row, over the globe
     std::string title = XuiLower(tr(kTabNames[g_dash_tab]));
-    dl->AddText(big, big->FontSize, ImVec2(p.x + 22 * s, p.y + 10 * s),
-                IM_COL32(250, 255, 250, 255), title.c_str());
-
-    // The content slides in when the blade changes
+    float wx0 = a.x + kTabCount * (sw + gap) + 4 * s;
+    // XboxDashWindow sits 58 px below the top of the area it is given
+    XboxDashRect r = XboxDashWindow(title.c_str(), ImVec2(wp.x, wp.y + 20 * s), wb, s, big,
+                                    wx0, wb.y - b.y, 1.0f);
     float slide = (1.0f - EaseSince(g_anim.tab_t, 0.30f)) * 30 * s;
-    float ty = p.y + big->FontSize + 22 * s;
-    ImGui::SetCursorScreenPos(ImVec2(p.x + 22 * s + slide, ty));
+    ImGui::SetCursorScreenPos(ImVec2(r.min.x + slide, r.min.y));
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
     ImGui::BeginChild("##xbladescontent",
-                      ImVec2(std::max(10.0f, q.x - p.x - 40 * s),
-                             std::max(10.0f, q.y - ty - 14 * s)),
+                      ImVec2(std::max(10.0f, r.max.x - r.min.x),
+                             std::max(10.0f, r.max.y - r.min.y)),
                       ImGuiChildFlags_NavFlattened,
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleColor();

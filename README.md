@@ -220,7 +220,8 @@ see the [Releases](../../releases) page.
   ready-made keyboard layout in one click. Picking the keyboard for a port
   turns the mouse on (you can turn it off again).
 - **Keyboard, mouse and controller together:** in Settings > Input, the
-  Input Device list has a "Keyboard, mouse and controller" choice. That port
+  Input Device list has a "Keyboard, mouse and controller" choice (the plain
+  keyboard entry is gone; the keyboard always comes with the controllers). That port
   hears the keyboard, the mouse and every connected controller at once, so
   there is nothing to switch and no button to press first. The mouse is
   captured by itself while you play (F3 lets go, a click takes it back), so
@@ -228,11 +229,6 @@ see the [Releases](../../releases) page.
 - **Resuming keeps your controllers:** when you resume a game or load a saved
   state from the library, your controllers are plugged in again so the game
   doesn't sit on a "connect a controller" message.
-- **Keyboard and controller, automatically:** while the keyboard is on a
-  port, moving a controller puts that controller on the port, and using the
-  keyboard or mouse puts the keyboard back. It doesn't change your saved
-  ports (it only applies when the keyboard is player 1 and is plain "Keyboard"), and there's a switch for it in Settings > Input if you'd rather
-  keep both on their own ports.
 - **Keys and mouse for each game:** in a game's settings, "Own keyboard and
   mouse setup for this game" gives it its own keys, mouse speed and mouse
   buttons, switched on when the game starts and put back when it's done.

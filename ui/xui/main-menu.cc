@@ -303,7 +303,7 @@ void MainMenuInputView::Draw()
     // Get current controller name
     const char *name;
     const char *combined_name = tr("Keyboard, mouse and controller");
-    const bool combined = g_config.input.keyboard_with_controller;
+    const bool combined = true; // the keyboard always comes with the controllers
     if (bound_state == NULL) {
         name = not_connected;
     } else if (combined && bound_state->type == INPUT_DEVICE_SDL_KEYBOARD) {
@@ -328,10 +328,35 @@ void MainMenuInputView::Draw()
         // Handle all available input devices
         ControllerState *iter;
         QTAILQ_FOREACH(iter, &available_controllers, entry) {
-            is_selected = bound_state == iter;
-            if (iter->type == INPUT_DEVICE_SDL_KEYBOARD && combined) {
-                is_selected = false; // shown as the combined entry below
+            if (iter->type == INPUT_DEVICE_SDL_KEYBOARD) {
+                ImGui::PushID("kbd-with-controller");
+                const bool here = bound_state == iter;
+                if (ImGui::Selectable(combined_name, here)) {
+                    if (!here) {
+                        xemu_input_bind(active, iter, 1);
+                    }
+                    g_config.input.keyboard_with_controller = true;
+                    g_config.input.mouse.enabled = true; // nothing else to turn on
+                    g_config.input.mouse.defaulted = true;
+                    if (!here) {
+                        xemu_queue_notification(
+                            tr("Mouse is on for the keyboard. You can turn it off under Mouse and keyboard."));
+                    }
+                    if (bound_state == NULL)
+                        xemu_input_rebind_xmu(active);
+                    bound_state = iter;
+                }
+                if (here) {
+                    ImGui::SetItemDefaultFocus();
+                }
+                ImGui::SetItemTooltip("%s", tr("This port hears the keyboard, the mouse and every "
+                                               "connected controller at once, so there is nothing "
+                                               "to switch. Controllers on other ports still work "
+                                               "there too."));
+                ImGui::PopID();
+                continue;
             }
+            is_selected = bound_state == iter;
             ImGui::PushID(iter);
             const char *selectable_label = iter->name;
             char buf[128];
@@ -354,6 +379,7 @@ void MainMenuInputView::Draw()
                 }
                 if (iter->type == INPUT_DEVICE_SDL_KEYBOARD && !was_here) {
                     g_config.input.mouse.enabled = true;
+                    g_config.input.mouse.defaulted = true;
                     xemu_queue_notification(
                         tr("Mouse is on for the keyboard. You can turn it off under Mouse and keyboard."));
                 }
@@ -374,33 +400,6 @@ void MainMenuInputView::Draw()
             }
             ImGui::PopID();
 
-            // The keyboard, the mouse and every connected controller at once
-            if (iter->type == INPUT_DEVICE_SDL_KEYBOARD) {
-                ImGui::PushID("kbd-with-controller");
-                const bool here = bound_state == iter;
-                if (ImGui::Selectable(combined_name, here && combined)) {
-                    if (!here) {
-                        xemu_input_bind(active, iter, 1);
-                    }
-                    g_config.input.keyboard_with_controller = true;
-                    g_config.input.mouse.enabled = true; // nothing else to turn on
-                    if (!here) {
-                        xemu_queue_notification(
-                            tr("Mouse is on for the keyboard. You can turn it off under Mouse and keyboard."));
-                    }
-                    if (bound_state == NULL)
-                        xemu_input_rebind_xmu(active);
-                    bound_state = iter;
-                }
-                if (here && combined) {
-                    ImGui::SetItemDefaultFocus();
-                }
-                ImGui::SetItemTooltip("%s", tr("This port hears the keyboard, the mouse and every "
-                                               "connected controller at once, so there is nothing "
-                                               "to switch. Controllers on other ports still work "
-                                               "there too."));
-                ImGui::PopID();
-            }
         }
 
         ImGui::EndCombo();
@@ -689,11 +688,6 @@ void MainMenuInputView::Draw()
     Slider(tr("Rumble strength"), &g_config.input.rumble_strength, rumble);
 
     SectionTitle(tr("Mouse and keyboard"));
-    Toggle(tr("Switch between keyboard and controller"), &g_config.input.auto_switch,
-           tr("While the keyboard is on a port, moving a controller puts that "
-              "controller on the port, and using the keyboard or mouse puts the "
-              "keyboard back. Turn it off for two players on one keyboard and "
-              "one controller."));
     Toggle(tr("Use the mouse as a stick"), &g_config.input.mouse.enabled,
            tr("Click the game to capture the mouse. Moving it moves a stick; what "
               "the buttons and wheel do is set below. F3 or Esc lets go. The "

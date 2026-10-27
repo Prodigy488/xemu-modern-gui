@@ -128,6 +128,9 @@ input:
     enabled:
       type: bool
       default: true
+    # Set once the mouse has been switched on for the keyboard by default,
+    # so turning it off afterwards sticks
+    defaulted: bool
     # Which stick the mouse moves
     stick:
       type: enum

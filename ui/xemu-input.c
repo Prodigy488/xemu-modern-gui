@@ -320,6 +320,13 @@ void xemu_input_init(void)
     }
 
     QTAILQ_INSERT_TAIL(&available_controllers, new_con, entry);
+
+    /* The keyboard is on a port: the mouse is on with it, once. Turning it
+     * off in the settings afterwards sticks. */
+    if (new_con->bound >= 0 && !g_config.input.mouse.defaulted) {
+        g_config.input.mouse.enabled = true;
+        g_config.input.mouse.defaulted = true;
+    }
 }
 
 int xemu_input_get_controller_default_bind_port(ControllerState *state, int start)
@@ -825,7 +832,8 @@ static void auto_switch_pad_removed(ControllerState *pad)
 bool xemu_input_combined_active(void)
 {
     ControllerState *kbd = xemu_input_get_keyboard();
-    return kbd && kbd->bound >= 0 && g_config.input.keyboard_with_controller;
+    /* The keyboard on a port always hears the controllers too */
+    return kbd && kbd->bound >= 0;
 }
 
 static void xemu_input_merge_controllers(void)
@@ -889,7 +897,7 @@ static void xemu_input_auto_switch(void)
     }
 
     if (!g_config.input.auto_switch || kbd->bound < 0 ||
-        g_config.input.keyboard_with_controller ||
+        xemu_input_combined_active() ||
         now - auto_sw.last_us < AUTO_SWITCH_COOLDOWN_US) {
         return;
     }

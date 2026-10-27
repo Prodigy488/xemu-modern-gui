@@ -1,5 +1,7 @@
 # Community achievement packs
 
+> **Experimental / work in progress:** achievements are still being developed, so the pack format and the tab may change between versions.
+
 Achievement packs that people have shared for xemu Modern GUI. In the app, open the **Achievements** tab and press **Browse community packs...** to download them.
 
 The original Xbox had no achievements of its own, so these are fan-made lists. xemu can't see inside a game: players tick them off themselves.

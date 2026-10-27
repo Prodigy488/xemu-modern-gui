@@ -1,40 +1,56 @@
-# xemu Modern GUI: an experimental xemu fork -Vibe Coded using Claude Code (Anthropic, Claude Opus 5.5)
+# xemu Modern GUI
+
+**An experimental, unofficial fork of [xemu](https://xemu.app) 0.8.139 with a console-style dashboard.**
 
 > [!IMPORTANT]
-> Vibe Coded using Claude Code (Anthropic, Claude Opus 5.5)
->
-> **This is an experimental fork of [xemu](https://xemu.app) for trying out
-> user interface improvements.** It is not official xemu, and it is not made,
-> endorsed or supported by the xemu project. Some of these ideas may never
-> appear in xemu.
+> This fork is for trying out user interface ideas. It is **not** official
+> xemu and is not made, endorsed or supported by the xemu project.
 >
 > - **Please don't ask about this build in xemu's Discord, GitHub or other
->   xemu channels**, and don't report its problems there. Open an issue in
->   this repository instead.
-> - If something doesn't work, try official xemu before assuming xemu has
->   the problem.
+>   xemu channels.** Report problems in this repository instead.
+> - If something doesn't work, try official xemu first to see whether xemu
+>   itself has the problem.
 > - For the official emulator, downloads and support, go to
 >   [xemu.app](https://xemu.app).
 
-This fork is based on xemu 0.8.139. Emulation is unchanged except where noted
-under Performance and stability; the work here is on the interface: a
-console-style dashboard in 11 languages that works fully with a controller
-(on-screen keyboard and quick saves included), one-click 60 FPS patches,
-upscaling and CRT TV filters, a homebrew tab and store, game save backups,
-tools for finding out why a game is slow, a guided Insignia setup, and
-quality-of-life features.
-
 > [!NOTE]
 > **Vibe coded with Claude.** Every change in this fork was written by an AI,
-> [Claude Code](https://claude.com/claude-code) from Anthropic, working
-> from plain-language requests by the repository owner, who describes what
-> they want, tests the builds and publishes the releases. The emulator
-> underneath is xemu's own code; the changes on top haven't had the review a
-> long-running project gets. Expect rough edges, and please open an issue if
-> you find one.
+> [Claude Code](https://claude.com/claude-code) from Anthropic, from
+> plain-language requests by the repository owner, who tests the builds and
+> publishes the releases. The emulator underneath is xemu's own code; the
+> changes on top haven't had the review a long-running project gets. Expect
+> rough edges.
 >
 > **Agent Declaration**: These changes were created with assistance from
 > Claude Code (Anthropic, Claude Sonnet 5.5; earlier versions Claude Opus 5.5).
+
+Emulation is unchanged except where noted under
+[Performance and stability](#performance-tools-and-stability). The work is on
+the interface: a dashboard in 11 languages that works fully with a controller,
+one-click 60 FPS patches, upscaling and CRT filters, a homebrew tab and store,
+save backups, tools for finding out why a game is slow, a guided Insignia
+setup, and, new in v2.1, per-game keyboard and mouse setups and an
+experimental achievements tab.
+
+## Highlights
+
+- **Console-style dashboard** with Home, Library, Insignia, Media, Drive,
+  Homebrew, Patches and Settings tabs, four styles and two themes. Everything
+  works from a controller.
+- **Game library** with cover art, play time, per-game settings, preview
+  videos, save states and resume.
+- **One-click 60 FPS, widescreen and HD patches** without touching your disc
+  images.
+- **Keyboard, mouse and controller together** as a single input choice, with
+  per-game keys and mouse buttons (v2.1).
+- **Picture quality:** FSR, NVIDIA RTX Video, NIS, Snapdragon GSR, Lanczos,
+  Bicubic, CRT TV and scanline filters.
+- **Homebrew tab and store**, plus an Xbox hard drive explorer and save
+  backups.
+- **Guided Insignia setup** for online play.
+- **Performance Capture** to find out why a game slows down.
+- **Achievements (experimental, work in progress):** fan-made packs you tick
+  off yourself (v2.1).
 
 ![Home tab, Neon theme](docs/screenshots/home.jpg)
 
@@ -69,6 +85,9 @@ settings, EEPROM and hard disk images carry over.
 You still need your **own** MCPX boot ROM, BIOS (flash ROM) and hard disk
 image, the same as with official xemu. They are not included and must not be
 shared.
+
+Windows is the only platform with prebuilt downloads. Linux and macOS
+builds from source are untested.
 
 **Updating:** from v1.4 on, **Help > Check for Updates** finds new releases
 of this fork (not official xemu) and installs them in place; it also checks
@@ -183,61 +202,60 @@ see the [Releases](../../releases) page.
 - **Video mode switches:** widescreen, 480p, 720p and 1080i, the same as
   the Xbox dashboard's settings.
 
-### Achievements
+### Achievements (experimental, work in progress)
+
+> [!WARNING]
+> Achievements are **experimental and still being worked on**. Expect missing
+> features, rough edges and changes between versions, including to the pack
+> format. Progress is kept in `achievements.json`; keep a copy of any packs you
+> write.
 
 - **Achievements for each game.** The original Xbox had none (Gamerscore
-  came with the Xbox 360), and I couldn't find a fan-made collection for it
-  either, so there is nothing built in. They come from **achievement packs**:
-  small JSON files named after a game's title ID (for example `4D530004.json`)
-  in the `achievements` folder next to your library. Anyone can write and
-  share one. The format is described in
-  [docs/achievement-packs.md](docs/achievement-packs.md), with a starting file
-  in [docs/achievement-pack-example.json](docs/achievement-pack-example.json).
-- **Community packs:** "Browse community packs..." in the Achievements tab
-  lists packs other people have shared in this repository's
-  [community-packs](community-packs/) folder and downloads the ones you pick.
-  Each file is size-limited and checked before it is saved, and only shown
-  as text. To share yours, add it there with a pull request (the folder's
-  README explains how). The list starts empty: there are none yet.
+  came with the Xbox 360), and no fan-made collection turned up either, so
+  nothing is built in. They come from **achievement packs**: small JSON files
+  named after a game's title ID (for example `4D530004.json`) in the
+  `achievements` folder next to your library. Anyone can write and share
+  one. The format is in [docs/achievement-packs.md](docs/achievement-packs.md),
+  with a starting file in
+  [docs/achievement-pack-example.json](docs/achievement-pack-example.json).
+- **You tick them off yourself.** xemu can't see inside a game, so it can't
+  tell when you've done something. A pop-up slides in at the lower right when
+  you tick one (it can be switched off, and "Show a pop-up" tries it).
 - **The Achievements tab** has a game picker, a progress bar with points and
   the list for the game (grouped, filterable, with secret ones hidden until
   you get them). Games without a pack are listed too.
 - **Write your own:** "Add an achievement" makes one for the selected game,
   and you can edit or delete it later. Yours are kept in
   `<TITLEID>-mine.json`, next to the packs.
-- **You tick them off yourself.** xemu can't see inside a game, so it can't
-  tell when you've done something. A pop-up slides in at the lower right when
-  you tick one (it can be switched off, and "Show a pop-up" tries it).
-  Progress is kept in `achievements.json`.
+- **Community packs:** "Browse community packs..." lists packs other people
+  have shared in this repository's [community-packs](community-packs/) folder
+  and downloads the ones you pick. Each file is size-limited and checked
+  before it is saved, and only shown as text. To share yours, open a pull
+  request (the folder's README explains how). The list is empty so far.
 - **RetroAchievements sign-in:** you can sign in with a
-  [RetroAchievements](https://retroachievements.org) account. RetroAchievements
-  has no original Xbox games yet, so for now this only keeps your account
-  ready for when that changes. Your password is never saved, only the token
+  [RetroAchievements](https://retroachievements.org) account. It has no
+  original Xbox games yet, so for now this only keeps your account ready for
+  when that changes. Your password is never saved, only the token
   RetroAchievements sends back.
 
-### Sound and controllers
+### Controllers, keyboard and mouse
 
-- **Mouse and keyboard:** move the mouse to play with it. Click the game to
-  capture the mouse and press F3 or Esc to let go. The mouse moves the right
-  stick (or the left, your choice) with its own sensitivity. Choose what each
-  mouse button, the side buttons and the wheel do (any Xbox button or
-  trigger; by default left click is the right trigger, right click the left
-  trigger and middle click R3). **Use WASD + mouse layout** binds a
-  ready-made keyboard layout in one click. Picking the keyboard for a port
-  turns the mouse on (you can turn it off again).
-- **Keyboard, mouse and controller together:** in Settings > Input, the
-  Input Device list has a "Keyboard, mouse and controller" choice (the plain
-  keyboard entry is gone; the keyboard always comes with the controllers). That port
-  hears the keyboard, the mouse and every connected controller at once, so
-  there is nothing to switch and no button to press first. The mouse is
-  captured by itself while you play (F3 lets go, a click takes it back), so
-  there is nothing to turn on in the settings either. The dashboard's Settings
-  tab has the same port pickers (ports 1 to 4), so you don't have to open
-  xemu's own settings to choose. Below them, **Test your controller** shows a
-  controller on screen that lights up as you press buttons and move the
-  sticks and triggers, to check that it reaches xemu. Press **Start test**
-  first: while it runs, the controller doesn't scroll the page, go back or
-  change tabs. Stop it with the button, Esc, or by holding Back + Start.
+- **"Keyboard, mouse and controller" input choice:** in Settings > Input (or
+  the dashboard's Settings tab, which has the same pickers for ports 1 to 4),
+  pick it for a port and that port hears the keyboard, the mouse and every
+  connected controller at once. Nothing to switch and no button to press
+  first. The mouse is captured by itself while you play (F3 lets go, a click
+  takes it back) and can be turned off.
+- **Mouse:** moves the right stick (or the left, your choice) with its own
+  sensitivity. Choose what each mouse button, the side buttons and the wheel
+  do (any Xbox button or trigger; by default left click is the right trigger,
+  right click the left trigger and middle click R3). **Use WASD + mouse
+  layout** binds a ready-made keyboard layout in one click.
+- **Test your controller:** the dashboard's Settings tab draws a controller
+  that lights up as you press buttons and move the sticks and triggers, to
+  check that it reaches xemu. Press **Start test** first: while it runs, the
+  controller doesn't scroll the page, go back or change tabs. Stop it with
+  the button, Esc, or by holding Back + Start for 2 seconds.
 - **Resuming keeps your controllers:** when you resume a game or load a saved
   state from the library, your controllers are plugged in again so the game
   doesn't sit on a "connect a controller" message.
@@ -246,16 +264,18 @@ see the [Releases](../../releases) page.
   buttons, switched on when the game starts and put back when it's done.
   Start from a preset by kind of game (shooter or action, racing, fighting,
   sports and platformers) or xemu's own keys, then change any key. The
-  presets are sensible starting points, not each game's own layout; "Suggested
-  for this game" picks one by the game's name, as a guess only.
+  presets are sensible starting points, not each game's own layout;
+  "Suggested for this game" picks one by the game's name, as a guess only.
 - **On-screen keyboard capitals:** hold RT (R2) for capitals and LT (L2) for
-  symbols. Before, the triggers didn't reach the keyboard at all.
+  symbols.
 - **Quick save buttons for modern controllers:** quick save and load were
   Back + LB/RB, and modern controllers have no button called Back (it's View
-  on Xbox One and Series, Share on PS4, Create on PS5), which is awkward to
-  find and hold. Choose what you press while holding that button: LB/RB, the
-  triggers, stick clicks or D-pad left/right. The hints show the right button
-  names for the controller you have connected.
+  on Xbox One and Series, Share on PS4, Create on PS5). Choose what you press
+  while holding that button: LB/RB, the triggers, stick clicks or D-pad
+  left/right. The hints show the right button names for your controller.
+- **Rumble strength** for every controller, from full to off.
+
+### Sound
 
 - **Output device:** send the game's sound to headphones, speakers or the
   TV without changing the Windows default.
@@ -263,7 +283,6 @@ see the [Releases](../../releases) page.
   the active window.
 - **Per-game volume** for games that are much louder or quieter than the
   rest.
-- **Rumble strength** for every controller, from full to off.
 
 ### Performance tools and stability
 
@@ -284,8 +303,7 @@ see the [Releases](../../releases) page.
   cache, Windows power throttling turned off, and fixes for some Vulkan and
   audio crashes. These are the only changes to emulation.
 
-Every change is a separate commit on the `enhanced` branch, based on the
-`v0.8.139` release.
+The changes live on the `enhanced` branch, based on the `v0.8.139` release.
 
 ## Building
 

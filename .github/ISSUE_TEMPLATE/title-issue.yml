@@ -1,5 +1,5 @@
 name: Title Issue
-description: Report a specific issue with a title/game in xemu
+description: Report a specific issue with a title/game in xemu Modern GUI
 title: "Title Name: Short Description"
 labels: [bug, triage]
 body:
@@ -9,14 +9,12 @@ body:
         Thanks for taking the time to fill out this bug report! This template is for reporting specific video, audio, or other types of issues with one or more titles.
 
         Before submitting this bug report, please check the pre-submission checklist:
-        - Have you read the [documentation](https://xemu.app/docs)?
-        - Have you checked the [FAQ](https://xemu.app/docs/faq/)?
+        - Have you read the [README](https://github.com/Prodigy488/xemu-modern-gui#readme)?
+        - Does it also happen in official [xemu](https://xemu.app)? If so, please report it to the xemu project instead.
         - Have you checked to see if this issue has already been submitted?
-        - Are you using the latest version of xemu?
+        - Are you using the latest release of this fork?
         - Have you tried updating your platform drivers?
         - Have you ruled out a bad dump of your game disc?
-
-        If you have questions about how to provide the information below, join the Discord server to get help from the community.
   - type: textarea
     id: game-title
     attributes:
@@ -61,8 +59,8 @@ body:
   - type: textarea
     id: xemu-version
     attributes:
-      label: xemu Version
-      description: Affected xemu version. You can find the xemu version within xemu by navigating to <kbd>Help</kbd>&rarr;<kbd>About</kbd>. If known, include the last known-working version of xemu.
+      label: Version
+      description: Affected xemu Modern GUI version. You can find the xemu version within xemu by navigating to <kbd>Help</kbd>&rarr;<kbd>About</kbd> (this fork shows its own version, for example 2.1). If known, include the last known-working version of xemu.
       placeholder: |
         0.0.0-00-g0000000000
 

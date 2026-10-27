@@ -1,22 +1,19 @@
 name: General Issue
-description: Report a general issue with xemu, not specific to one or more particular titles
+description: Report a general issue with xemu Modern GUI, not specific to one or more particular titles
 labels: [bug, triage]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to fill out this bug report! This template is for reporting non-title-specific issues with xemu.
+        Thanks for taking the time to fill out this bug report! This template is for reporting non-title-specific issues with xemu Modern GUI, the unofficial fork in this repository (not official xemu).
 
         Before submitting this bug report, please check the pre-submission checklist:
-        - Have you read the [documentation](https://xemu.app/docs)?
-        - Have you checked the [FAQ](https://xemu.app/docs/faq/)?
-        - Are you using the latest version of xemu?
-        - Have you joined the Discord community to ask for help?
+        - Have you read the [README](https://github.com/Prodigy488/xemu-modern-gui#readme)?
+        - Does it also happen in official [xemu](https://xemu.app)? If so, please report it to the xemu project instead.
+        - Are you using the latest release of this fork?
         - Have you checked to see if this issue has already been submitted?
         - Have you tried updating your platform drivers?
         - Have you ruled out a bad dump of your game disc?
-
-        If you have questions about how to provide the information below, join the Discord server to get help from the community.
   - type: textarea
     id: bug-description
     attributes:
@@ -53,8 +50,8 @@ body:
   - type: textarea
     id: xemu-version
     attributes:
-      label: xemu Version
-      description: Affected xemu version. You can find the xemu version within xemu by navigating to <kbd>Help</kbd>&rarr;<kbd>About</kbd>. If known, include the last known-working version of xemu.
+      label: Version
+      description: Affected xemu Modern GUI version. You can find the xemu version within xemu by navigating to <kbd>Help</kbd>&rarr;<kbd>About</kbd> (this fork shows its own version, for example 2.1). If known, include the last known-working version of xemu.
       placeholder: |
         0.0.0-00-g0000000000
 

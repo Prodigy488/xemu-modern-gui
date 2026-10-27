@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
-  - name: xemu Discord Server
-    url: https://discord.gg/ayyjsuM
-    about: Please ask and answer questions here.
+  - name: Problem with official xemu
+    url: https://xemu.app
+    about: This repository is an unofficial fork. Problems that also happen in official xemu belong with the xemu project, not here.

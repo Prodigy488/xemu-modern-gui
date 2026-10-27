@@ -1,5 +1,7 @@
 # Achievement packs
 
+> **Experimental / work in progress:** achievements are still being developed, so the pack format and the tab may change between versions.
+
 xemu Modern GUI keeps achievements for each game in small JSON files, because the original Xbox had no achievements of its own. xemu can't see inside a game, so you tick them off yourself in the Achievements tab.
 
 ## Where they go

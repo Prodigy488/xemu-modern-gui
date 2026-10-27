@@ -1,5 +1,5 @@
 name: Feature Request
-description: Request a new feature for xemu
+description: Request a new feature for xemu Modern GUI
 labels: [enhancement]
 body:
   - type: markdown
@@ -8,11 +8,10 @@ body:
         Thanks for taking the time to fill out this feature request!
 
         Before submitting this request, please check the pre-submission checklist:
-        - Have you read the [documentation](https://xemu.app/docs)?
-        - Have you checked the [FAQ](https://xemu.app/docs/faq/)?
+        - Have you read the [README](https://github.com/Prodigy488/xemu-modern-gui#readme)?
+        - Does it also happen in official [xemu](https://xemu.app)? If so, please report it to the xemu project instead.
         - Have you searched to see if this feature has been requested before?
-
-        If you have questions about how to provide the information below, join the Discord server to get help from the community.
+        - Is it about achievements? They are experimental and still being worked on.
   - type: textarea
     id: feature-request
     attributes:

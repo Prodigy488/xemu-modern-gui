@@ -1235,5 +1235,9 @@
  "This game already has an achievement with that name.": "Este juego ya tiene un logro con ese nombre.",
  "Tips for good achievements": "Consejos para buenos logros",
  "To share your list, see Browse community packs in the Achievements tab.": "Para compartir tu lista, mira Explorar paquetes de la comunidad en la pestaña Logros.",
- "Write it so anyone can tell when it's done: say the level, difficulty, time or count.": "Escríbelo para que cualquiera sepa cuándo está hecho: indica el nivel, la dificultad, el tiempo o la cantidad."
+ "Write it so anyone can tell when it's done: say the level, difficulty, time or count.": "Escríbelo para que cualquiera sepa cuándo está hecho: indica el nivel, la dificultad, el tiempo o la cantidad.",
+ "No controller connected.": "No hay ningún mando conectado.",
+ "Not on a port": "No está en un puerto",
+ "Press buttons and move the sticks: they light up here. If nothing happens, the controller isn't reaching xemu.": "Pulsa botones y mueve los sticks: se iluminan aquí. Si no pasa nada, el mando no llega a xemu.",
+ "Test your controller": "Prueba tu mando"
 }

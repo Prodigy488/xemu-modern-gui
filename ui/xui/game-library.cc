@@ -28,6 +28,7 @@
 
 #include "common.hh"
 #include "osk.hh"
+#include "input-ui.hh"
 #include "play-extras.hh"
 #include "achievements.hh"
 #include "game-library.hh"
@@ -9840,6 +9841,10 @@ void DrawDashSettingsTab()
             InputPortCombo("##port", port);
             ImGui::PopID();
         }
+        ImGui::Dummy(ImVec2(0, 8 * s));
+        label(tr("Test your controller"));
+        InputTestWidget("##ctest");
+        ImGui::Dummy(ImVec2(0, 8 * s));
         ImGui::Checkbox(tr("Auto-bind controllers"), &g_config.input.auto_bind);
         ImGui::TextDisabled("%s", tr("Pick \"Keyboard, mouse and controller\" to play with the keyboard, "
                                     "the mouse and your controllers together."));

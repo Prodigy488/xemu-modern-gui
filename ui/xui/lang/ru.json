@@ -1235,5 +1235,9 @@
  "This game already has an achievement with that name.": "В этой игре уже есть достижение с таким названием.",
  "Tips for good achievements": "Советы по созданию хороших достижений",
  "To share your list, see Browse community packs in the Achievements tab.": "Чтобы поделиться списком, см. «Обзор наборов сообщества» на вкладке «Достижения».",
- "Write it so anyone can tell when it's done: say the level, difficulty, time or count.": "Пишите так, чтобы любой понял, что задание выполнено: укажите уровень, сложность, время или количество."
+ "Write it so anyone can tell when it's done: say the level, difficulty, time or count.": "Пишите так, чтобы любой понял, что задание выполнено: укажите уровень, сложность, время или количество.",
+ "No controller connected.": "Геймпад не подключён.",
+ "Not on a port": "Не на порту",
+ "Press buttons and move the sticks: they light up here. If nothing happens, the controller isn't reaching xemu.": "Нажимайте кнопки и двигайте стики: они подсвечиваются здесь. Если ничего не происходит, геймпад не доходит до xemu.",
+ "Test your controller": "Проверка геймпада"
 }

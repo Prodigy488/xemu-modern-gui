@@ -233,7 +233,9 @@ see the [Releases](../../releases) page.
   captured by itself while you play (F3 lets go, a click takes it back), so
   there is nothing to turn on in the settings either. The dashboard's Settings
   tab has the same port pickers (ports 1 to 4), so you don't have to open
-  xemu's own settings to choose.
+  xemu's own settings to choose. Below them, **Test your controller** shows a
+  controller on screen that lights up as you press buttons and move the
+  sticks and triggers, to check that it reaches xemu.
 - **Resuming keeps your controllers:** when you resume a game or load a saved
   state from the library, your controllers are plugged in again so the game
   doesn't sit on a "connect a controller" message.

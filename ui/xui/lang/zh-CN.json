@@ -1235,5 +1235,9 @@
  "This game already has an achievement with that name.": "该游戏已有同名成就。",
  "Tips for good achievements": "制作好成就的建议",
  "To share your list, see Browse community packs in the Achievements tab.": "要分享你的列表，请查看“成就”标签页中的“浏览社区成就包”。",
- "Write it so anyone can tell when it's done: say the level, difficulty, time or count.": "写得让任何人都能判断是否完成：写明关卡、难度、时间或数量。"
+ "Write it so anyone can tell when it's done: say the level, difficulty, time or count.": "写得让任何人都能判断是否完成：写明关卡、难度、时间或数量。",
+ "No controller connected.": "未连接手柄。",
+ "Not on a port": "未接入端口",
+ "Press buttons and move the sticks: they light up here. If nothing happens, the controller isn't reaching xemu.": "按下按键、推动摇杆，这里会亮起。如果没有反应，说明手柄没有连到 xemu。",
+ "Test your controller": "测试手柄"
 }

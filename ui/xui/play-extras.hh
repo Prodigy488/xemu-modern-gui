@@ -71,9 +71,3 @@ std::vector<std::string> AudioOutputDevices(void);
 void AudioOutputDeviceApply(void);
 // An "Output device" combo box for the settings; true if changed
 bool AudioOutputDeviceCombo(const char *label);
-
-// A drop-down for what is plugged into a controller port (0-3): not connected,
-// "Keyboard, mouse and controller", or one of the connected controllers. The
-// same choices as Settings > Input, for the dashboard.
-void InputPortCombo(const char *id, int port);
-

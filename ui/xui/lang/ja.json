@@ -1235,5 +1235,9 @@
  "This game already has an achievement with that name.": "このゲームには同じ名前の実績がすでにあります。",
  "Tips for good achievements": "良い実績を作るコツ",
  "To share your list, see Browse community packs in the Achievements tab.": "リストを共有するには、実績タブの「コミュニティのパックを見る」を参照してください。",
- "Write it so anyone can tell when it's done: say the level, difficulty, time or count.": "誰でも達成したか分かるように、ステージ・難易度・時間・回数を書きましょう。"
+ "Write it so anyone can tell when it's done: say the level, difficulty, time or count.": "誰でも達成したか分かるように、ステージ・難易度・時間・回数を書きましょう。",
+ "No controller connected.": "コントローラーが接続されていません。",
+ "Not on a port": "ポートに未接続",
+ "Press buttons and move the sticks: they light up here. If nothing happens, the controller isn't reaching xemu.": "ボタンを押したりスティックを動かすと、ここが光ります。何も起きなければ、コントローラーが xemu に届いていません。",
+ "Test your controller": "コントローラーをテスト"
 }

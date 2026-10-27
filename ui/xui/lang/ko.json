@@ -1235,5 +1235,9 @@
  "This game already has an achievement with that name.": "이 게임에 이미 같은 이름의 업적이 있습니다.",
  "Tips for good achievements": "좋은 업적을 만드는 팁",
  "To share your list, see Browse community packs in the Achievements tab.": "목록을 공유하려면 업적 탭의 '커뮤니티 팩 둘러보기'를 참고하세요.",
- "Write it so anyone can tell when it's done: say the level, difficulty, time or count.": "누구나 완료 여부를 알 수 있게 스테이지, 난이도, 시간, 횟수를 적으세요."
+ "Write it so anyone can tell when it's done: say the level, difficulty, time or count.": "누구나 완료 여부를 알 수 있게 스테이지, 난이도, 시간, 횟수를 적으세요.",
+ "No controller connected.": "연결된 컨트롤러가 없습니다.",
+ "Not on a port": "포트에 연결되지 않음",
+ "Press buttons and move the sticks: they light up here. If nothing happens, the controller isn't reaching xemu.": "버튼을 누르거나 스틱을 움직이면 여기에 불이 들어옵니다. 아무 반응이 없으면 컨트롤러가 xemu에 전달되지 않는 것입니다.",
+ "Test your controller": "컨트롤러 테스트"
 }

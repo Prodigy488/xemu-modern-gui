@@ -17,6 +17,7 @@ xemu_ss.add(files(
   'insignia-net.cc',
   'achievements.cc',
   'osk.cc',
+  'input-ui.cc',
   'play-extras.cc',
   'shader-cache.cc',
   'dynamic-res.cc',

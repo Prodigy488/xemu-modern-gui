@@ -1,11 +1,12 @@
 # xemu Modern GUI: an experimental xemu fork -Vibe Coded using Claude Code (Anthropic, Claude Opus 5.5)
 
-> [!IMPORTANT] 
+> [!IMPORTANT]
 > Vibe Coded using Claude Code (Anthropic, Claude Opus 5.5)
-**This is an experimental fork of [xemu](https://xemu.app) for trying out
+>
+> **This is an experimental fork of [xemu](https://xemu.app) for trying out
 > user interface improvements.** It is not official xemu, and it is not made,
 > endorsed or supported by the xemu project. Some of these ideas may never
-> appear in xemu. 
+> appear in xemu.
 >
 > - **Please don't ask about this build in xemu's Discord, GitHub or other
 >   xemu channels**, and don't report its problems there. Open an issue in
@@ -14,7 +15,7 @@
 >   the problem.
 > - For the official emulator, downloads and support, go to
 >   [xemu.app](https://xemu.app).
-Vibe Coded using Claude Code (Anthropic, Claude Opus 5.5)
+
 This fork is based on xemu 0.8.139. Emulation is unchanged except where noted
 under Performance and stability; the work here is on the interface: a
 console-style dashboard in 11 languages that works fully with a controller

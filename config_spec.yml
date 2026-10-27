@@ -113,6 +113,11 @@ input:
   auto_switch:
     type: bool
     default: true
+  # The keyboard's port also takes every connected controller at once
+  # ("Keyboard, mouse and controller" in Settings > Input)
+  keyboard_with_controller:
+    type: bool
+    default: false
   # Mouse and keyboard play: the keyboard (bound to a port) plus the mouse
   mouse:
     # Mouse movement moves a stick. What each mouse button, and the wheel,

@@ -302,8 +302,12 @@ void MainMenuInputView::Draw()
 
     // Get current controller name
     const char *name;
+    const char *combined_name = tr("Keyboard, mouse and controller");
+    const bool combined = g_config.input.keyboard_with_controller;
     if (bound_state == NULL) {
         name = not_connected;
+    } else if (combined && bound_state->type == INPUT_DEVICE_SDL_KEYBOARD) {
+        name = combined_name;
     } else {
         name = bound_state->name;
     }
@@ -325,6 +329,9 @@ void MainMenuInputView::Draw()
         ControllerState *iter;
         QTAILQ_FOREACH(iter, &available_controllers, entry) {
             is_selected = bound_state == iter;
+            if (iter->type == INPUT_DEVICE_SDL_KEYBOARD && combined) {
+                is_selected = false; // shown as the combined entry below
+            }
             ImGui::PushID(iter);
             const char *selectable_label = iter->name;
             char buf[128];
@@ -332,12 +339,16 @@ void MainMenuInputView::Draw()
                 snprintf(buf, sizeof(buf), "%s (Port %d)", iter->name, iter->bound+1);
                 selectable_label = buf;
             }
+            const bool was_here = bound_state == iter;
             if (ImGui::Selectable(selectable_label, is_selected)) {
                 xemu_input_bind(active, iter, 1);
 
                 // Picking the keyboard turns the mouse on; it can be turned
                 // off again in the Mouse and keyboard section
-                if (iter->type == INPUT_DEVICE_SDL_KEYBOARD && !is_selected) {
+                if (iter->type == INPUT_DEVICE_SDL_KEYBOARD) {
+                    g_config.input.keyboard_with_controller = false;
+                }
+                if (iter->type == INPUT_DEVICE_SDL_KEYBOARD && !was_here) {
                     g_config.input.mouse.enabled = true;
                     xemu_queue_notification(
                         tr("Mouse is on for the keyboard. You can turn it off under Mouse and keyboard."));
@@ -358,6 +369,32 @@ void MainMenuInputView::Draw()
                 ImGui::SetItemDefaultFocus();
             }
             ImGui::PopID();
+
+            // The keyboard, the mouse and every connected controller at once
+            if (iter->type == INPUT_DEVICE_SDL_KEYBOARD) {
+                ImGui::PushID("kbd-with-controller");
+                const bool here = bound_state == iter;
+                if (ImGui::Selectable(combined_name, here && combined)) {
+                    xemu_input_bind(active, iter, 1);
+                    g_config.input.keyboard_with_controller = true;
+                    if (!here) {
+                        g_config.input.mouse.enabled = true;
+                        xemu_queue_notification(
+                            tr("Mouse is on for the keyboard. You can turn it off under Mouse and keyboard."));
+                    }
+                    if (bound_state == NULL)
+                        xemu_input_rebind_xmu(active);
+                    bound_state = iter;
+                }
+                if (here && combined) {
+                    ImGui::SetItemDefaultFocus();
+                }
+                ImGui::SetItemTooltip("%s", tr("This port hears the keyboard, the mouse and every "
+                                               "connected controller at once, so there is nothing "
+                                               "to switch. Controllers on other ports still work "
+                                               "there too."));
+                ImGui::PopID();
+            }
         }
 
         ImGui::EndCombo();

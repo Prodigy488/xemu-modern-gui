@@ -698,6 +698,8 @@ void xemu_input_process_sdl_events(const SDL_Event *event)
  * with the keyboard so it isn't lost.
  */
 static bool kbd_keys_active;
+static uint16_t kbd_base_buttons;
+static int16_t kbd_base_axis[CONTROLLER_AXIS__COUNT];
 static struct {
     bool swapped;           /* a controller is standing in for the keyboard */
     int port;               /* the keyboard's port */
@@ -815,6 +817,42 @@ static void auto_switch_pad_removed(ControllerState *pad)
     }
 }
 
+/*
+ * "Keyboard, mouse and controller": the keyboard's port also hears every
+ * connected controller, so nothing has to be switched. Buttons add up; for a
+ * stick or trigger the one pushed furthest wins.
+ */
+bool xemu_input_combined_active(void)
+{
+    ControllerState *kbd = xemu_input_get_keyboard();
+    return kbd && kbd->bound >= 0 && g_config.input.keyboard_with_controller;
+}
+
+static void xemu_input_merge_controllers(void)
+{
+    if (!xemu_input_combined_active()) {
+        return;
+    }
+    ControllerState *kbd = xemu_input_get_keyboard();
+    uint16_t buttons = kbd_base_buttons;
+    int16_t axis[CONTROLLER_AXIS__COUNT];
+    memcpy(axis, kbd_base_axis, sizeof(axis));
+    ControllerState *iter;
+    QTAILQ_FOREACH(iter, &available_controllers, entry) {
+        if (iter->type != INPUT_DEVICE_SDL_GAMEPAD) {
+            continue;
+        }
+        buttons |= iter->buttons;
+        for (int i = 0; i < CONTROLLER_AXIS__COUNT; i++) {
+            if (abs((int)iter->axis[i]) > abs((int)axis[i])) {
+                axis[i] = iter->axis[i];
+            }
+        }
+    }
+    kbd->buttons = buttons;
+    memcpy(kbd->axis, axis, sizeof(axis));
+}
+
 static void xemu_input_auto_switch(void)
 {
     ControllerState *kbd = xemu_input_get_keyboard();
@@ -824,6 +862,12 @@ static void xemu_input_auto_switch(void)
     int64_t now = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
 
     if (auto_sw.swapped) {
+        if (g_config.input.keyboard_with_controller && auto_sw.pad &&
+            bound_controllers[auto_sw.port] == auto_sw.pad &&
+            kbd->bound == auto_sw.home && auto_sw.pad->bound == auto_sw.port) {
+            auto_switch_to_keyboard(kbd, now); /* the combined option takes over */
+            return;
+        }
         /* Settings were changed by hand meanwhile: stop looking after it */
         if (!auto_sw.pad || bound_controllers[auto_sw.port] != auto_sw.pad ||
             kbd->bound != auto_sw.home || auto_sw.pad->bound != auto_sw.port) {
@@ -845,6 +889,7 @@ static void xemu_input_auto_switch(void)
     }
 
     if (!g_config.input.auto_switch || kbd->bound < 0 ||
+        g_config.input.keyboard_with_controller ||
         now - auto_sw.last_us < AUTO_SWITCH_COOLDOWN_US) {
         return;
     }
@@ -891,6 +936,7 @@ void xemu_input_update_controllers(void)
     QTAILQ_FOREACH(iter, &available_controllers, entry) {
         xemu_input_update_rumble(iter);
     }
+    xemu_input_merge_controllers();
     xemu_input_auto_switch();
 }
 
@@ -953,6 +999,10 @@ void xemu_input_update_sdl_kbd_controller_state(ControllerState *state)
     if (mouse_captured && g_config.input.mouse.enabled) {
         xemu_input_apply_mouse(state);
     }
+
+    /* What the keyboard and mouse alone are doing, for the combined option */
+    kbd_base_buttons = state->buttons;
+    memcpy(kbd_base_axis, state->axis, sizeof(kbd_base_axis));
 }
 
 void xemu_input_update_sdl_controller_state(ControllerState *state)
@@ -1042,8 +1092,15 @@ void xemu_input_update_rumble(ControllerState *state)
     /* Rumble strength setting (0-1) scales what the game asks for */
     float k = g_config.input.rumble_strength;
     k = k < 0.0f ? 0.0f : (k > 1.0f ? 1.0f : k);
-    SDL_RumbleGamepad(state->sdl_gamepad, (uint16_t)(state->rumble_l * k),
-                      (uint16_t)(state->rumble_r * k), 250);
+    uint16_t rl = state->rumble_l, rr = state->rumble_r;
+    if (xemu_input_combined_active()) {
+        /* The keyboard's port is also this controller's: shake it too */
+        ControllerState *kbd = xemu_input_get_keyboard();
+        rl = MAX(rl, kbd->rumble_l);
+        rr = MAX(rr, kbd->rumble_r);
+    }
+    SDL_RumbleGamepad(state->sdl_gamepad, (uint16_t)(rl * k),
+                      (uint16_t)(rr * k), 250);
     state->last_rumble_updated_ts = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
 }
 

@@ -1188,5 +1188,7 @@
  "Custom": "Personalizado",
  "Switch between keyboard and controller": "Alternar entre teclado e controle",
  "While the keyboard is on a port, moving a controller puts that controller on the port, and using the keyboard or mouse puts the keyboard back. Turn it off for two players on one keyboard and one controller.": "Enquanto o teclado estiver em uma porta, mexer em um controle coloca esse controle na porta, e usar o teclado ou o mouse devolve o teclado. Desative para dois jogadores com um teclado e um controle.",
- "Mouse is on for the keyboard. You can turn it off under Mouse and keyboard.": "O mouse está ativado para o teclado. Você pode desativar em Mouse e teclado."
+ "Mouse is on for the keyboard. You can turn it off under Mouse and keyboard.": "O mouse está ativado para o teclado. Você pode desativar em Mouse e teclado.",
+ "Keyboard, mouse and controller": "Teclado, mouse e controle",
+ "This port hears the keyboard, the mouse and every connected controller at once, so there is nothing to switch. Controllers on other ports still work there too.": "Esta porta recebe o teclado, o mouse e todos os controles conectados ao mesmo tempo, então não há nada para alternar. Os controles em outras portas continuam funcionando lá também."
 }

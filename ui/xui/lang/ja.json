@@ -1188,5 +1188,7 @@
  "Custom": "カスタム",
  "Switch between keyboard and controller": "キーボードとコントローラーを自動で切り替える",
  "While the keyboard is on a port, moving a controller puts that controller on the port, and using the keyboard or mouse puts the keyboard back. Turn it off for two players on one keyboard and one controller.": "キーボードがポートにある間、コントローラーを動かすとそのコントローラーがポートに入り、キーボードやマウスを使うとキーボードに戻ります。キーボードとコントローラーで2人プレイする場合はオフにしてください。",
- "Mouse is on for the keyboard. You can turn it off under Mouse and keyboard.": "キーボード用にマウスをオンにしました。「マウスとキーボード」でオフにできます。"
+ "Mouse is on for the keyboard. You can turn it off under Mouse and keyboard.": "キーボード用にマウスをオンにしました。「マウスとキーボード」でオフにできます。",
+ "Keyboard, mouse and controller": "キーボード、マウス、コントローラー",
+ "This port hears the keyboard, the mouse and every connected controller at once, so there is nothing to switch. Controllers on other ports still work there too.": "このポートはキーボード、マウス、接続中のすべてのコントローラーを同時に受け付けるので、切り替えは不要です。他のポートのコントローラーもここで使えます。"
 }

@@ -153,6 +153,8 @@ ControllerState *xemu_input_get_keyboard(void);
 int xemu_input_bind_keyboard(void);
 // True while a controller is standing in for the keyboard (auto-switch)
 bool xemu_input_auto_switch_standby(void);
+// True when the keyboard is on a port and set to "Keyboard, mouse and controller"
+bool xemu_input_combined_active(void);
 
 void xemu_input_set_test_mode(int enabled);
 int xemu_input_get_test_mode(void);

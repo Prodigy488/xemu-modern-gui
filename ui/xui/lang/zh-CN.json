@@ -1188,5 +1188,7 @@
  "Custom": "自定义",
  "Switch between keyboard and controller": "在键盘和手柄之间自动切换",
  "While the keyboard is on a port, moving a controller puts that controller on the port, and using the keyboard or mouse puts the keyboard back. Turn it off for two players on one keyboard and one controller.": "键盘接在端口上时，移动手柄会让该手柄接管端口，使用键盘或鼠标则切回键盘。若一人用键盘、一人用手柄双人游玩，请关闭。",
- "Mouse is on for the keyboard. You can turn it off under Mouse and keyboard.": "已为键盘开启鼠标。可在“鼠标和键盘”中关闭。"
+ "Mouse is on for the keyboard. You can turn it off under Mouse and keyboard.": "已为键盘开启鼠标。可在“鼠标和键盘”中关闭。",
+ "Keyboard, mouse and controller": "键盘、鼠标和手柄",
+ "This port hears the keyboard, the mouse and every connected controller at once, so there is nothing to switch. Controllers on other ports still work there too.": "此端口同时接收键盘、鼠标和所有已连接的手柄，无需切换。其他端口上的手柄在此处同样有效。"
 }

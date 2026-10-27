@@ -219,10 +219,14 @@ see the [Releases](../../releases) page.
   trigger and middle click R3). **Use WASD + mouse layout** binds a
   ready-made keyboard layout in one click. Picking the keyboard for a port
   turns the mouse on (you can turn it off again).
+- **Keyboard, mouse and controller together:** in Settings > Input, the
+  Input Device list has a "Keyboard, mouse and controller" choice. That port
+  hears the keyboard, the mouse and every connected controller at once, so
+  there is nothing to switch and no button to press first.
 - **Keyboard and controller, automatically:** while the keyboard is on a
   port, moving a controller puts that controller on the port, and using the
   keyboard or mouse puts the keyboard back. It doesn't change your saved
-  ports (it only applies when the keyboard is player 1), and there's a switch for it in Settings > Input if you'd rather
+  ports (it only applies when the keyboard is player 1 and is plain "Keyboard"), and there's a switch for it in Settings > Input if you'd rather
   keep both on their own ports.
 - **Keys and mouse for each game:** in a game's settings, "Own keyboard and
   mouse setup for this game" gives it its own keys, mouse speed and mouse

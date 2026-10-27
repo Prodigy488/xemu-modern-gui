@@ -16,3 +16,8 @@ void InputPortCombo(const char *id, int port);
 // Shows a connected controller live: buttons light up and the sticks and
 // triggers move as you use them. Has its own device picker.
 void InputTestWidget(const char *id);
+
+// True while the controller test is running: the dashboard should ignore the
+// controller so the buttons can be tried without scrolling, going back or
+// switching tabs.
+bool InputTestCapturing(void);

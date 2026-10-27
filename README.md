@@ -235,7 +235,9 @@ see the [Releases](../../releases) page.
   tab has the same port pickers (ports 1 to 4), so you don't have to open
   xemu's own settings to choose. Below them, **Test your controller** shows a
   controller on screen that lights up as you press buttons and move the
-  sticks and triggers, to check that it reaches xemu.
+  sticks and triggers, to check that it reaches xemu. Press **Start test**
+  first: while it runs, the controller doesn't scroll the page, go back or
+  change tabs. Stop it with the button, Esc, or by holding Back + Start.
 - **Resuming keeps your controllers:** when you resume a game or load a saved
   state from the library, your controllers are plugged in again so the game
   doesn't sit on a "connect a controller" message.

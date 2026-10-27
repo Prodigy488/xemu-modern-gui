@@ -2,6 +2,7 @@
 #include "input-manager.hh"
 #include "../xemu-input.h"
 #include "common.hh"
+#include "input-ui.hh"
 
 InputManager g_input_mgr;
 
@@ -41,6 +42,15 @@ void InputManager::Update()
                     axis[i] = iter->axis[i];
                 }
             }
+        }
+    }
+
+    // The controller test: the pad only moves the picture, not the dashboard
+    if (InputTestCapturing()) {
+        m_buttons = 0;
+        m_triggers = 0;
+        for (int i = 0; i < CONTROLLER_AXIS__COUNT; i++) {
+            axis[i] = 0;
         }
     }
 

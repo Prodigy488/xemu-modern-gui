@@ -10,6 +10,7 @@
 #include "common.hh"
 #include "i18n.hh"
 #include "misc.hh"
+#include "game-library.hh"
 #include "../xemu-notifications.h"
 #include "../xemu-input.h"
 
@@ -69,9 +70,27 @@ void InputPortCombo(const char *id, int port)
     ImGui::EndCombo();
 }
 
+// While the test is running the controller is not allowed to drive the
+// dashboard (scrolling, B to go back, LB/RB to change tab), or you could not
+// try those buttons. Only counts while the test is on screen.
+static bool g_test_on = false;
+static int g_test_drawn_frame = -1000;
+static double g_test_hold_start = -1;
+
+bool InputTestCapturing(void)
+{
+    return g_test_on && g_test_drawn_frame >= ImGui::GetFrameCount() - 1;
+}
+
 // Draws one controller's live state
 void InputTestWidget(const char *id)
 {
+    // Coming back to the page later: the test is off again
+    if (g_test_drawn_frame < ImGui::GetFrameCount() - 2) {
+        g_test_on = false;
+        g_test_hold_start = -1;
+    }
+    g_test_drawn_frame = ImGui::GetFrameCount();
     ControllerState *first = nullptr, *first_pad = nullptr;
     static ControllerState *sel = nullptr;
     bool found = false;
@@ -95,6 +114,41 @@ void InputTestWidget(const char *id)
         return;
     }
     ImGui::PushID(id);
+
+    // Start / stop. Stop with the mouse, Esc, or by holding Back + Start
+    // (a controller can't click it while the dashboard ignores the controller)
+    bool pad_exit = false;
+    if (g_test_on) {
+        bool both = false;
+        QTAILQ_FOREACH(iter, &available_controllers, entry) {
+            const uint32_t m = CONTROLLER_BUTTON_BACK | CONTROLLER_BUTTON_START;
+            if (iter->type == INPUT_DEVICE_SDL_GAMEPAD && (iter->buttons & m) == m) {
+                both = true;
+            }
+        }
+        if (both) {
+            if (g_test_hold_start < 0) {
+                g_test_hold_start = ImGui::GetTime();
+            }
+            pad_exit = ImGui::GetTime() - g_test_hold_start >= 2.0;
+        } else {
+            g_test_hold_start = -1;
+        }
+    }
+    if (g_test_on) {
+        if (ImGui::Button(tr("Stop test"), ImVec2(-FLT_MIN, 0)) || pad_exit ||
+            ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                GameLibraryConsumeBack(); // Esc only ends the test
+            }
+            g_test_on = false;
+            g_test_hold_start = -1;
+        }
+    } else if (ImGui::Button(tr("Start test"), ImVec2(-FLT_MIN, 0))) {
+        g_test_on = true;
+        g_test_hold_start = -1;
+    }
+
     const char *name = sel->type == INPUT_DEVICE_SDL_KEYBOARD
                            ? tr("Keyboard, mouse and controller") : sel->name;
     ImGui::SetNextItemWidth(-FLT_MIN);
@@ -186,7 +240,15 @@ void InputTestWidget(const char *id)
     std::string where = sel->bound >= 0 ? string_format(tr("Port %d"), sel->bound + 1)
                                         : std::string(tr("Not on a port"));
     ImGui::TextDisabled("%s", where.c_str());
-    ImGui::TextDisabled("%s", tr("Press buttons and move the sticks: they light up here. If "
-                                 "nothing happens, the controller isn't reaching xemu."));
+    if (g_test_on) {
+        ImGui::TextColored(ImVec4(0.45f, 0.9f, 1.0f, 1.0f), "%s",
+                           tr("Testing: the controller only moves the picture now, so it won't "
+                              "scroll the page, go back or change tabs. To finish, click Stop "
+                              "test, press Esc, or hold Back and Start for 2 seconds."));
+    } else {
+        ImGui::TextDisabled("%s", tr("Press Start test, then press buttons and move the sticks: "
+                                     "they light up here. If nothing happens, the controller "
+                                     "isn't reaching xemu."));
+    }
     ImGui::PopID();
 }

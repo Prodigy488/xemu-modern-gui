@@ -9165,7 +9165,8 @@ struct AchEdit {
     bool is_new = true;
     uint32_t tid = 0;
     std::string game, id;
-    char name[96] = "", desc[320] = "", group[48] = "";
+    // One byte more than the limits in achievements.cc (80, 300, 40)
+    char name[81] = "", desc[301] = "", group[41] = "";
     int points = 10;
 } g_ach_edit;
 
@@ -9176,25 +9177,120 @@ void DrawAchEditPopup()
         ImGui::OpenPopup(trid("Your achievement"));
         g_ach_edit.open_request = false;
     }
-    ImGui::SetNextWindowSize(ImVec2(520 * s, 0), ImGuiCond_Appearing);
-    if (!ImGui::BeginPopupModal(trid("Your achievement"), NULL,
-                                ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::SetNextWindowSize(ImVec2(620 * s, 660 * s), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal(trid("Your achievement"), NULL, 0)) {
         return;
     }
     AchEdit &ed = g_ach_edit;
     ImGui::TextDisabled("%s", ed.game.c_str());
-    ImGui::PushItemWidth(-FLT_MIN);
+    ImGui::BeginChild("##achbody", ImVec2(0, -44 * s));
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("%s", tr("An achievement is a goal for this game. xemu can't see inside "
+                                 "the game, so you tick it off yourself when you've done it."));
+
+    auto counter = [&](size_t used, size_t max) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%d/%d", (int)used, (int)max);
+    };
+
+    ImGui::Dummy(ImVec2(0, 4 * s));
     ImGui::TextUnformatted(tr("Name"));
-    ImGui::InputText("##achname", ed.name, sizeof(ed.name));
+    counter(strlen(ed.name), 80);
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputTextWithHint("##achname", tr("Short and catchy, like First Blood"), ed.name,
+                             sizeof(ed.name));
     OskTextBox();
+
+    ImGui::Dummy(ImVec2(0, 4 * s));
     ImGui::TextUnformatted(tr("What to do"));
-    ImGui::InputText("##achdesc", ed.desc, sizeof(ed.desc));
+    counter(strlen(ed.desc), 300);
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputTextWithHint("##achdesc",
+                             tr("Say exactly what to do, like Finish the first mission without dying"),
+                             ed.desc, sizeof(ed.desc));
     OskTextBox();
-    ImGui::TextUnformatted(tr("Group (optional, to keep them in sections)"));
-    ImGui::InputText("##achgroup", ed.group, sizeof(ed.group));
+    ImGui::TextDisabled("%s", tr("Write it so anyone can tell when it's done: say the level, "
+                                 "difficulty, time or count."));
+
+    ImGui::Dummy(ImVec2(0, 4 * s));
+    ImGui::TextUnformatted(tr("Group (optional)"));
+    counter(strlen(ed.group), 40);
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputTextWithHint("##achgroup", tr("Story, Collectibles, Challenges..."), ed.group,
+                             sizeof(ed.group));
     OskTextBox();
+    ImGui::TextDisabled("%s", tr("Achievements with the same group are listed together under that "
+                                 "heading."));
+
+    ImGui::Dummy(ImVec2(0, 4 * s));
+    ImGui::TextUnformatted(tr("Points"));
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", tr("Only for fun: they add up to your score for this game."));
+    ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::SliderInt("##achpts", &ed.points, 0, 100, tr("%d points"));
-    ImGui::PopItemWidth();
+    {
+        static const int tiers[] = { 5, 10, 25, 50, 100 };
+        for (int i = 0; i < 5; i++) {
+            if (i) {
+                ImGui::SameLine();
+            }
+            ImGui::PushID(i);
+            if (ImGui::Button(std::to_string(tiers[i]).c_str(), ImVec2(56 * s, 0))) {
+                ed.points = tiers[i];
+            }
+            ImGui::PopID();
+        }
+        ImGui::TextDisabled("%s", tr("About 5 for something quick, 10 for a normal goal, 25 for a "
+                                     "hard one, 50 or more for the toughest."));
+    }
+
+    // How it will look in the list
+    ImGui::Dummy(ImVec2(0, 4 * s));
+    ImGui::TextUnformatted(tr("Preview"));
+    ImGui::BeginChild("##achprev", ImVec2(0, 78 * s), ImGuiChildFlags_Borders);
+    ImGui::TextUnformatted(ed.name[0] ? ed.name : tr("(name)"));
+    ImGui::TextDisabled("%s", ed.desc[0] ? ed.desc : tr("(what to do)"));
+    ImGui::TextDisabled("%s", string_format(tr("%d points"), ed.points).c_str());
+    ImGui::EndChild();
+
+    // Gentle warnings, nothing blocks saving but the name
+    bool same_name = false;
+    for (int i = 0; i < AchievementCount(ed.tid) && ed.name[0]; i++) {
+        AchievementInfo a = AchievementAt(ed.tid, i);
+        if (a.id == ed.id && !ed.is_new) {
+            continue;
+        }
+        std::string x = a.name, y = ed.name;
+        for (auto &c : x) c = (char)tolower((unsigned char)c);
+        for (auto &c : y) c = (char)tolower((unsigned char)c);
+        same_name |= x == y;
+    }
+    if (same_name) {
+        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%s",
+                           tr("This game already has an achievement with that name."));
+    }
+    if (ed.name[0] && !ed.desc[0]) {
+        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%s",
+                           tr("Add what to do, so you (and anyone you share it with) know how "
+                              "to get it."));
+    }
+
+    ImGui::Dummy(ImVec2(0, 6 * s));
+    if (ImGui::CollapsingHeader(tr("Tips for good achievements"))) {
+        ImGui::BulletText("%s", tr("Make it something you can check: \"Beat the level on Hard\" "
+                                   "works, \"Play well\" doesn't."));
+        ImGui::BulletText("%s", tr("Put the condition in What to do: the level, difficulty, "
+                                   "time limit or how many."));
+        ImGui::BulletText("%s", tr("Keep the name short and the text to a sentence or two."));
+        ImGui::BulletText("%s", tr("Avoid spoilers, or put them in a group called Spoilers."));
+        ImGui::BulletText("%s", tr("Mix easy and hard ones, so there is something to get early "
+                                   "and something to work toward."));
+        ImGui::BulletText("%s", tr("To share your list, see Browse community packs in the "
+                                   "Achievements tab."));
+    }
+    ImGui::PopTextWrapPos();
+    ImGui::EndChild();
+
     ImGui::Separator();
     bool ok = ed.name[0] != 0;
     ImGui::BeginDisabled(!ok);
@@ -9207,6 +9303,9 @@ void DrawAchEditPopup()
         ImGui::CloseCurrentPopup();
     }
     ImGui::EndDisabled();
+    if (!ok) {
+        ImGui::SetItemTooltip("%s", tr("Give it a name first."));
+    }
     ImGui::SameLine();
     if (ImGui::Button(tr("Cancel"), ImVec2(120 * s, 0)) ||
         ImGui::IsKeyPressed(ImGuiKey_Escape) ||

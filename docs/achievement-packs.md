@@ -10,6 +10,16 @@ A file's name starts with the game's **title ID** in 8 hex digits, for example `
 
 Your own achievements, made with "Add an achievement", are kept in `<TITLEID>-mine.json`.
 
+## Writing good achievements
+
+"Add an achievement" in the Achievements tab walks you through it, with hints in every box, a preview and a tips section. The short version:
+
+- **Name:** short and catchy, up to 80 characters.
+- **What to do:** say exactly what to do so anyone can tell when it's done. "Finish the first mission without dying" works; "Play well" doesn't. Put the level, difficulty, time limit or count in the text.
+- **Group:** optional heading to keep related ones together (Story, Collectibles, Challenges...).
+- **Points:** only for fun. About 5 for something quick, 10 for a normal goal, 25 for a hard one, 50 or more for the toughest.
+- Avoid spoilers, or put them in a group called Spoilers. Mix easy and hard ones.
+
 ## Format
 
 See [achievement-pack-example.json](achievement-pack-example.json).

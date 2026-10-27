@@ -4,7 +4,7 @@
 // A homage to the look of the first Xbox's menu: black with green light, a
 // list of sections on the left and a glowing wireframe globe, drawn from
 // scratch (no Microsoft artwork, logos or fonts). The main menu lists the
-// sections; picking one opens it, and B or the back label returns.
+// sections; picking one opens it in a window beside the list, and B closes the window.
 //
 // These are drawing helpers only, so the layout can be checked on its own;
 // game-library.cc supplies the sections and their content.
@@ -32,16 +32,21 @@ void XboxDashGlobe(ImDrawList *dl, ImVec2 center, float radius, double time, flo
 // the controller or keyboard focus and the mouse). `focus_sel` moves the
 // controller focus to that row (use when the menu appears). Returns the row
 // that was picked, or -1.
+//
+// open_t (0..1) slides the list into a narrow column at the left to make room
+// for a section's window, which then shows over the globe. While it is open
+// the highlight no longer follows the mouse (a click picks), so the caller
+// switches section when `sel` changes. *list_right gets the right edge of the
+// list, where the window starts.
 int XboxDashMenu(const char *brand, const char *const *labels, int n, int &sel, ImVec2 a,
                  ImVec2 b, float scale, double time, ImFont *font, ImFont *small_font,
-                 bool focus_sel, bool animate);
+                 bool focus_sel, float open_t, float *list_right, bool animate);
 
-// A section's frame: crumb and title at the top, a glass panel below. Sets
-// *back when the crumb is clicked. Returns the screen rectangle to put the
-// content in.
+// A section's window, to the right of the list at `left`: glass over the
+// globe with the title at its top. Returns the screen rectangle to put the
+// content in. open_t (0..1) fades and slides it in.
 struct XboxDashRect {
     ImVec2 min, max;
 };
-XboxDashRect XboxDashSection(const char *brand, const char *title, ImVec2 a, ImVec2 b,
-                             float scale, double time, ImFont *font, ImFont *small_font,
-                             float bottom_margin, bool *back, bool animate);
+XboxDashRect XboxDashWindow(const char *title, ImVec2 a, ImVec2 b, float scale, ImFont *font,
+                            float left, float bottom_margin, float open_t);

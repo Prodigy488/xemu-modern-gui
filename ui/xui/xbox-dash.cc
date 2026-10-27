@@ -182,16 +182,28 @@ void XboxDashBackground(ImDrawList *dl, ImVec2 a, ImVec2 b, float s, double t, b
 
 int XboxDashMenu(const char *brand, const char *const *labels, int n, int &sel, ImVec2 a,
                  ImVec2 b, float s, double t, ImFont *font, ImFont *small_font, bool focus_sel,
-                 bool animate)
+                 float open_t, float *list_right, bool animate)
 {
     ImDrawList *dl = ImGui::GetWindowDrawList();
     float w = b.x - a.x, h = b.y - a.y;
     int picked = -1;
     sel = std::clamp(sel, 0, std::max(0, n - 1));
 
+    const bool open = open_t > 0.5f; // a section's window is showing
+    const float fs = font->FontSize;
+    float max_w = 0;
+    for (int i = 0; i < n; i++) {
+        max_w = std::max(max_w, font->CalcTextSizeA(fs, FLT_MAX, 0, labels[i]).x);
+    }
+    float x0 = a.x + w * (0.07f + (0.045f - 0.07f) * open_t);
+    float row_w = w * 0.40f + (max_w + 34 * s - w * 0.40f) * open_t;
+    if (list_right) {
+        *list_right = x0 + row_w;
+    }
+
     // Brand
-    dl->AddText(small_font, small_font->FontSize, ImVec2(a.x + w * 0.07f, a.y + 26 * s),
-                A(kGreen, 235), brand);
+    dl->AddText(small_font, small_font->FontSize, ImVec2(x0, a.y + 26 * s), A(kGreen, 235),
+                brand);
 
     // Globe
     static int last_sel = -1;
@@ -209,12 +221,9 @@ int XboxDashMenu(const char *brand, const char *const *labels, int n, int &sel, 
     XboxDashGlobe(dl, gc, gr, t, pulse, animate);
 
     // The list
-    const float fs = font->FontSize;
     float row_h = std::min(fs * 1.75f, (h * 0.70f) / std::max(1, n));
     float list_h = row_h * n;
-    float x0 = a.x + w * 0.07f;
     float y0 = a.y + (h - list_h) * 0.5f + 8 * s;
-    float row_w = w * 0.40f;
 
     static float bar_y = -1;
     float target_y = y0 + sel * row_h;
@@ -225,6 +234,8 @@ int XboxDashMenu(const char *brand, const char *const *labels, int n, int &sel, 
     dl->AddRectFilled(ImVec2(x0 - 14 * s, bar_y + 4 * s), ImVec2(x0 - 10 * s, bar_y + row_h - 4 * s),
                       kGreen);
 
+    static int focus_prev = -1;
+    int focused_row = -1;
     ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0, 0, 0, 0)); // the bar is the cursor
     for (int i = 0; i < n; i++) {
         ImGui::PushID(i);
@@ -238,7 +249,14 @@ int XboxDashMenu(const char *brand, const char *const *labels, int n, int &sel, 
                                               ImGuiButtonFlags_EnableNav);
         bool hov = ImGui::IsItemHovered();
         bool focus = ImGui::IsItemFocused() && ImGui::GetIO().NavVisible;
-        if (focus || (hov && (ImGui::GetIO().MouseDelta.x != 0 || ImGui::GetIO().MouseDelta.y != 0))) {
+        if (focus) {
+            focused_row = i;
+        }
+        bool moved = hov && (ImGui::GetIO().MouseDelta.x != 0 || ImGui::GetIO().MouseDelta.y != 0);
+        // With a window open the highlight only follows the focus when it
+        // moves from one row to another, and a click picks (so passing the
+        // mouse over the list on the way to the window changes nothing)
+        if (open ? (focus && focus_prev >= 0 && focus_prev != i) : (focus || moved)) {
             sel = i;
         }
         if (clicked) {
@@ -253,44 +271,32 @@ int XboxDashMenu(const char *brand, const char *const *labels, int n, int &sel, 
         ImGui::PopID();
     }
     ImGui::PopStyleColor();
+    focus_prev = focused_row;
     return picked;
 }
 
-XboxDashRect XboxDashSection(const char *brand, const char *title, ImVec2 a, ImVec2 b, float s,
-                             double t, ImFont *font, ImFont *small_font, float bottom_margin,
-                             bool *back, bool animate)
+XboxDashRect XboxDashWindow(const char *title, ImVec2 a, ImVec2 b, float s, ImFont *font,
+                            float left, float bottom_margin, float open_t)
 {
     ImDrawList *dl = ImGui::GetWindowDrawList();
     float w = b.x - a.x;
-    const float pad = std::max(28.0f * s, w * 0.04f);
-    float y = a.y + 22 * s;
+    const float pad = std::max(20.0f * s, w * 0.03f);
+    int fade = (int)(255 * std::clamp(open_t, 0.0f, 1.0f));
+    ImVec2 p0(left + (1.0f - open_t) * 60 * s, a.y + 58 * s), p1(b.x - pad, b.y - bottom_margin);
 
-    // Crumb: brand and an arrow, clickable to go back
-    std::string crumb = std::string("<  ") + brand;
-    ImVec2 cs = small_font->CalcTextSizeA(small_font->FontSize, FLT_MAX, 0, crumb.c_str());
-    ImGui::SetCursorScreenPos(ImVec2(a.x + pad, y));
-    bool clicked = ImGui::InvisibleButton("##xbback", ImVec2(cs.x + 8 * s, cs.y + 6 * s));
-    bool hov = ImGui::IsItemHovered();
-    if (clicked && back) {
-        *back = true;
-    }
-    dl->AddText(small_font, small_font->FontSize, ImVec2(a.x + pad, y),
-                hov ? IM_COL32(255, 255, 255, 255) : A(kGreen, 235), crumb.c_str());
-
-    float ty = y + cs.y + 8 * s;
-    dl->AddText(font, font->FontSize, ImVec2(a.x + pad, ty), IM_COL32(255, 255, 255, 255), title);
-    float ly = ty + font->FontSize + 10 * s;
-    dl->AddRectFilledMultiColor(ImVec2(a.x + pad, ly), ImVec2(a.x + pad + w * 0.55f, ly + 2 * s),
-                                kGreen, A(kGreen, 0), A(kGreen, 0), kGreen);
-
-    // The panel
-    ImVec2 p0(a.x + pad, ly + 16 * s), p1(b.x - pad, b.y - bottom_margin);
-    dl->AddRectFilled(p0, p1, IM_COL32(4, 14, 5, 188), 6 * s);
-    dl->AddRect(p0, p1, A(kGreen, 120), 6 * s, 0, 1.2f * s);
-    dl->AddRectFilledMultiColor(p0, ImVec2(p1.x, p0.y + 3 * s), A(kGreen, 200), A(kGreen, 60),
-                                A(kGreen, 60), A(kGreen, 200));
+    // Glass over the globe
+    dl->AddRectFilled(p0, p1, IM_COL32(3, 12, 4, 214 * fade / 255), 8 * s);
+    dl->AddRect(p0, p1, A(kGreen, 130 * fade / 255), 8 * s, 0, 1.4f * s);
+    dl->AddRectFilledMultiColor(p0, ImVec2(p1.x, p0.y + 3 * s), A(kGreen, 210 * fade / 255),
+                                A(kGreen, 60 * fade / 255), A(kGreen, 60 * fade / 255),
+                                A(kGreen, 210 * fade / 255));
+    float tx = p0.x + 22 * s, ty = p0.y + 14 * s;
+    dl->AddText(font, font->FontSize, ImVec2(tx, ty), IM_COL32(255, 255, 255, fade), title);
+    float ly = ty + font->FontSize + 8 * s;
+    dl->AddRectFilledMultiColor(ImVec2(tx, ly), ImVec2(tx + (p1.x - p0.x) * 0.55f, ly + 2 * s),
+                                A(kGreen, fade), A(kGreen, 0), A(kGreen, 0), A(kGreen, fade));
     XboxDashRect r;
-    r.min = ImVec2(p0.x + 16 * s, p0.y + 14 * s);
+    r.min = ImVec2(p0.x + 16 * s, ly + 12 * s);
     r.max = ImVec2(p1.x - 16 * s, p1.y - 12 * s);
     return r;
 }

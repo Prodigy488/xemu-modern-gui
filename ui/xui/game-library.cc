@@ -9984,7 +9984,7 @@ void DrawDashSettingsTab()
         ImGui::Combo("##style", &g_config.general.library.style,
                      tr_items("Dashboard (tabs)\0Classic (library window)\0"
                      "Blades (sliding panels)\0Metro (live tiles)\0"
-                     "Original Xbox (menu and globe)\0"));
+                     "Original Xbox (menu and globe)\0Original Blades (glass blades)\0"));
         label(tr("Dashboard theme"));
         ImGui::Combo("##theme", &g_config.general.library.theme,
                      tr_items("Neon (dark, cyan and magenta)\0Green (xemu)\0"));
@@ -10587,6 +10587,11 @@ bool XboxStyle()
     return g_config.general.library.style == CONFIG_GENERAL_LIBRARY_STYLE_XBOX;
 }
 
+bool XBladesStyle()
+{
+    return g_config.general.library.style == CONFIG_GENERAL_LIBRARY_STYLE_XBLADES;
+}
+
 void DrawTabContent(int tab, int &tex_budget)
 {
     switch (tab) {
@@ -10847,8 +10852,9 @@ void DrawBladesFrame(int &tex_budget)
 // ---- Original Xbox style ----
 
 // A homage to the first Xbox's menu, drawn from scratch: a list of sections
-// over a glowing wireframe globe. Picking a section opens it in a panel; B,
-// Esc or the "<" label at the top goes back to the list.
+// beside a glowing wireframe globe. Picking a section slides the list to the
+// left and opens that section in a window over the globe; the list stays, so
+// you can flip between sections. B or Esc closes the window.
 void DrawXboxFrame(int &tex_budget)
 {
     const float s = g_viewport_mgr.m_scale;
@@ -10861,41 +10867,58 @@ void DrawXboxFrame(int &tex_budget)
     ImFont *big = FontOr(g_font_mgr.m_menu_font);
     ImFont *small_font = FontOr(g_font_mgr.m_menu_font_small);
 
-    static bool was_section = false;
-    static int sel = 0;
-    bool in_section = g_xbox_in_section;
-    bool entering_menu = !in_section && (was_section || !ImGui::IsWindowFocused(
-                                             ImGuiFocusedFlags_ChildWindows));
-    was_section = in_section;
-
-    XboxDashBackground(dl, wp, wb, s, now, !in_section, anim);
-    DrawStyleStatus(wb.x - 20 * s, wp.y + 12 * s);
-
-    if (!in_section) {
-        std::string names[kTabCount];
-        const char *labels[kTabCount];
-        for (int i = 0; i < kTabCount; i++) {
-            names[i] = XuiLower(tr(kTabNames[i]));
-            labels[i] = names[i].c_str();
-        }
-        static bool first = true;
-        if (first || entering_menu) {
-            sel = g_dash_tab;
-        }
-        int picked = XboxDashMenu("xemu", labels, kTabCount, sel, wp,
-                                  ImVec2(wb.x, wb.y - hints_h), s, now, big, small_font,
-                                  first || entering_menu, anim);
-        first = false;
-        if (picked >= 0) {
-            SwitchTab(picked);
-            g_xbox_in_section = true;
+    static float open_t = 0;
+    static bool first = true, was_open = false;
+    static int sel = 0, prev_tab = -1;
+    const bool want_open = g_xbox_in_section;
+    if (anim) {
+        open_t += ((want_open ? 1.0f : 0.0f) - open_t) *
+                  (1.0f - expf(-12.0f * ImGui::GetIO().DeltaTime));
+        if (fabsf((want_open ? 1.0f : 0.0f) - open_t) < 0.003f) {
+            open_t = want_open ? 1.0f : 0.0f;
         }
     } else {
+        open_t = want_open ? 1.0f : 0.0f;
+    }
+
+    // Which row is lit: the open section, or the last one chosen
+    bool focus_list = false;
+    if (want_open) {
+        if (!was_open || g_dash_tab != prev_tab) {
+            sel = g_dash_tab;
+        }
+    } else if (first || was_open) {
+        sel = g_dash_tab;
+        focus_list = true;
+    }
+
+    XboxDashBackground(dl, wp, wb, s, now, open_t < 0.5f, anim);
+    DrawStyleStatus(wb.x - 20 * s, wp.y + 12 * s);
+
+    std::string names[kTabCount];
+    const char *labels[kTabCount];
+    for (int i = 0; i < kTabCount; i++) {
+        names[i] = XuiLower(tr(kTabNames[i]));
+        labels[i] = names[i].c_str();
+    }
+    float list_right = wp.x + ws.x * 0.45f;
+    int picked = XboxDashMenu("xemu", labels, kTabCount, sel, wp, ImVec2(wb.x, wb.y - hints_h),
+                              s, now, big, small_font, focus_list, open_t, &list_right, anim);
+    first = false;
+    if (picked >= 0) {
+        SwitchTab(picked); // also opens the window
+    } else if (want_open && sel != g_dash_tab) {
+        SwitchTab(sel);
+    }
+    prev_tab = g_dash_tab;
+    was_open = g_xbox_in_section;
+
+    if (open_t > 0.01f) {
         std::string title = XuiLower(tr(kTabNames[g_dash_tab]));
-        bool back = false;
-        XboxDashRect r = XboxDashSection("xemu", title.c_str(), wp, wb, s, now, big,
-                                         small_font, hints_h + 6 * s, &back, anim);
-        ImGui::SetCursorScreenPos(r.min);
+        XboxDashRect r = XboxDashWindow(title.c_str(), wp, wb, s, big, list_right + 26 * s,
+                                        hints_h + 6 * s, open_t);
+        ImGui::SetCursorScreenPos(ImVec2(r.min.x + (1.0f - open_t) * 60 * s, r.min.y));
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, open_t);
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
         ImGui::BeginChild("##xboxcontent",
                           ImVec2(std::max(10.0f, r.max.x - r.min.x),
@@ -10905,23 +10928,148 @@ void DrawXboxFrame(int &tex_budget)
         ImGui::PopStyleColor();
         DrawTabContent(g_dash_tab, tex_budget);
         ImGui::EndChild();
-        if (!back && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) &&
-            !ImGui::IsAnyItemActive() &&
-            g_back_consumed_frame != ImGui::GetFrameCount() &&
-            ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
-            (ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
-             ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))) {
-            back = true;
-            GameLibraryConsumeBack();
-        }
-        if (back) {
-            g_xbox_in_section = false;
-            RequestPreviewStop();
-        }
+        ImGui::PopStyleVar();
+    }
+    // B / Esc closes the window (and then, from the menu, the dashboard)
+    if (want_open && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) &&
+        !ImGui::IsAnyItemActive() && g_back_consumed_frame != ImGui::GetFrameCount() &&
+        ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+        (ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+         ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))) {
+        g_xbox_in_section = false;
+        RequestPreviewStop();
+        GameLibraryConsumeBack();
     }
 
     ImGui::SetCursorScreenPos(ImVec2(wp.x + 28 * s, wb.y - hints_h + 4 * s));
     DrawDashHints(ImGui::GetCursorScreenPos(), ws.x - 56 * s);
+}
+
+// ---- Original Blades ----
+
+// The look of the original Xbox 360 dashboard's blades: a green backdrop with
+// silky ribbons of light, and every section a tall glass blade standing in a
+// row on the left. The blade you are on rises and lights up, and its window
+// opens beside the row, so all the blades stay in view as you flip through
+// them (LB / RB, or click one).
+void DrawXBladesFrame(int &tex_budget)
+{
+    const float s = g_viewport_mgr.m_scale;
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+    ImVec2 wb(wp.x + ws.x, wp.y + ws.y);
+    const double now = ImGui::GetTime();
+
+    // Backdrop: deep green, a bright pool of light at the top right, ribbons
+    dl->AddRectFilledMultiColor(wp, wb, IM_COL32(40, 96, 16, 250), IM_COL32(28, 74, 14, 250),
+                                IM_COL32(4, 18, 6, 252), IM_COL32(4, 18, 6, 252));
+    for (int i = 0; i < 9; i++) {
+        dl->AddCircleFilled(ImVec2(wp.x + ws.x * 0.80f, wp.y + ws.y * 0.05f),
+                            ws.x * (0.10f + i * 0.06f), IM_COL32(170, 240, 90, 6), 64);
+    }
+    if (Animations()) {
+        float t = (float)now;
+        DrawRibbon(dl, wp, wb, t, 0.78f, 0.06f, 0.9f, 0.20f, 0.07f, 0.0f,
+                   IM_COL32(210, 255, 170, 54));
+        DrawRibbon(dl, wp, wb, t, 0.84f, 0.05f, 1.2f, 0.15f, 0.05f, 2.3f,
+                   IM_COL32(150, 235, 80, 48));
+        DrawRibbon(dl, wp, wb, t, 0.70f, 0.05f, 0.7f, 0.11f, 0.035f, 4.1f,
+                   IM_COL32(255, 255, 255, 30));
+    }
+
+    const float pad = 20 * s;
+    ImFont *big = FontOr(g_font_mgr.m_menu_font);
+    ImFont *label_font = FontOr(g_font_mgr.m_menu_font_small);
+    dl->AddText(big, big->FontSize, ImVec2(wp.x + pad, wp.y + 12 * s),
+                IM_COL32(240, 250, 235, 255), "xemu");
+    DrawStyleStatus(wb.x - pad, wp.y + 12 * s);
+
+    // The row of blades
+    const float hints_h = ImGui::GetFontSize() * 2.2f;
+    const float rise = 16 * s;
+    ImVec2 a(wp.x + pad, wp.y + 58 * s + rise), b(wb.x - pad, wb.y - hints_h - 4 * s);
+    const float sw = std::min(56.0f * s, ws.x * 0.034f), gap = 5 * s;
+    static float lift[kTabCount];
+    for (int i = 0; i < kTabCount; i++) {
+        float target = i == g_dash_tab ? 1.0f : 0.0f;
+        if (Animations()) {
+            lift[i] += (target - lift[i]) * (1.0f - expf(-14.0f * ImGui::GetIO().DeltaTime));
+            if (fabsf(target - lift[i]) < 0.003f) {
+                lift[i] = target;
+            }
+        } else {
+            lift[i] = target;
+        }
+    }
+    for (int i = 0; i < kTabCount; i++) {
+        float x0 = a.x + i * (sw + gap);
+        ImU32 col = SectionColor(i);
+        float up = lift[i] * rise;
+        ImVec2 p(x0, a.y - up), q(x0 + sw, b.y);
+        ImGui::SetCursorScreenPos(p);
+        ImGui::PushID(i);
+        bool clicked = ImGui::InvisibleButton("##xblade", ImVec2(sw, q.y - p.y));
+        bool hov = ImGui::IsItemHovered();
+        ImGui::PopID();
+        int body = (int)(150 + 70 * lift[i]) + (hov ? 20 : 0);
+        dl->AddRectFilled(p, q, IM_COL32(8, 22, 10, std::min(body, 245)), 9 * s);
+        // Colour washing down from the top; stronger on the lit blade
+        dl->AddRectFilledMultiColor(p, ImVec2(q.x, p.y + (q.y - p.y) * 0.55f),
+                                    Alpha(col, (int)(70 + 110 * lift[i])),
+                                    Alpha(col, (int)(70 + 110 * lift[i])), Alpha(col, 0),
+                                    Alpha(col, 0));
+        // Glass shine down the left edge and across the top
+        dl->AddRectFilledMultiColor(p, ImVec2(p.x + sw * 0.35f, q.y), IM_COL32(255, 255, 255, 34),
+                                    IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 0),
+                                    IM_COL32(255, 255, 255, 6));
+        dl->AddRect(p, q, Alpha(col, (int)(110 + 120 * lift[i]) + (hov ? 40 : 0)), 9 * s, 0,
+                    (1.0f + lift[i]) * s);
+        dl->AddCircleFilled(ImVec2(p.x + sw / 2, p.y + 18 * s), (4.0f + 2.0f * lift[i]) * s,
+                            Alpha(col, 255), 16);
+        dl->AddCircle(ImVec2(p.x + sw / 2, p.y + 18 * s), (8.0f + 2.0f * lift[i]) * s,
+                      Alpha(col, 120), 20, 1.0f * s);
+        std::string name = XuiLower(tr(kTabNames[i]));
+        float fs = label_font->FontSize;
+        AddTextVertical(dl, label_font, fs, ImVec2(p.x + (sw - fs) / 2, q.y - 16 * s),
+                        IM_COL32(240, 250, 240, (int)(170 + 85 * lift[i]) + (hov ? 20 : 0)),
+                        name.c_str());
+        if (clicked) {
+            SwitchTab(i);
+        }
+    }
+
+    // The window beside the row, tinted to the blade
+    float wx0 = a.x + kTabCount * (sw + gap) + 10 * s;
+    ImVec2 p(wx0, a.y), q(b.x, b.y);
+    ImU32 col = SectionColor(g_dash_tab);
+    dl->AddRectFilled(p, q, IM_COL32(6, 18, 9, 226), 10 * s);
+    dl->AddRectFilledMultiColor(p, ImVec2(q.x, p.y + 110 * s), Alpha(col, 84), Alpha(col, 26),
+                                Alpha(col, 0), Alpha(col, 0));
+    dl->AddRect(p, q, Alpha(col, 190), 10 * s, 0, 1.4f * s);
+    // A pointer from the lit blade to the window
+    float cy = a.y + 18 * s;
+    dl->AddTriangleFilled(ImVec2(wx0 - 9 * s, cy), ImVec2(wx0 + 1 * s, cy - 7 * s),
+                          ImVec2(wx0 + 1 * s, cy + 7 * s), Alpha(col, 230));
+    std::string title = XuiLower(tr(kTabNames[g_dash_tab]));
+    dl->AddText(big, big->FontSize, ImVec2(p.x + 22 * s, p.y + 10 * s),
+                IM_COL32(250, 255, 250, 255), title.c_str());
+
+    // The content slides in when the blade changes
+    float slide = (1.0f - EaseSince(g_anim.tab_t, 0.30f)) * 30 * s;
+    float ty = p.y + big->FontSize + 22 * s;
+    ImGui::SetCursorScreenPos(ImVec2(p.x + 22 * s + slide, ty));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::BeginChild("##xbladescontent",
+                      ImVec2(std::max(10.0f, q.x - p.x - 40 * s),
+                             std::max(10.0f, q.y - ty - 14 * s)),
+                      ImGuiChildFlags_NavFlattened,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleColor();
+    DrawTabContent(g_dash_tab, tex_budget);
+    ImGui::EndChild();
+
+    ImGui::SetCursorScreenPos(ImVec2(wp.x + pad, wb.y - hints_h + 4 * s));
+    DrawDashHints(ImGui::GetCursorScreenPos(), ws.x - 2 * pad);
 }
 
 // ---- Metro ----
@@ -11376,7 +11524,7 @@ void GameLibraryWindow::Draw()
         return;
     }
 
-    const bool own_frame = BladesStyle() || MetroStyle() || XboxStyle();
+    const bool own_frame = BladesStyle() || MetroStyle() || XboxStyle() || XBladesStyle();
     if (classic) {
         DrawClassicHeader();
     } else if (!own_frame) {
@@ -11439,6 +11587,8 @@ void GameLibraryWindow::Draw()
         DrawMetroFrame(tex_budget);
     } else if (XboxStyle()) {
         DrawXboxFrame(tex_budget);
+    } else if (XBladesStyle()) {
+        DrawXBladesFrame(tex_budget);
     } else {
         const float hints_h = ImGui::GetFontSize() * 2.2f;
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));

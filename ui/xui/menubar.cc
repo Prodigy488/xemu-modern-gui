@@ -167,6 +167,11 @@ void ShowMainMenu()
                     style = CONFIG_GENERAL_LIBRARY_STYLE_METRO;
                     game_library_window.Open();
                 }
+                if (ImGui::MenuItem(tr("Original Xbox"), NULL,
+                                    style == CONFIG_GENERAL_LIBRARY_STYLE_XBOX)) {
+                    style = CONFIG_GENERAL_LIBRARY_STYLE_XBOX;
+                    game_library_window.Open();
+                }
                 ImGui::Separator();
                 ImGui::TextDisabled(tr("Dashboard theme"));
                 int &theme = g_config.general.library.theme;

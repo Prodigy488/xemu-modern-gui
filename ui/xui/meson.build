@@ -18,6 +18,7 @@ xemu_ss.add(files(
   'achievements.cc',
   'ach-memory.cc',
   'ach-finder.cc',
+  'xbox-dash.cc',
   'osk.cc',
   'input-ui.cc',
   'play-extras.cc',

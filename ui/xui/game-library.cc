@@ -30,6 +30,7 @@
 #include "osk.hh"
 #include "input-ui.hh"
 #include "ach-finder.hh"
+#include "xbox-dash.hh"
 #include "play-extras.hh"
 #include "achievements.hh"
 #include "game-library.hh"
@@ -5295,6 +5296,7 @@ const char *const kTabNames[kTabCount] = { N_("Home"),  N_("Library"), N_("Insig
                                            N_("Patches"), N_("Achievements"),
                                            N_("Settings") };
 int g_dash_tab = kTabHome;
+bool g_xbox_in_section = false; // Original Xbox style: in a section, not the main menu
 
 std::string g_home_path;        // game shown in the Home hero
 std::string g_home_seen_select; // g_selected_path as last seen on Home
@@ -5454,6 +5456,7 @@ void SwitchTab(int tab)
         g_anim.tab_t = ImGui::GetTime();
     }
     g_dash_tab = next;
+    g_xbox_in_section = true;
     RequestPreviewStop();
 }
 
@@ -9980,7 +9983,8 @@ void DrawDashSettingsTab()
         label(tr("Library style"));
         ImGui::Combo("##style", &g_config.general.library.style,
                      tr_items("Dashboard (tabs)\0Classic (library window)\0"
-                     "Blades (sliding panels)\0Metro (live tiles)\0"));
+                     "Blades (sliding panels)\0Metro (live tiles)\0"
+                     "Original Xbox (menu and globe)\0"));
         label(tr("Dashboard theme"));
         ImGui::Combo("##theme", &g_config.general.library.theme,
                      tr_items("Neon (dark, cyan and magenta)\0Green (xemu)\0"));
@@ -10578,6 +10582,11 @@ bool MetroStyle()
     return g_config.general.library.style == CONFIG_GENERAL_LIBRARY_STYLE_METRO;
 }
 
+bool XboxStyle()
+{
+    return g_config.general.library.style == CONFIG_GENERAL_LIBRARY_STYLE_XBOX;
+}
+
 void DrawTabContent(int tab, int &tex_budget)
 {
     switch (tab) {
@@ -10832,6 +10841,87 @@ void DrawBladesFrame(int &tex_budget)
 
     ImGui::SetCursorScreenPos(ImVec2(wp.x + pad, wb.y - hints_h + 4 * s));
     DrawDashHints(ImGui::GetCursorScreenPos(), ws.x - 2 * pad);
+}
+
+
+// ---- Original Xbox style ----
+
+// A homage to the first Xbox's menu, drawn from scratch: a list of sections
+// over a glowing wireframe globe. Picking a section opens it in a panel; B,
+// Esc or the "<" label at the top goes back to the list.
+void DrawXboxFrame(int &tex_budget)
+{
+    const float s = g_viewport_mgr.m_scale;
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+    ImVec2 wb(wp.x + ws.x, wp.y + ws.y);
+    const double now = ImGui::GetTime();
+    const bool anim = Animations();
+    const float hints_h = ImGui::GetFontSize() * 2.2f;
+    ImFont *big = FontOr(g_font_mgr.m_menu_font);
+    ImFont *small_font = FontOr(g_font_mgr.m_menu_font_small);
+
+    static bool was_section = false;
+    static int sel = 0;
+    bool in_section = g_xbox_in_section;
+    bool entering_menu = !in_section && (was_section || !ImGui::IsWindowFocused(
+                                             ImGuiFocusedFlags_ChildWindows));
+    was_section = in_section;
+
+    XboxDashBackground(dl, wp, wb, s, now, !in_section, anim);
+    DrawStyleStatus(wb.x - 20 * s, wp.y + 12 * s);
+
+    if (!in_section) {
+        std::string names[kTabCount];
+        const char *labels[kTabCount];
+        for (int i = 0; i < kTabCount; i++) {
+            names[i] = XuiLower(tr(kTabNames[i]));
+            labels[i] = names[i].c_str();
+        }
+        static bool first = true;
+        if (first || entering_menu) {
+            sel = g_dash_tab;
+        }
+        int picked = XboxDashMenu("xemu", labels, kTabCount, sel, wp,
+                                  ImVec2(wb.x, wb.y - hints_h), s, now, big, small_font,
+                                  first || entering_menu, anim);
+        first = false;
+        if (picked >= 0) {
+            SwitchTab(picked);
+            g_xbox_in_section = true;
+        }
+    } else {
+        std::string title = XuiLower(tr(kTabNames[g_dash_tab]));
+        bool back = false;
+        XboxDashRect r = XboxDashSection("xemu", title.c_str(), wp, wb, s, now, big,
+                                         small_font, hints_h + 6 * s, &back, anim);
+        ImGui::SetCursorScreenPos(r.min);
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+        ImGui::BeginChild("##xboxcontent",
+                          ImVec2(std::max(10.0f, r.max.x - r.min.x),
+                                 std::max(10.0f, r.max.y - r.min.y)),
+                          ImGuiChildFlags_NavFlattened,
+                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        ImGui::PopStyleColor();
+        DrawTabContent(g_dash_tab, tex_budget);
+        ImGui::EndChild();
+        if (!back && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) &&
+            !ImGui::IsAnyItemActive() &&
+            g_back_consumed_frame != ImGui::GetFrameCount() &&
+            ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+            (ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+             ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))) {
+            back = true;
+            GameLibraryConsumeBack();
+        }
+        if (back) {
+            g_xbox_in_section = false;
+            RequestPreviewStop();
+        }
+    }
+
+    ImGui::SetCursorScreenPos(ImVec2(wp.x + 28 * s, wb.y - hints_h + 4 * s));
+    DrawDashHints(ImGui::GetCursorScreenPos(), ws.x - 56 * s);
 }
 
 // ---- Metro ----
@@ -11286,7 +11376,7 @@ void GameLibraryWindow::Draw()
         return;
     }
 
-    const bool own_frame = BladesStyle() || MetroStyle();
+    const bool own_frame = BladesStyle() || MetroStyle() || XboxStyle();
     if (classic) {
         DrawClassicHeader();
     } else if (!own_frame) {
@@ -11347,6 +11437,8 @@ void GameLibraryWindow::Draw()
         DrawBladesFrame(tex_budget);
     } else if (MetroStyle()) {
         DrawMetroFrame(tex_budget);
+    } else if (XboxStyle()) {
+        DrawXboxFrame(tex_budget);
     } else {
         const float hints_h = ImGui::GetFontSize() * 2.2f;
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));

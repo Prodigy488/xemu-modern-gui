@@ -50,3 +50,13 @@ struct XboxDashRect {
 };
 XboxDashRect XboxDashWindow(const char *title, ImVec2 a, ImVec2 b, float scale, ImFont *font,
                             float left, float bottom_margin, float open_t);
+
+// The sphere-and-fins face of the same style: a bright green web, a glowing
+// sphere wrapped in translucent fins, and an arc of glass orbs with a bar for
+// each section. Same behaviour as XboxDashMenu (open_t narrows it to the left
+// third to make room for a window; *stage_right is where the window starts).
+void XboxDashSphereBackground(ImDrawList *dl, ImVec2 a, ImVec2 b, float scale, double time,
+                              bool animate);
+int XboxDashSphereMenu(const char *const *labels, int n, int &sel, ImVec2 a, ImVec2 b,
+                       float scale, double time, ImFont *font, ImFont *small_font,
+                       bool focus_sel, float open_t, float *stage_right, bool animate);

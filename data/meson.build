@@ -7,6 +7,7 @@ pfiles = [
   'abxy.ttf',
   'Roboto-Medium.ttf',
   'RobotoCondensed-Regular.ttf',
+  'RussoOne-Regular.ttf',  # SIL OFL, see RussoOne-OFL.txt; the Original Xbox dashboard styles
   'font_awesome_6_1_1_solid.min.otf',  # Update glyphs with scripts/gen-min-fa-font.sh
 ]
 

@@ -26,6 +26,7 @@
 
 #include "data/Roboto-Medium.ttf.h"
 #include "data/RobotoCondensed-Regular.ttf.h"
+#include "data/RussoOne-Regular.ttf.h"
 #include "data/font_awesome_6_1_1_solid.min.otf.h"
 #include "data/abxy.ttf.h"
 
@@ -33,6 +34,8 @@ FontManager g_font_mgr;
 
 FontManager::FontManager()
 {
+    m_dash_font = nullptr;
+    m_dash_font_small = nullptr;
     m_last_viewport_scale = 1;
     m_last_pixel_density = 1;
 }
@@ -157,6 +160,22 @@ void FontManager::Rebuild()
             (void *)RobotoCondensed_Regular_data, RobotoCondensed_Regular_size,
             34.0f * scale, &config, kTextRanges);
         merge_cjk(34.0f);
+    }
+    {
+        // Russo One (SIL OFL): squared, blocky letters in the spirit of the
+        // original Xbox's menu. Western European text only, so other
+        // languages keep the regular fonts there.
+        ImFontConfig config;
+        config.FontDataOwnedByAtlas = false;
+        config.RasterizerDensity = pixel_density;
+        static const ImWchar dash_ranges[] = { 0x0020, 0x00FF, 0x2010, 0x2027, 0x2030,
+                                               0x203A, 0x20AC, 0x20AC, 0x2122, 0x2122, 0 };
+        m_dash_font = io.Fonts->AddFontFromMemoryTTF(
+            (void *)RussoOne_Regular_data, RussoOne_Regular_size, 28.0f * scale, &config,
+            dash_ranges);
+        m_dash_font_small = io.Fonts->AddFontFromMemoryTTF(
+            (void *)RussoOne_Regular_data, RussoOne_Regular_size, 19.0f * scale, &config,
+            dash_ranges);
     }
     {
         ImFontConfig config;

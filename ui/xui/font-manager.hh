@@ -34,6 +34,8 @@ public:
     ImFont *m_menu_font;
     ImFont *m_menu_font_small;
     ImFont *m_menu_font_medium;
+    ImFont *m_dash_font;       // squared techno face for the Original Xbox styles (Latin only)
+    ImFont *m_dash_font_small;
     // ImFont *m_big_state_icon_font;
     float m_last_viewport_scale;
     float m_last_pixel_density;

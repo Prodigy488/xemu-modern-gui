@@ -341,7 +341,11 @@ void MainMenuInputView::Draw()
             }
             const bool was_here = bound_state == iter;
             if (ImGui::Selectable(selectable_label, is_selected)) {
-                xemu_input_bind(active, iter, 1);
+                // Already on this port: leave it plugged in, so the game
+                // doesn't see the controller go away
+                if (!(was_here && iter->type == INPUT_DEVICE_SDL_KEYBOARD)) {
+                    xemu_input_bind(active, iter, 1);
+                }
 
                 // Picking the keyboard turns the mouse on; it can be turned
                 // off again in the Mouse and keyboard section
@@ -375,7 +379,9 @@ void MainMenuInputView::Draw()
                 ImGui::PushID("kbd-with-controller");
                 const bool here = bound_state == iter;
                 if (ImGui::Selectable(combined_name, here && combined)) {
-                    xemu_input_bind(active, iter, 1);
+                    if (!here) {
+                        xemu_input_bind(active, iter, 1);
+                    }
                     g_config.input.keyboard_with_controller = true;
                     if (!here) {
                         g_config.input.mouse.enabled = true;

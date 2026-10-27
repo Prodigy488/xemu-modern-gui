@@ -920,6 +920,9 @@ void xemu_input_update_controller(ControllerState *state)
 
     if (state->type == INPUT_DEVICE_SDL_KEYBOARD) {
         xemu_input_update_sdl_kbd_controller_state(state);
+        /* The game's USB polling comes through here too, so the controllers
+         * have to be added in right away or they'd be overwritten */
+        xemu_input_merge_controllers();
     } else if (state->type == INPUT_DEVICE_SDL_GAMEPAD) {
         xemu_input_update_sdl_controller_state(state);
     }

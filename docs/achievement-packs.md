@@ -26,3 +26,8 @@ See [achievement-pack-example.json](achievement-pack-example.json).
 | `achievements[].secret` | `true` hides the name and text until you tick it off. |
 
 Files over 1 MB and more than 500 achievements per game are ignored, and anything that isn't valid is skipped. Packs are only text that is shown; they can't do anything else.
+
+## Sharing
+
+Packs other people have shared are listed in the [community-packs](../community-packs/) folder. In the app, **Browse community packs...** in the Achievements tab downloads them. To share yours, see that folder's README.
+

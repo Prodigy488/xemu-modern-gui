@@ -1003,3 +1003,107 @@ void RaSignOut(void)
     g_dirty = true;
     SaveLocked();
 }
+
+bool AchievementsPackFileNameOk(const std::string &name)
+{
+    if (name.size() < 6 || name.size() > 96 || name[0] == '.') {
+        return false;
+    }
+    for (unsigned char c : name) {
+        if (!(isalnum(c) || c == '.' || c == '_' || c == '-')) {
+            return false;
+        }
+    }
+    if (name.find("..") != std::string::npos) {
+        return false;
+    }
+    if (name.compare(name.size() - 5, 5, ".json") != 0) {
+        return false;
+    }
+    // Never a file of your own, and never a leftover temporary
+    if (name.size() >= 10 && name.compare(name.size() - 10, 10, "-mine.json") == 0) {
+        return false;
+    }
+    return name.find(".tmp") == std::string::npos;
+}
+
+bool AchievementsParseCommunityIndex(const std::string &text, std::vector<CommunityPack> &out)
+{
+    out.clear();
+    json j = json::parse(text, nullptr, false);
+    if (!j.is_object() || !j.contains("packs") || !j["packs"].is_array()) {
+        return false;
+    }
+    for (auto &e : j["packs"]) {
+        if (out.size() >= 1000) {
+            break;
+        }
+        if (!e.is_object()) {
+            continue;
+        }
+        CommunityPack p;
+        p.file = Str(e, "file", 96);
+        if (!AchievementsPackFileNameOk(p.file)) {
+            continue;
+        }
+        std::string id = Str(e, "title_id", 8);
+        if (id.size() != 8 || !ParseHexId(id, &p.title_id)) {
+            continue;
+        }
+        p.game = Str(e, "game", 80);
+        p.author = Str(e, "author", 60);
+        p.note = Str(e, "note", 160);
+        if (e.contains("count") && e["count"].is_number_integer()) {
+            long long n = e["count"].get<long long>();
+            p.count = n < 0 ? 0 : (n > 500 ? 500 : (int)n);
+        }
+        out.push_back(p);
+    }
+    return true;
+}
+
+bool AchievementsPackInstalled(const CommunityPack &pack)
+{
+    std::string dir = AchievementsPacksDir();
+    if (dir.empty() || !AchievementsPackFileNameOk(pack.file)) {
+        return false;
+    }
+    std::error_code ec;
+    return fs::exists(fs::u8path(dir) / fs::u8path(pack.file), ec);
+}
+
+std::string AchievementsInstallPack(const CommunityPack &pack, const std::string &text)
+{
+    if (!AchievementsPackFileNameOk(pack.file)) {
+        return tr("That pack has a file name that isn't allowed");
+    }
+    if (text.size() > 1024 * 1024) {
+        return tr("That pack is too big");
+    }
+    if (AchievementsParsePack(text, pack.title_id) <= 0) {
+        return tr("That file isn't a usable achievement pack");
+    }
+    std::string dir = AchievementsPacksDir();
+    if (dir.empty()) {
+        return tr("The achievements folder isn't ready yet");
+    }
+    std::error_code ec;
+    fs::path target = fs::u8path(dir) / fs::u8path(pack.file);
+    fs::path tmp = target;
+    tmp += ".tmp";
+    {
+        std::ofstream o(tmp, std::ios::binary | std::ios::trunc);
+        o.write(text.data(), (std::streamsize)text.size());
+        if (!o) {
+            return tr("Couldn't save the pack");
+        }
+    }
+    fs::rename(tmp, target, ec);
+    if (ec) {
+        fs::remove(tmp, ec);
+        return tr("Couldn't save the pack");
+    }
+    AchievementsReloadPacks();
+    return "";
+}
+

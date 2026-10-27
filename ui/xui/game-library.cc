@@ -8968,6 +8968,197 @@ std::vector<AchGameRow> AchGameRows()
     return rows;
 }
 
+// --- Community achievement packs ------------------------------------------------
+// A list in this project's repository (community-packs/index.json) that
+// anyone can add to by pull request. The list and the packs are other
+// people's files, so they are size-limited and checked before saving.
+
+const char *kCommunityBase =
+    "https://raw.githubusercontent.com/Prodigy488/xemu-modern-gui/enhanced/community-packs/";
+const char *kCommunityPage =
+    "https://github.com/Prodigy488/xemu-modern-gui/tree/enhanced/community-packs";
+
+struct CommunityState {
+    std::mutex lock;
+    int phase = 0; // 0 not asked yet, 1 loading, 2 ready, 3 failed
+    std::vector<CommunityPack> packs;
+    std::set<std::string> busy; // pack files being downloaded
+    std::string message;        // last result of a download
+    bool open_request = false;
+};
+CommunityState &Community()
+{
+    static CommunityState *c = new CommunityState; // lives until exit on purpose
+    return *c;
+}
+
+bool CommunityGet(const std::string &url, size_t max_bytes, std::string &text)
+{
+    Error *err = NULL;
+    if (!ensure_libcurl_initialized(&err)) {
+        if (err) {
+            error_free(err);
+        }
+        return false;
+    }
+    GByteArray *body = g_byte_array_new();
+    int code = http_get(url.c_str(), body, NULL, NULL);
+    bool ok = code == 200 && body->len <= max_bytes;
+    if (ok) {
+        text.assign((const char *)body->data, body->len);
+    }
+    g_byte_array_unref(body);
+    return ok;
+}
+
+void CommunityFetchList()
+{
+    CommunityState &c = Community();
+    {
+        std::lock_guard<std::mutex> lk(c.lock);
+        if (c.phase == 1) {
+            return;
+        }
+        c.phase = 1;
+    }
+    std::thread([] {
+        CommunityState &c = Community();
+        std::string text;
+        std::vector<CommunityPack> packs;
+        bool ok = CommunityGet(std::string(kCommunityBase) + "index.json", 2 * 1024 * 1024, text) &&
+                  AchievementsParseCommunityIndex(text, packs);
+        std::lock_guard<std::mutex> lk(c.lock);
+        c.packs = packs;
+        c.phase = ok ? 2 : 3;
+    }).detach();
+}
+
+void CommunityDownload(const CommunityPack &pack)
+{
+    CommunityState &c = Community();
+    {
+        std::lock_guard<std::mutex> lk(c.lock);
+        if (!c.busy.insert(pack.file).second) {
+            return;
+        }
+    }
+    std::thread([pack] {
+        CommunityState &c = Community();
+        std::string text, msg;
+        if (!CommunityGet(std::string(kCommunityBase) + pack.file, 1024 * 1024, text)) {
+            msg = tr("Couldn't download that pack.");
+        } else {
+            msg = AchievementsInstallPack(pack, text);
+            if (msg.empty()) {
+                msg = string_format(tr("Pack saved: %s"), pack.game.c_str());
+            }
+        }
+        std::lock_guard<std::mutex> lk(c.lock);
+        c.busy.erase(pack.file);
+        c.message = msg;
+    }).detach();
+}
+
+void DrawCommunityPopup()
+{
+    const float s = g_viewport_mgr.m_scale;
+    CommunityState &c = Community();
+    if (c.open_request) {
+        ImGui::OpenPopup(trid("Community achievement packs"));
+        c.open_request = false;
+        bool fetch;
+        {
+            std::lock_guard<std::mutex> lk(c.lock);
+            c.message.clear();
+            fetch = c.phase == 0 || c.phase == 3;
+        }
+        if (fetch) {
+            CommunityFetchList();
+        }
+    }
+    ImGui::SetNextWindowSize(ImVec2(640 * s, 520 * s), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal(trid("Community achievement packs"), NULL, 0)) {
+        return;
+    }
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("%s", tr("Packs are written by other people. xemu checks each file "
+                                 "before saving it and only shows what's inside as text. "
+                                 "They are listed in the community-packs folder of this "
+                                 "project on GitHub."));
+    ImGui::PopTextWrapPos();
+    ImGui::Separator();
+    int phase;
+    std::vector<CommunityPack> packs;
+    std::set<std::string> busy;
+    std::string message;
+    {
+        std::lock_guard<std::mutex> lk(c.lock);
+        phase = c.phase;
+        packs = c.packs;
+        busy = c.busy;
+        message = c.message;
+    }
+    ImGui::BeginChild("##commlist", ImVec2(0, -70 * s), ImGuiChildFlags_Borders);
+    if (phase == 1 || phase == 0) {
+        ImGui::TextDisabled("%s", tr("Loading the list..."));
+    } else if (phase == 3) {
+        ImGui::TextWrapped("%s", tr("Couldn't get the list. Check your connection and try again."));
+    } else if (packs.empty()) {
+        ImGui::TextDisabled("%s", tr("No packs are listed yet."));
+    }
+    for (size_t i = 0; i < packs.size(); i++) {
+        const CommunityPack &p = packs[i];
+        ImGui::PushID((int)i);
+        bool installed = AchievementsPackInstalled(p);
+        bool working = busy.count(p.file) != 0;
+        ImGui::BeginGroup();
+        ImGui::Text("%s  (%08X)", p.game.empty() ? p.file.c_str() : p.game.c_str(), p.title_id);
+        std::string meta = string_format(tr("%d achievements"), p.count);
+        if (!p.author.empty()) {
+            meta += "  -  " + string_format(tr("by %s"), p.author.c_str());
+        }
+        ImGui::TextDisabled("%s", meta.c_str());
+        if (!p.note.empty()) {
+            ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x - 130 * s);
+            ImGui::TextUnformatted(p.note.c_str());
+            ImGui::PopTextWrapPos();
+        }
+        ImGui::EndGroup();
+        ImGui::SameLine(ImGui::GetContentRegionMax().x - 120 * s);
+        ImGui::BeginDisabled(working);
+        const char *label = working ? tr("Downloading...")
+                                    : (installed ? tr("Update") : tr("Download"));
+        if (ImGui::Button(label, ImVec2(112 * s, 0))) {
+            CommunityDownload(p);
+        }
+        ImGui::EndDisabled();
+        ImGui::Separator();
+        ImGui::PopID();
+    }
+    ImGui::EndChild();
+    if (!message.empty()) {
+        ImGui::TextWrapped("%s", message.c_str());
+    } else {
+        ImGui::Dummy(ImVec2(0, ImGui::GetTextLineHeight()));
+    }
+    if (ImGui::Button(tr("Refresh"), ImVec2(120 * s, 0))) {
+        CommunityFetchList();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(tr("Add yours..."), ImVec2(120 * s, 0))) {
+        SDL_OpenURL(kCommunityPage);
+    }
+    ImGui::SetItemTooltip("%s", tr("Opens the community-packs folder on GitHub, where you can "
+                                   "share a pack you made with a pull request."));
+    ImGui::SameLine();
+    if (ImGui::Button(tr("Close"), ImVec2(120 * s, 0)) ||
+        ImGui::IsKeyPressed(ImGuiKey_Escape) ||
+        ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight)) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
 // The window for writing or changing one of your own achievements
 struct AchEdit {
     bool open_request = false;
@@ -9130,6 +9321,12 @@ void DrawAchievementsTab()
         ImGui::EndDisabled();
         ImGui::SetItemTooltip("%s", tr("Write your own achievement for this game. You tick "
                                        "it off yourself when you get it."));
+        ImGui::Dummy(ImVec2(0, 4 * s));
+        if (DashButton(tr("Browse community packs..."), th.glass, th.white,
+                       ImVec2(0, 30 * s))) {
+            Community().open_request = true;
+        }
+        ImGui::SetItemTooltip("%s", tr("Download achievement packs other people have shared."));
         ImGui::Dummy(ImVec2(0, 4 * s));
         if (DashButton(tr("Open the achievements folder"), th.glass, th.white,
                        ImVec2(0, 30 * s))) {
@@ -9363,6 +9560,7 @@ void DrawAchievementsTab()
         });
     }
     DrawAchEditPopup();
+    DrawCommunityPopup();
 }
 
 // --- Settings ------------------------------------------------------------------

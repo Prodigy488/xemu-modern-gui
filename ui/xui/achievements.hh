@@ -89,6 +89,26 @@ std::string AchievementsPacksDir(void);
 // read, or -1 if it isn't a usable pack.
 int AchievementsParsePack(const std::string &json, uint32_t file_title_id);
 
+// Community packs: a list kept in this project's repository that anyone can
+// add to. The list and the packs come from other people, so every file name
+// and value is checked before anything is written.
+struct CommunityPack {
+    std::string file;    // name of the pack file, e.g. 4D530004-example.json
+    uint32_t title_id = 0;
+    std::string game;
+    std::string author;
+    std::string note;
+    int count = 0;       // how many achievements it says it has
+};
+// Reads the list. False if it isn't a usable list.
+bool AchievementsParseCommunityIndex(const std::string &json, std::vector<CommunityPack> &out);
+// Whether a pack file name is safe to use (letters, digits, . _ - only)
+bool AchievementsPackFileNameOk(const std::string &name);
+// Checks a downloaded pack and saves it in the packs folder, then reloads.
+// "" if it worked, otherwise what went wrong.
+std::string AchievementsInstallPack(const CommunityPack &pack, const std::string &json);
+bool AchievementsPackInstalled(const CommunityPack &pack);
+
 // RetroAchievements account
 enum RaState { kRaSignedOut, kRaWorking, kRaSignedIn, kRaFailed };
 struct RaInfo {

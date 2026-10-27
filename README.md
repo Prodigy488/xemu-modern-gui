@@ -193,6 +193,12 @@ see the [Releases](../../releases) page.
   share one. The format is described in
   [docs/achievement-packs.md](docs/achievement-packs.md), with a starting file
   in [docs/achievement-pack-example.json](docs/achievement-pack-example.json).
+- **Community packs:** "Browse community packs..." in the Achievements tab
+  lists packs other people have shared in this repository's
+  [community-packs](community-packs/) folder and downloads the ones you pick.
+  Each file is size-limited and checked before it is saved, and only shown
+  as text. To share yours, add it there with a pull request (the folder's
+  README explains how). The list starts empty: there are none yet.
 - **The Achievements tab** has a game picker, a progress bar with points and
   the list for the game (grouped, filterable, with secret ones hidden until
   you get them). Games without a pack are listed too.

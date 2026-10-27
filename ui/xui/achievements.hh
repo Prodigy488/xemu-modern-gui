@@ -1,9 +1,14 @@
 //
 // xemu User Interface - achievements
 //
-// xemu's own achievements: milestones in xemu itself (first game, hours
-// played, save states, homebrew...), kept in achievements.json next to the
-// library. They are not in-game achievements of any Xbox game.
+// Achievements are per game. The original Xbox had none, so they come from
+// pack files: small JSON files in an "achievements" folder, one or more per
+// game, named after the game's title ID (e.g. 4D530004.json). Anyone can
+// write and share them, and you can add your own from the Achievements tab
+// (those are kept in <TITLEID>-mine.json).
+//
+// xemu can't see inside a game, so you tick achievements off yourself. A
+// pop-up slides in at the lower right when you do.
 //
 // Also the RetroAchievements account sign-in. RetroAchievements has no
 // original Xbox games yet, so the account is only shown for now.
@@ -16,65 +21,73 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <vector>
 
-// Things that happen in xemu. Each one adds to a count that achievements
-// look at.
-enum AchEvent {
-    kAchLaunch,       // a game started from the library (arg: title ID)
-    kAchSaveState,    // a save state made by hand
-    kAchQuickSave,
-    kAchQuickLoad,
-    kAchBackup,       // game saves backed up to the PC
-    kAchHomebrew,     // homebrew installed from the store
-    kAchDriveEdit,    // files changed in the Drive tab
-    kAchSixtyFps,     // 60 FPS switched on
-    kAchPatches,      // a patch file downloaded
-    kAchInsigniaSetup,
-    kAchOnlinePlay,
-    kAchMouse,        // the mouse captured for play
-    kAchKeyboard,     // the on-screen keyboard used
-    kAchCollapse,     // the dashboard minimized
-    kAchTab,          // a dashboard tab opened (arg: tab number)
-};
-
-// Where achievements.json lives; loads it. Call once at startup.
-void AchievementsLoad(const std::string &path);
-// Writes it now if anything changed
+// Where the progress file is and where the packs are; loads both. Call once
+// at startup.
+void AchievementsLoad(const std::string &progress_path, const std::string &packs_dir);
+// Reads the pack files again (after adding or changing one)
+void AchievementsReloadPacks(void);
+// Writes the progress now if anything changed
 void AchievementsSave(void);
 // Waits for the sign-in thread
 void AchievementsShutdown(void);
-
-void AchievementsEvent(AchEvent e, uint32_t arg = 0);
-// Numbers xemu already keeps: "play_s" (seconds played, all games), "library"
-// (games), "favorites". Only ever raised.
-void AchievementsSetStat(const char *key, int64_t value);
-// Every frame. filtering_crt: the CRT or Scanlines filter is on while a game
-// runs; language: the interface language code ("" = English)
-void AchievementsUpdate(bool filtering_crt, const char *language);
+// Every frame: saves a little after something changes
+void AchievementsUpdate(void);
 // The pop-ups in the lower right, over everything
 void AchievementsDraw(void);
-// Whether unlocks show a pop-up
+// Whether unlocking shows a pop-up
 bool AchievementsPopups(void);
 void AchievementsSetPopups(bool on);
-// Shows the pop-up for achievement i (for trying it out)
-void AchievementsPreviewToast(int i);
 
 struct AchievementInfo {
-    const char *id;
-    const char *name;     // English; run through tr() to show
-    const char *desc;
-    const char *category;
-    int points;
-    int64_t progress;     // how far, up to target
-    int64_t target;
-    int64_t unlocked_at;  // unix time, 0 = not yet
-    bool unlocked;
+    std::string id;
+    std::string name;
+    std::string desc;
+    std::string group;   // "" = none
+    int points = 0;
+    bool secret = false; // name and text hidden until done
+    bool mine = false;   // made here, can be edited
+    bool done = false;
+    int64_t done_at = 0; // unix time
 };
-int AchievementCount(void);
-AchievementInfo AchievementAt(int i);
-int AchievementsUnlocked(void);
-int AchievementsPoints(void);
-int AchievementsPointsTotal(void);
+
+// Games that have achievements, by title ID
+std::vector<uint32_t> AchievementsGames(void);
+// The name a pack gives the game ("" if none)
+std::string AchievementsGameName(uint32_t title_id);
+// Who wrote the packs for this game (names joined with ", ")
+std::string AchievementsAuthors(uint32_t title_id);
+int AchievementCount(uint32_t title_id);
+AchievementInfo AchievementAt(uint32_t title_id, int i);
+int AchievementsDoneFor(uint32_t title_id);
+int AchievementsPointsFor(uint32_t title_id);       // earned
+int AchievementsPointsTotalFor(uint32_t title_id);  // possible
+// Everything, across all games
+int AchievementsDoneAll(void);
+int AchievementsCountAll(void);
+int AchievementsPointsAll(void);
+
+// Ticks one off (or back on). Shows the pop-up when it becomes done.
+void AchievementsSet(uint32_t title_id, const std::string &id, bool done);
+// Shows the pop-up for the first achievement of a game (for trying it out)
+void AchievementsPreviewToast(uint32_t title_id);
+
+// Your own achievements for a game. game_name is kept in the file so the
+// pack still says which game it is for. Return the new id, or "" when it
+// couldn't be saved.
+std::string AchievementsAddMine(uint32_t title_id, const std::string &game_name,
+                                const std::string &name, const std::string &desc,
+                                int points, const std::string &group);
+bool AchievementsEditMine(uint32_t title_id, const std::string &id, const std::string &name,
+                          const std::string &desc, int points, const std::string &group);
+bool AchievementsDeleteMine(uint32_t title_id, const std::string &id);
+
+// The packs folder (made if it's missing)
+std::string AchievementsPacksDir(void);
+// For testing: reads one pack's JSON. Returns the number of achievements
+// read, or -1 if it isn't a usable pack.
+int AchievementsParsePack(const std::string &json, uint32_t file_title_id);
 
 // RetroAchievements account
 enum RaState { kRaSignedOut, kRaWorking, kRaSignedIn, kRaFailed };

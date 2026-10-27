@@ -109,8 +109,11 @@ input:
     default: bumpers
   # Mouse and keyboard play: the keyboard (bound to a port) plus the mouse
   mouse:
-    # Mouse movement moves a stick; left click is RT, right click is LT,
-    # middle click is the right stick button
+    # Mouse movement moves a stick. What each mouse button, and the wheel,
+    # does: 0 nothing, 1 A, 2 B, 3 X, 4 Y, 5 Back, 6 Start, 7 left stick
+    # button, 8 right stick button, 9 White, 10 Black, 11 D-pad up, 12
+    # D-pad down, 13 D-pad left, 14 D-pad right, 15 left trigger, 16 right
+    # trigger
     enabled:
       type: bool
       default: false
@@ -123,6 +126,27 @@ input:
       type: number
       default: 1
     invert_y: bool
+    left:
+      type: integer
+      default: 16 # right trigger
+    right:
+      type: integer
+      default: 15 # left trigger
+    middle:
+      type: integer
+      default: 8 # right stick button
+    x1:
+      type: integer
+      default: 0
+    x2:
+      type: integer
+      default: 0
+    wheel_up:
+      type: integer
+      default: 0
+    wheel_down:
+      type: integer
+      default: 0
   keyboard_controller_scancode_map:
     # Scancode reference : https://github.com/libsdl-org/SDL/blob/main/include/SDL_scancode.h
     a:

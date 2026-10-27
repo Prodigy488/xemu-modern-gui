@@ -58,7 +58,7 @@ quality-of-life features.
 |---|---|---|
 | ![German](docs/screenshots/lang-de.jpg) | ![Japanese](docs/screenshots/lang-ja.jpg) | ![Russian](docs/screenshots/lang-ru.jpg) |
 
-<sub>Screenshots use original placeholder cover art (not the real box art), example compatibility ratings, invented example homebrew and example achievement progress with a made-up RetroAchievements account. The Performance Capture screenshot shows a real recording of Project Gotham Racing.</sub>
+<sub>Screenshots use original placeholder cover art (not the real box art), example compatibility ratings, invented example homebrew and example achievements and progress. The Performance Capture screenshot shows a real recording of Project Gotham Racing.</sub>
 
 ## Download
 
@@ -185,31 +185,46 @@ see the [Releases](../../releases) page.
 
 ### Achievements
 
-- **An Achievements tab** with 30 milestones in xemu itself: starting your
-  first game, hours played, save states, quick saves, game save backups,
-  homebrew, 60 FPS, Insignia setup, picture filters and more, with points,
-  progress bars and the date each was unlocked. A pop-up slides in at the
-  lower right when you unlock one (it can be switched off, and "Show a
-  pop-up" tries it out). Progress is kept in `achievements.json` next to
-  your library.
-- **These are not in-game achievements.** The original Xbox didn't have
-  them, and xemu can't see inside a game. They are milestones in this
-  program only.
+- **Achievements for each game.** The original Xbox had none (Gamerscore
+  came with the Xbox 360), and I couldn't find a fan-made collection for it
+  either, so there is nothing built in. They come from **achievement packs**:
+  small JSON files named after a game's title ID (for example `4D530004.json`)
+  in the `achievements` folder next to your library. Anyone can write and
+  share one. The format is described in
+  [docs/achievement-packs.md](docs/achievement-packs.md), with a starting file
+  in [docs/achievement-pack-example.json](docs/achievement-pack-example.json).
+- **The Achievements tab** has a game picker, a progress bar with points and
+  the list for the game (grouped, filterable, with secret ones hidden until
+  you get them). Games without a pack are listed too.
+- **Write your own:** "Add an achievement" makes one for the selected game,
+  and you can edit or delete it later. Yours are kept in
+  `<TITLEID>-mine.json`, next to the packs.
+- **You tick them off yourself.** xemu can't see inside a game, so it can't
+  tell when you've done something. A pop-up slides in at the lower right when
+  you tick one (it can be switched off, and "Show a pop-up" tries it).
+  Progress is kept in `achievements.json`.
 - **RetroAchievements sign-in:** you can sign in with a
   [RetroAchievements](https://retroachievements.org) account. RetroAchievements
   has no original Xbox games yet, so for now this only keeps your account
   ready for when that changes. Your password is never saved, only the token
-  RetroAchievements sends back. I looked for a community-made set of Xbox
-  achievements to use and didn't find one, so none are included.
+  RetroAchievements sends back.
 
 ### Sound and controllers
 
 - **Mouse and keyboard:** move the mouse to play with it. Click the game to
   capture the mouse and press F3 or Esc to let go. The mouse moves the right
-  stick (or the left, your choice) with its own sensitivity, left click is
-  the right trigger, right click the left trigger, and middle click R3.
-  **Use WASD + mouse layout** binds a ready-made keyboard layout in one
-  click.
+  stick (or the left, your choice) with its own sensitivity. Choose what each
+  mouse button, the side buttons and the wheel do (any Xbox button or
+  trigger; by default left click is the right trigger, right click the left
+  trigger and middle click R3). **Use WASD + mouse layout** binds a
+  ready-made keyboard layout in one click.
+- **Keys and mouse for each game:** in a game's settings, "Own keyboard and
+  mouse setup for this game" gives it its own keys, mouse speed and mouse
+  buttons, switched on when the game starts and put back when it's done.
+  Start from a preset by kind of game (shooter or action, racing, fighting,
+  sports and platformers) or xemu's own keys, then change any key. The
+  presets are sensible starting points, not each game's own layout; "Suggested
+  for this game" picks one by the game's name, as a guess only.
 - **On-screen keyboard capitals:** hold RT (R2) for capitals and LT (L2) for
   symbols. Before, the triggers didn't reach the keyboard at all.
 - **Quick save buttons for modern controllers:** quick save and load were

@@ -364,6 +364,7 @@ static bool mouse_captured;
 static float mouse_dx, mouse_dy;
 static uint32_t mouse_buttons; /* bit n = SDL button n (1 left, 2 middle, 3 right) */
 static float mouse_stick_x, mouse_stick_y; /* -1..1, smoothed */
+static int64_t mouse_wheel_up_until, mouse_wheel_down_until; /* wheel turns press for a moment */
 static int64_t mouse_consumed_ts;
 
 void xemu_input_mouse_set_captured(bool captured)
@@ -375,6 +376,7 @@ void xemu_input_mouse_set_captured(bool captured)
     mouse_dx = mouse_dy = 0;
     mouse_buttons = 0;
     mouse_stick_x = mouse_stick_y = 0;
+    mouse_wheel_up_until = mouse_wheel_down_until = 0;
     mouse_consumed_ts = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
 }
 
@@ -423,6 +425,27 @@ static int16_t mouse_axis(float v)
     return (int16_t)(v * 32767.0f);
 }
 
+/* What a mouse button does: 0 nothing, 1-14 a button, 15 and 16 the triggers */
+static void mouse_press(ControllerState *state, int target)
+{
+    static const uint16_t buttons[] = {
+        0,
+        CONTROLLER_BUTTON_A, CONTROLLER_BUTTON_B, CONTROLLER_BUTTON_X, CONTROLLER_BUTTON_Y,
+        CONTROLLER_BUTTON_BACK, CONTROLLER_BUTTON_START,
+        CONTROLLER_BUTTON_LSTICK, CONTROLLER_BUTTON_RSTICK,
+        CONTROLLER_BUTTON_WHITE, CONTROLLER_BUTTON_BLACK,
+        CONTROLLER_BUTTON_DPAD_UP, CONTROLLER_BUTTON_DPAD_DOWN,
+        CONTROLLER_BUTTON_DPAD_LEFT, CONTROLLER_BUTTON_DPAD_RIGHT,
+    };
+    if (target >= 1 && target <= 14) {
+        state->buttons |= buttons[target];
+    } else if (target == 15) {
+        state->axis[CONTROLLER_AXIS_LTRIG] = 32767;
+    } else if (target == 16) {
+        state->axis[CONTROLLER_AXIS_RTRIG] = 32767;
+    }
+}
+
 /* Turn the mouse's movement since last time into a stick position. Games
  * ignore the middle of a stick (the dead zone), so a slow movement starts
  * just outside it instead of doing nothing. */
@@ -465,14 +488,27 @@ static void xemu_input_apply_mouse(ControllerState *state)
     state->axis[ax] = mouse_axis(mouse_clamp1(sx));
     state->axis[ay] = mouse_axis(mouse_clamp1(sy));
 
+    /* SDL buttons: 1 left, 2 middle, 3 right, 4 and 5 the side buttons */
     if (mouse_buttons & (1u << 1)) {
-        state->axis[CONTROLLER_AXIS_RTRIG] = 32767; /* left click: RT */
+        mouse_press(state, g_config.input.mouse.left);
     }
     if (mouse_buttons & (1u << 3)) {
-        state->axis[CONTROLLER_AXIS_LTRIG] = 32767; /* right click: LT */
+        mouse_press(state, g_config.input.mouse.right);
     }
     if (mouse_buttons & (1u << 2)) {
-        state->buttons |= CONTROLLER_BUTTON_RSTICK; /* middle click: R3 */
+        mouse_press(state, g_config.input.mouse.middle);
+    }
+    if (mouse_buttons & (1u << 4)) {
+        mouse_press(state, g_config.input.mouse.x1);
+    }
+    if (mouse_buttons & (1u << 5)) {
+        mouse_press(state, g_config.input.mouse.x2);
+    }
+    if (now < mouse_wheel_up_until) {
+        mouse_press(state, g_config.input.mouse.wheel_up);
+    }
+    if (now < mouse_wheel_down_until) {
+        mouse_press(state, g_config.input.mouse.wheel_down);
     }
 }
 
@@ -614,12 +650,22 @@ void xemu_input_process_sdl_events(const SDL_Event *event)
     } else if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
                event->type == SDL_EVENT_MOUSE_BUTTON_UP) {
         if (mouse_captured && event->button.button >= 1 &&
-            event->button.button <= 3) {
+            event->button.button <= 5) {
             uint32_t bit = 1u << event->button.button;
             if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
                 mouse_buttons |= bit;
             } else {
                 mouse_buttons &= ~bit;
+            }
+        }
+    } else if (event->type == SDL_EVENT_MOUSE_WHEEL) {
+        if (mouse_captured && event->wheel.y != 0) {
+            /* Held for a moment: a game polls the controller, not the wheel */
+            int64_t until = qemu_clock_get_us(QEMU_CLOCK_REALTIME) + 120000;
+            if (event->wheel.y > 0) {
+                mouse_wheel_up_until = until;
+            } else {
+                mouse_wheel_down_until = until;
             }
         }
     } else if (event->type == SDL_EVENT_JOYSTICK_ADDED) {

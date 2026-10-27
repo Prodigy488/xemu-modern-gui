@@ -361,19 +361,6 @@ void xemu_hud_update(void)
         DynamicResDraw();
     }
     g_snapshot_mgr.Draw();
-    {
-        // First time with the on-screen keyboard up / the mouse captured
-        static bool osk_was = false, mouse_was = false;
-        bool osk_now = OskVisible(), mouse_now = PlayExtrasMouseCaptured();
-        if (osk_now && !osk_was) {
-            AchievementsEvent(kAchKeyboard);
-        }
-        if (mouse_now && !mouse_was) {
-            AchievementsEvent(kAchMouse);
-        }
-        osk_was = osk_now;
-        mouse_was = mouse_now;
-    }
     AchievementsDraw();
     OskDraw(); // on top of everything
 

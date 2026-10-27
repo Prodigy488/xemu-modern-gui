@@ -198,36 +198,287 @@ void PlayExtrasMouse(bool playing)
     xemu_queue_notification(tr("Mouse captured. F3 or Esc lets go."));
 }
 
-std::string KeyboardMouseLayoutApply(void)
+// ---------------------------------------------------------------------------
+// Keyboard and mouse setups: one for everything, and one per game
+// ---------------------------------------------------------------------------
+
+namespace {
+int *MouseBtnField(int i)
+{
+    auto &m = g_config.input.mouse;
+    int *f[7] = { &m.left, &m.right, &m.middle, &m.x1, &m.x2, &m.wheel_up, &m.wheel_down };
+    return f[i];
+}
+} // namespace
+
+bool InputProfile::operator==(const InputProfile &o) const
+{
+    return std::equal(keys, keys + 25, o.keys) && mouse_on == o.mouse_on &&
+           mouse_stick == o.mouse_stick && mouse_sens == o.mouse_sens &&
+           mouse_invert == o.mouse_invert && std::equal(mouse_btn, mouse_btn + 7, o.mouse_btn);
+}
+
+InputProfile InputProfileGet(void)
+{
+    InputProfile p;
+    for (int i = 0; i < 25; i++) {
+        p.keys[i] = *g_keyboard_scancode_map[i];
+    }
+    p.mouse_on = g_config.input.mouse.enabled;
+    p.mouse_stick = g_config.input.mouse.stick == CONFIG_INPUT_MOUSE_STICK_LEFT ? 1 : 0;
+    p.mouse_sens = g_config.input.mouse.sensitivity;
+    p.mouse_invert = g_config.input.mouse.invert_y;
+    for (int i = 0; i < 7; i++) {
+        p.mouse_btn[i] = *MouseBtnField(i);
+    }
+    return p;
+}
+
+void InputProfileSet(const InputProfile &p)
+{
+    for (int i = 0; i < 25; i++) {
+        *g_keyboard_scancode_map[i] = p.keys[i];
+    }
+    g_config.input.mouse.enabled = p.mouse_on;
+    g_config.input.mouse.stick =
+        p.mouse_stick ? CONFIG_INPUT_MOUSE_STICK_LEFT : CONFIG_INPUT_MOUSE_STICK_RIGHT;
+    g_config.input.mouse.sensitivity = p.mouse_sens;
+    g_config.input.mouse.invert_y = p.mouse_invert;
+    for (int i = 0; i < 7; i++) {
+        *MouseBtnField(i) = p.mouse_btn[i];
+    }
+}
+
+InputProfile InputProfileDefault(void)
+{
+    // In the order of g_keyboard_scancode_map; SDL scancodes
+    static const int keys[25] = {
+        4, 5, 27, 28,        // A B X Y: a b x y
+        42, 34, 40,          // Back, Guide, Start: backspace, 5, return
+        32, 33,              // stick buttons: 3 4
+        30, 31,              // White, Black: 1 2
+        82, 81, 80, 79,      // D-pad: up down left right arrows
+        8, 22, 9, 7,         // left stick: e s f d
+        26,                  // left trigger: w
+        12, 13, 15, 14,      // right stick: i j l k
+        18,                  // right trigger: o
+    };
+    InputProfile p;
+    std::copy(keys, keys + 25, p.keys);
+    return p;
+}
+
+InputProfile InputProfileWasd(void)
 {
     // SDL scancodes: letters A=4 ... Z=29, 1-4 = 30-33, Return 40, Tab 43,
     // Space 44, Left Shift 225
-    auto &m = g_config.input.keyboard_controller_scancode_map;
-    m.lstick_up = 26;    // W
-    m.lstick_left = 4;   // A
-    m.lstick_down = 22;  // S
-    m.lstick_right = 7;  // D
-    m.rstick_up = 82;    // arrow keys
-    m.rstick_left = 80;
-    m.rstick_down = 81;
-    m.rstick_right = 79;
-    m.a = 44;            // Space
-    m.b = 8;             // E
-    m.x = 21;            // R
-    m.y = 20;            // Q
-    m.white = 10;        // G
-    m.black = 9;         // F
-    m.lstick_btn = 225;  // Left Shift
-    m.rstick_btn = 25;   // V
-    m.start = 40;        // Return
-    m.back = 43;         // Tab
-    m.dpad_up = 30;      // 1-4
-    m.dpad_down = 31;
-    m.dpad_left = 32;
-    m.dpad_right = 33;
-    m.ltrigger = 29;     // Z
-    m.rtrigger = 27;     // X
-    g_config.input.mouse.enabled = true;
+    InputProfile p = InputProfileDefault();
+    int *k = p.keys;
+    k[0] = 44;   // A: Space
+    k[1] = 8;    // B: E
+    k[2] = 21;   // X: R
+    k[3] = 20;   // Y: Q
+    k[4] = 43;   // Back: Tab
+    k[6] = 40;   // Start: Return
+    k[7] = 225;  // left stick button: Left Shift
+    k[8] = 25;   // right stick button: V
+    k[9] = 10;   // White: G
+    k[10] = 9;   // Black: F
+    k[11] = 30;  // D-pad: 1-4
+    k[12] = 31;
+    k[13] = 32;
+    k[14] = 33;
+    k[15] = 26;  // left stick: W A S D
+    k[16] = 4;
+    k[17] = 7;
+    k[18] = 22;
+    k[19] = 29;  // left trigger: Z
+    k[20] = 82;  // right stick: the arrow keys
+    k[21] = 80;
+    k[22] = 79;
+    k[23] = 81;
+    k[24] = 27;  // right trigger: X
+    p.mouse_on = true;
+    return p;
+}
+
+int InputPresetCount(void)
+{
+    return 4;
+}
+
+const char *InputPresetName(int preset)
+{
+    switch (preset) {
+    case 1: return tr("Shooter or action (WASD + mouse)");
+    case 2: return tr("Racing");
+    case 3: return tr("Fighting");
+    case 4: return tr("Sports and platformers (keyboard only)");
+    }
+    return "";
+}
+
+InputProfile InputPresetProfile(int preset)
+{
+    // SDL scancodes: A=4 ... Z=29, 1-4 = 30-33, Return 40, Tab 43, Space 44,
+    // arrows right 79 left 80 down 81 up 82, Left Shift 225
+    InputProfile p = InputProfileDefault();
+    int *k = p.keys;
+    auto arrows = [&](int up, int left, int right, int down) {
+        k[up] = 82; k[left] = 80; k[right] = 79; k[down] = 81;
+    };
+    switch (preset) {
+    case 1:
+        return InputProfileWasd();
+    case 2: // racing: A / D steer, W accelerate, S brake and reverse
+        k[15] = 26; k[16] = 4; k[17] = 7; k[18] = 22; // left stick: W A S D
+        k[15] = 0;   // stick up and down aren't used for steering
+        k[18] = 0;
+        k[24] = 26;  // right trigger (gas): W
+        k[19] = 22;  // left trigger (brake): S
+        k[0] = 44;   // A: Space
+        k[1] = 5;    // B: B
+        k[2] = 27;   // X: X
+        k[3] = 28;   // Y: Y
+        k[9] = 20;   // White: Q (shift down)
+        k[10] = 8;   // Black: E (shift up)
+        k[6] = 40;   // Start: Return
+        k[4] = 43;   // Back: Tab
+        arrows(20, 21, 22, 23); // right stick (camera): arrow keys
+        k[11] = 30; k[12] = 31; k[13] = 32; k[14] = 33;
+        k[7] = 225;  // left stick button: Left Shift
+        k[8] = 25;   // right stick button: V
+        p.mouse_on = false;
+        return p;
+    case 3: // fighting: D-pad on WASD, buttons on the right hand
+        k[11] = 26; k[13] = 4; k[14] = 7; k[12] = 22; // D-pad: W A D S
+        k[0] = 13;   // A: J
+        k[1] = 14;   // B: K
+        k[2] = 24;   // X: U
+        k[3] = 12;   // Y: I
+        k[9] = 18;   // White: O
+        k[10] = 15;  // Black: L
+        k[19] = 20;  // left trigger: Q
+        k[24] = 8;   // right trigger: E
+        arrows(15, 16, 17, 18); // left stick: arrow keys
+        k[20] = k[21] = k[22] = k[23] = 0; // right stick: not used
+        k[6] = 40; k[4] = 43;
+        p.mouse_on = false;
+        return p;
+    case 4: // keyboard only: arrows and Z X C V
+        arrows(15, 16, 17, 18);
+        k[0] = 29;   // A: Z
+        k[1] = 27;   // B: X
+        k[2] = 6;    // X: C
+        k[3] = 25;   // Y: V
+        k[9] = 4;    // White: A
+        k[10] = 22;  // Black: S
+        k[19] = 20;  // left trigger: Q
+        k[24] = 8;   // right trigger: E
+        k[11] = 30; k[12] = 31; k[13] = 32; k[14] = 33;
+        k[7] = 225;  // left stick button: Left Shift
+        k[8] = 0;
+        k[6] = 40; k[4] = 43;
+        k[20] = 12;  // right stick: I J L K k[21] = 13; k[22] = 15; k[23] = 14;
+        p.mouse_on = false;
+        return p;
+    }
+    return p;
+}
+
+int InputPresetSuggest(const std::string &game_name)
+{
+    std::string n = game_name;
+    for (auto &c : n) {
+        c = (char)tolower((unsigned char)c);
+    }
+    auto has = [&](std::initializer_list<const char *> words) {
+        for (const char *w : words) {
+            if (n.find(w) != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
+    };
+    if (has({ "forza", "project gotham", "burnout", "need for speed", "midtown madness",
+              "rallisport", "colin mcrae", "outrun", "out run", "toca ", "midnight club",
+              "wreckless", "flatout", "juiced", "racing", "rally", "motogp", "moto gp",
+              "mx unleashed", "mx vs", "atv ", "crash 'n' burn", "test drive", "sega gt",
+              "rpm tuning", "pro race driver" })) {
+        return 2;
+    }
+    if (has({ "soulcalibur", "soul calibur", "dead or alive", "mortal kombat",
+              "virtua fighter", "tekken", "street fighter", "ultimate fighting",
+              "smackdown", "def jam", "fight night", "wrestle", "wwe", "tao feng",
+              "kakuto", "capcom vs", "king of fighters" })) {
+        return 3;
+    }
+    if (has({ "halo", "doom", "quake", "unreal", "half-life", "far cry", "counter-strike",
+              "brothers in arms", "call of duty", "medal of honor", "ghost recon",
+              "rainbow six", "timesplitters", "red faction", "turok", "goldeneye",
+              "battlefront", "republic commando", "perfect dark", "condemned",
+              "splinter cell", "ninja gaiden", "chronicles of riddick",
+              "mercenaries", "crimson skies", "armed and dangerous", "psi-ops",
+              "conflict: ", "area 51", "blood rayne", "bloodrayne", "painkiller",
+              "project snowblind", "wolfenstein", "tom clancy" })) {
+        return 1;
+    }
+    if (has({ "madden", "nba ", "nhl ", "fifa", "mlb", "tennis", "golf", "tiger woods",
+              "ssx", "tony hawk", "amped", "pro evolution", "pes ", "sonic", "crash ",
+              "spyro", "jet set radio", "rayman", "sly cooper", "kung fu chaos",
+              "lego", "shrek", "spongebob" })) {
+        return 4;
+    }
+    return 0;
+}
+
+int InputKeyCount(void)
+{
+    return 25;
+}
+
+const char *InputKeyName(int i)
+{
+    static const char *const names[25] = {
+        "A", "B", "X", "Y", N_("Back"), N_("Guide"), N_("Start"),
+        N_("Left Stick Button"), N_("Right Stick Button"), N_("White"), N_("Black"),
+        N_("DPad Up"), N_("DPad Down"), N_("DPad Left"), N_("DPad Right"),
+        N_("Left Stick Up"), N_("Left Stick Left"), N_("Left Stick Right"),
+        N_("Left Stick Down"), N_("Left Trigger"),
+        N_("Right Stick Up"), N_("Right Stick Left"), N_("Right Stick Right"),
+        N_("Right Stick Down"), N_("Right Trigger"),
+    };
+    return tr(names[std::clamp(i, 0, 24)]);
+}
+
+const char *MouseButtonName(int i)
+{
+    static const char *const names[7] = {
+        N_("Left click"), N_("Right click"), N_("Middle click"), N_("Side button 1"),
+        N_("Side button 2"), N_("Wheel up"), N_("Wheel down"),
+    };
+    return tr(names[std::clamp(i, 0, 6)]);
+}
+
+int MouseTargetCount(void)
+{
+    return 17;
+}
+
+const char *MouseTargetName(int t)
+{
+    static const char *const names[17] = {
+        N_("Nothing"), "A", "B", "X", "Y", N_("Back"), N_("Start"),
+        N_("Left Stick Button"), N_("Right Stick Button"), N_("White"), N_("Black"),
+        N_("DPad Up"), N_("DPad Down"), N_("DPad Left"), N_("DPad Right"),
+        N_("Left Trigger"), N_("Right Trigger"),
+    };
+    return tr(names[std::clamp(t, 0, 16)]);
+}
+
+std::string KeyboardMouseLayoutApply(void)
+{
+    InputProfileSet(InputProfileWasd());
     int port = xemu_input_bind_keyboard();
     if (port < 0) {
         return tr("All four controller ports are in use. Unplug one, then try again.");

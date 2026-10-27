@@ -19,7 +19,6 @@
 #include "perf-capture.hh"
 #include "ui/xemu-notifications.h"
 #include "common.hh"
-#include "achievements.hh"
 #include "main-menu.hh"
 #include "menubar.hh"
 #include "misc.hh"
@@ -210,7 +209,6 @@ void ShowMainMenu()
             if (ImGui::BeginMenu(tr("Snapshot"))) {
                 if (ImGui::MenuItem(tr("Create Snapshot"))) {
                     xemu_snapshots_save(NULL, NULL);
-                    AchievementsEvent(kAchSaveState);
                     xemu_queue_notification(tr("Created new snapshot"));
                 }
 

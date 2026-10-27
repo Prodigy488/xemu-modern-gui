@@ -25,6 +25,38 @@ void PlayExtrasButtons(uint32_t buttons, uint32_t triggers);
 // lets go when a menu opens, the window loses focus, F3 or Esc is pressed.
 void PlayExtrasMouse(bool playing);
 bool PlayExtrasMouseCaptured(void);
+// Keyboard keys and mouse settings, as one piece: what a game can have of its
+// own. keys follow g_keyboard_scancode_map (25 SDL scancodes).
+struct InputProfile {
+    int keys[25] = {};
+    bool mouse_on = false;
+    int mouse_stick = 0;       // 0 right stick, 1 left stick
+    float mouse_sens = 1;
+    bool mouse_invert = false;
+    // Left, right, middle, side 1, side 2, wheel up, wheel down: what each
+    // does (0 nothing, 1 A ... 14 D-pad right, 15 LT, 16 RT)
+    int mouse_btn[7] = { 16, 15, 8, 0, 0, 0, 0 };
+    bool operator==(const InputProfile &o) const;
+    bool operator!=(const InputProfile &o) const { return !(*this == o); }
+};
+InputProfile InputProfileGet(void);          // what is set now
+void InputProfileSet(const InputProfile &p);
+InputProfile InputProfileWasd(void);         // the WASD + mouse layout
+// Starting points by kind of game. 1 shooter or action (WASD + mouse), 2
+// racing, 3 fighting, 4 sports and platformers (keyboard only). Each sets
+// keys and mouse; nothing is claimed about any one game's own button use.
+int InputPresetCount(void);
+const char *InputPresetName(int preset);     // translated
+InputProfile InputPresetProfile(int preset);
+// A preset that suits a game by its name (franchises I know), or 0 if none
+int InputPresetSuggest(const std::string &game_name);
+InputProfile InputProfileDefault(void);      // xemu's own keys, mouse as it ships
+int InputKeyCount(void);
+// "A", "Left Stick Up"... (translated), for the 25 keys
+const char *InputKeyName(int i);
+const char *MouseButtonName(int i);          // "Left click"... (translated)
+int MouseTargetCount(void);
+const char *MouseTargetName(int t);          // "Nothing", "A"... (translated)
 // Set the keyboard to a WASD layout, turn the mouse on and bind the keyboard
 // to a port; the message to show
 std::string KeyboardMouseLayoutApply(void);

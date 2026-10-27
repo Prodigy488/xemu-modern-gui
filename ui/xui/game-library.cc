@@ -127,6 +127,10 @@ struct GameOverrides {
     int renderer = -1;        // -1 = use global, else CONFIG_DISPLAY_RENDERER_*
     int dynamic_res = -1;     // -1 = use global, 0 off, 1 on
     float volume = -1;        // < 0 = use global, else 0-1
+    // Keyboard keys and mouse setup of its own (applied whether or not the
+    // custom settings above are on)
+    bool input = false;
+    InputProfile profile;
 };
 
 std::vector<LibraryEntry> g_entries;
@@ -320,6 +324,8 @@ struct AppliedOverrides {
     int base_renderer = 0;
     bool base_dynamic_res = false;
     float base_volume = 1.0f;
+    bool input_active = false;
+    InputProfile base_input, applied_input;
 } g_applied;
 
 struct SavedConfig {
@@ -328,6 +334,7 @@ struct SavedConfig {
     int renderer;
     bool dynamic_res;
     float volume;
+    InputProfile input;
 } g_saved_config;
 
 // UI state
@@ -645,6 +652,31 @@ void LoadLibrary()
             ov.renderer = o.value("renderer", -1);
             ov.dynamic_res = o.value("dynamic_res", -1);
             ov.volume = o.value("volume", -1.0f);
+            ov.profile = InputProfileDefault();
+            if (o.contains("input") && o["input"].is_object()) {
+                const json &in = o["input"];
+                ov.input = in.value("on", false);
+                if (in.contains("keys") && in["keys"].is_array() && in["keys"].size() == 25) {
+                    for (int i = 0; i < 25; i++) {
+                        if (in["keys"][i].is_number_integer()) {
+                            ov.profile.keys[i] = std::clamp(in["keys"][i].get<int>(), 0, 511);
+                        }
+                    }
+                }
+                ov.profile.mouse_on = in.value("mouse", false);
+                ov.profile.mouse_stick = in.value("stick", 0) ? 1 : 0;
+                ov.profile.mouse_sens = std::clamp(in.value("sensitivity", 1.0f), 0.1f, 5.0f);
+                ov.profile.mouse_invert = in.value("invert_y", false);
+                if (in.contains("buttons") && in["buttons"].is_array() &&
+                    in["buttons"].size() == 7) {
+                    for (int i = 0; i < 7; i++) {
+                        if (in["buttons"][i].is_number_integer()) {
+                            ov.profile.mouse_btn[i] =
+                                std::clamp(in["buttons"][i].get<int>(), 0, MouseTargetCount() - 1);
+                        }
+                    }
+                }
+            }
             g_overrides[(uint32_t)strtoul(id.c_str(), NULL, 16)] = ov;
         }
     } catch (const std::exception &ex) {
@@ -690,6 +722,17 @@ void SaveLibrary()
                                 { "renderer", o.renderer },
                                 { "dynamic_res", o.dynamic_res },
                                 { "volume", o.volume } };
+        if (o.input) {
+            ovs[TitleIdHex(id)]["input"] = {
+                { "on", true },
+                { "keys", std::vector<int>(o.profile.keys, o.profile.keys + 25) },
+                { "mouse", o.profile.mouse_on },
+                { "stick", o.profile.mouse_stick },
+                { "sensitivity", o.profile.mouse_sens },
+                { "invert_y", o.profile.mouse_invert },
+                { "buttons", std::vector<int>(o.profile.mouse_btn, o.profile.mouse_btn + 7) },
+            };
+        }
     }
     j["overrides"] = ovs;
     j["primary_recursive"] = g_primary_recursive;
@@ -1632,16 +1675,40 @@ void RestoreBaseline()
     g_applied.active = false;
 }
 
+// The game's own keys and mouse setup, put back when it's done. Not undone
+// if you changed them while it ran.
+void RestoreInput()
+{
+    if (!g_applied.input_active) {
+        return;
+    }
+    if (InputProfileGet() == g_applied.applied_input) {
+        InputProfileSet(g_applied.base_input);
+    }
+    g_applied.input_active = false;
+}
+
 void ApplyOverridesFor(const std::string &path)
 {
     RestoreBaseline();
+    RestoreInput();
     if (path.empty()) {
         return;
     }
     bool ok;
     uint32_t id = TitleIdForPath(path, &ok);
     auto it = g_overrides.find(id);
-    if (!ok || it == g_overrides.end() || !it->second.enabled) {
+    if (!ok || it == g_overrides.end()) {
+        return;
+    }
+    if (it->second.input) {
+        g_applied.base_input = InputProfileGet();
+        g_applied.applied_input = it->second.profile;
+        g_applied.input_active = true;
+        InputProfileSet(it->second.profile);
+        xemu_queue_notification(tr("Keyboard and mouse set up for this game"));
+    }
+    if (!it->second.enabled) {
         return;
     }
     const GameOverrides &ov = it->second;
@@ -2209,9 +2276,6 @@ void Set60Fps(LibraryEntry &e, bool on)
         return;
     }
     SaveLibrary();
-    if (on) {
-        AchievementsEvent(kAchSixtyFps);
-    }
     xemu_queue_notification(
         IsCurrentDisc(e)
             ? (on ? tr("60 FPS is on. It starts the next time you start the game.")
@@ -2565,7 +2629,6 @@ void MergePatchResults()
             }
         }
         added++;
-        AchievementsEvent(kAchPatches);
         games.insert(r.title_id);
         touched.insert(r.title_id);
     }
@@ -3704,6 +3767,142 @@ void DrawRecentRow(int &tex_budget)
     ImGui::Dummy(ImVec2(0, 4 * s));
 }
 
+bool g_open_game_input = false;
+int g_rebind_key = -1;       // the key row waiting for a key press, or -1
+bool g_rebind_wait = false;  // waiting for every key to be let go first
+
+// What the game's keys and mouse do: one list, a key per row
+void DrawGameInputPopup(GameOverrides &edit, const std::string &game)
+{
+    const float s = g_viewport_mgr.m_scale;
+    if (g_open_game_input) {
+        ImGui::OpenPopup(trid("Keyboard and mouse"));
+        g_open_game_input = false;
+        g_rebind_key = -1;
+    }
+    ImGui::SetNextWindowSize(ImVec2(620 * s, 560 * s), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal(trid("Keyboard and mouse"), NULL, 0)) {
+        return;
+    }
+    InputProfile &pr = edit.profile;
+    ImGui::TextDisabled("%s", game.c_str());
+    // Starting points: by kind of game, xemu's own keys, or what you use now
+    int suggest = InputPresetSuggest(game);
+    if (suggest) {
+        if (ImGui::Button(string_format(tr("Suggested for this game: %s"),
+                                        InputPresetName(suggest)).c_str())) {
+            pr = InputPresetProfile(suggest);
+        }
+        ImGui::SetItemTooltip("%s", tr("A guess from the game's name, not its own layout. "
+                                       "You can change every key afterwards."));
+    }
+    ImGui::TextUnformatted(tr("Start from:"));
+    ImGui::SameLine();
+    if (ImGui::BeginCombo("##preset", tr("Pick one..."))) {
+        for (int i = 1; i <= InputPresetCount(); i++) {
+            if (ImGui::Selectable(InputPresetName(i))) {
+                pr = InputPresetProfile(i);
+            }
+        }
+        if (ImGui::Selectable(tr("xemu's keys"))) {
+            pr = InputProfileDefault();
+        }
+        if (ImGui::Selectable(tr("Like my usual setup"))) {
+            pr = InputProfileGet();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::TextDisabled("%s", tr("The keyboard has to be bound to a controller port: "
+                                 "Settings > Input."));
+    // A key press while a row waits
+    bool cancelled = false;
+    if (g_rebind_key >= 0) {
+        int n = 0;
+        const bool *ks = SDL_GetKeyboardState(&n);
+        bool any = false;
+        int hit = 0;
+        for (int sc = 4; ks && sc < n && sc < 512; sc++) {
+            if (ks[sc]) {
+                any = true;
+                if (!hit && !g_rebind_wait) {
+                    hit = sc;
+                }
+            }
+        }
+        if (g_rebind_wait && !any) {
+            g_rebind_wait = false;
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight)) {
+            g_rebind_key = -1;
+            cancelled = true;
+        } else if (hit) {
+            if (hit != SDL_SCANCODE_ESCAPE) {
+                pr.keys[g_rebind_key] = hit;
+            }
+            g_rebind_key = -1;
+        }
+    }
+    ImGui::BeginChild("##ginput", ImVec2(0, -40 * s), ImGuiChildFlags_Borders);
+    ImGui::SeparatorText(tr("Keys"));
+    for (int i = 0; i < InputKeyCount(); i++) {
+        ImGui::PushID(i);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(InputKeyName(i));
+        ImGui::SameLine(250 * s);
+        std::string label;
+        if (g_rebind_key == i) {
+            label = tr("Press a key to rebind");
+        } else if (pr.keys[i] > 0) {
+            const char *kn = SDL_GetScancodeName((SDL_Scancode)pr.keys[i]);
+            label = kn && kn[0] ? kn : "?";
+        } else {
+            label = tr("None");
+        }
+        if (ImGui::Button((label + "##key").c_str(), ImVec2(240 * s, 0))) {
+            g_rebind_key = i;
+            g_rebind_wait = true; // let the click or A press end first
+        }
+        ImGui::PopID();
+    }
+    ImGui::Dummy(ImVec2(0, 6 * s));
+    ImGui::SeparatorText(tr("Mouse"));
+    ImGui::Checkbox(tr("Use the mouse as a stick"), &pr.mouse_on);
+    ImGui::SetItemTooltip("%s", tr("Click the game to capture the mouse. F3 or Esc lets go."));
+    int stick = pr.mouse_stick;
+    ImGui::SetNextItemWidth(240 * s);
+    if (ImGui::Combo(tr("Mouse moves"), &stick, tr_items("Right stick\0" "Left stick\0"))) {
+        pr.mouse_stick = stick;
+    }
+    ImGui::SetNextItemWidth(240 * s);
+    ImGui::SliderFloat(tr("Sensitivity"), &pr.mouse_sens, 0.25f, 3.0f, "%.2fx");
+    ImGui::Checkbox(tr("Invert mouse up and down"), &pr.mouse_invert);
+    ImGui::Dummy(ImVec2(0, 4 * s));
+    for (int i = 0; i < 7; i++) {
+        ImGui::PushID(100 + i);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(MouseButtonName(i));
+        ImGui::SameLine(250 * s);
+        ImGui::SetNextItemWidth(240 * s);
+        if (ImGui::BeginCombo("##target", MouseTargetName(pr.mouse_btn[i]))) {
+            for (int k = 0; k < MouseTargetCount(); k++) {
+                if (ImGui::Selectable(MouseTargetName(k), pr.mouse_btn[i] == k)) {
+                    pr.mouse_btn[i] = k;
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::PopID();
+    }
+    ImGui::EndChild();
+    if (ImGui::Button(tr("Done"), ImVec2(140 * s, 0)) ||
+        (g_rebind_key < 0 && !cancelled && (ImGui::IsKeyPressed(ImGuiKey_Escape) ||
+                              ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight)))) {
+        g_rebind_key = -1;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
 void DrawSettingsPopup()
 {
     if (g_open_settings_popup) {
@@ -3799,6 +3998,27 @@ void DrawSettingsPopup()
     }
     ImGui::EndDisabled();
     ImGui::TextDisabled(tr("Applied whenever this game's disc is loaded."));
+    ImGui::Separator();
+    // Keys and mouse of its own
+    {
+        bool was_input = g_overrides.count(e->title_id) && g_overrides[e->title_id].input;
+        if (ImGui::Checkbox(tr("Own keyboard and mouse setup for this game"),
+                            &g_settings_edit.input) &&
+            g_settings_edit.input && !was_input) {
+            g_settings_edit.profile = InputProfileGet(); // start from what you use now
+        }
+        ImGui::SetItemTooltip("%s", tr("Its own keys and mouse buttons, mouse speed and "
+                                       "look stick. Put back when the game is done."));
+        if (g_settings_edit.input) {
+            if (ImGui::Button(tr("Set up keys and mouse..."))) {
+                g_open_game_input = true;
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s",
+                                g_settings_edit.profile.mouse_on ? tr("Mouse on") : tr("Mouse off"));
+        }
+        DrawGameInputPopup(g_settings_edit, e->DisplayName());
+    }
     ImGui::Separator();
     // Shader cache: try clearing it if the game hangs or draws wrong after
     // a crash
@@ -4945,6 +5165,9 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
     if (e.valid && g_overrides.count(e.title_id) && g_overrides[e.title_id].enabled) {
         row(tr("Settings"), tr("Custom for this game"));
     }
+    if (e.valid && g_overrides.count(e.title_id) && g_overrides[e.title_id].input) {
+        row(tr("Keyboard and mouse"), tr("Set up for this game"));
+    }
     if (e.valid) {
         int online = OnlinePatchCount(e.title_id);
         if (online) {
@@ -5210,7 +5433,6 @@ void SwitchTab(int tab)
     }
     g_dash_tab = next;
     RequestPreviewStop();
-    AchievementsEvent(kAchTab, (uint32_t)next);
 }
 
 // A soft band of light flowing across the screen (the "wave"): a triangle
@@ -5603,7 +5825,6 @@ void DrawDashTopBar()
     }
     ImGui::SetCursorScreenPos(ImVec2(right - close_w - 8 * s - min_w, y_mid - 16 * s));
     if (DashButton(min_label, th.glass, th.white, ImVec2(min_w, 32 * s))) {
-        AchievementsEvent(kAchCollapse);
         game_library_window.Collapse();
     }
     ImGui::SetItemTooltip("%s", tr("Minimize: a small tab at the bottom of the screen "
@@ -6724,7 +6945,6 @@ void DrawInsigniaTab(int &tex_budget)
         if (DashRow(*e, sub, tr(ICON_FA_PLAY "  Play online"), w, tex_budget, sel,
                     T().neon ? T().accent : IM_COL32(168, 236, 107, 255))) {
             g_selected_path = e->path;
-            AchievementsEvent(kAchOnlinePlay);
             game_library_window.Launch(e->path);
         }
     }
@@ -7326,7 +7546,6 @@ void StorePump()
             StoreRememberInstall("/" + g_store.inst_dir + "/" + g_store.inst_name,
                                  g_store.inst_id);
             HomebrewMarkDirty(); // list it under Installed
-            AchievementsEvent(kAchHomebrew);
         }
         g_store.inst_msg =
             error ? status
@@ -8137,7 +8356,6 @@ void InsigniaSetupWatch()
     }
     g_isa.watch = 0;
     g_isa.returned = true;
-    AchievementsEvent(kAchInsigniaSetup);
     ActionEjectDiscNow(); // so it doesn't start again
     g_isa.msg = tr("The Setup Assistant was closed. Next: get an invite code.");
     g_isa.msg_err = false;
@@ -8692,6 +8910,101 @@ std::string FormatDate(int64_t t)
     return buf;
 }
 
+// A game for the achievements picker
+struct AchGameRow {
+    uint32_t tid;
+    std::string name;
+    bool has; // has achievements
+};
+
+std::vector<AchGameRow> AchGameRows()
+{
+    std::vector<AchGameRow> rows;
+    std::set<uint32_t> seen;
+    for (uint32_t tid : AchievementsGames()) {
+        std::string n = GameLibraryTitleName(tid);
+        if (n.empty()) {
+            n = AchievementsGameName(tid);
+        }
+        if (n.empty()) {
+            n = FormatTitleId(tid);
+        }
+        rows.push_back({ tid, n, true });
+        seen.insert(tid);
+    }
+    std::sort(rows.begin(), rows.end(), [](const AchGameRow &a, const AchGameRow &b) {
+        return Lower(a.name) < Lower(b.name);
+    });
+    std::vector<AchGameRow> others;
+    for (auto &e : g_entries) {
+        if (e.valid && e.title_id && seen.insert(e.title_id).second) {
+            others.push_back({ e.title_id, e.DisplayName(), false });
+        }
+    }
+    std::sort(others.begin(), others.end(), [](const AchGameRow &a, const AchGameRow &b) {
+        return Lower(a.name) < Lower(b.name);
+    });
+    rows.insert(rows.end(), others.begin(), others.end());
+    return rows;
+}
+
+// The window for writing or changing one of your own achievements
+struct AchEdit {
+    bool open_request = false;
+    bool is_new = true;
+    uint32_t tid = 0;
+    std::string game, id;
+    char name[96] = "", desc[320] = "", group[48] = "";
+    int points = 10;
+} g_ach_edit;
+
+void DrawAchEditPopup()
+{
+    const float s = g_viewport_mgr.m_scale;
+    if (g_ach_edit.open_request) {
+        ImGui::OpenPopup(trid("Your achievement"));
+        g_ach_edit.open_request = false;
+    }
+    ImGui::SetNextWindowSize(ImVec2(520 * s, 0), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal(trid("Your achievement"), NULL,
+                                ImGuiWindowFlags_AlwaysAutoResize)) {
+        return;
+    }
+    AchEdit &ed = g_ach_edit;
+    ImGui::TextDisabled("%s", ed.game.c_str());
+    ImGui::PushItemWidth(-FLT_MIN);
+    ImGui::TextUnformatted(tr("Name"));
+    ImGui::InputText("##achname", ed.name, sizeof(ed.name));
+    OskTextBox();
+    ImGui::TextUnformatted(tr("What to do"));
+    ImGui::InputText("##achdesc", ed.desc, sizeof(ed.desc));
+    OskTextBox();
+    ImGui::TextUnformatted(tr("Group (optional, to keep them in sections)"));
+    ImGui::InputText("##achgroup", ed.group, sizeof(ed.group));
+    OskTextBox();
+    ImGui::SliderInt("##achpts", &ed.points, 0, 100, tr("%d points"));
+    ImGui::PopItemWidth();
+    ImGui::Separator();
+    bool ok = ed.name[0] != 0;
+    ImGui::BeginDisabled(!ok);
+    if (ImGui::Button(tr("Save"), ImVec2(120 * s, 0))) {
+        if (ed.is_new) {
+            AchievementsAddMine(ed.tid, ed.game, ed.name, ed.desc, ed.points, ed.group);
+        } else {
+            AchievementsEditMine(ed.tid, ed.id, ed.name, ed.desc, ed.points, ed.group);
+        }
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button(tr("Cancel"), ImVec2(120 * s, 0)) ||
+        ImGui::IsKeyPressed(ImGuiKey_Escape) ||
+        ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight)) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
 void DrawAchievementsTab()
 {
     const float s = g_viewport_mgr.m_scale;
@@ -8709,9 +9022,36 @@ void DrawAchievementsTab()
         RaRefresh();
     }
 
-    int total = AchievementCount();
-    int unlocked = AchievementsUnlocked();
-    int pts = AchievementsPoints(), pts_total = AchievementsPointsTotal();
+    // Which game: the one running, else the first with achievements
+    static uint32_t sel = 0;
+    static bool sel_set = false;
+    std::vector<AchGameRow> rows = AchGameRows();
+    if (!sel_set || (sel && std::none_of(rows.begin(), rows.end(), [&](const AchGameRow &r) {
+                         return r.tid == sel;
+                     }))) {
+        sel = 0;
+        const char *dvd = g_config.sys.files.dvd_path;
+        if (dvd && dvd[0]) {
+            bool ok;
+            uint32_t id = TitleIdForPath(OriginalDiscPath(dvd), &ok);
+            if (ok && id) {
+                sel = id;
+            }
+        }
+        if (!sel && !rows.empty()) {
+            sel = rows[0].tid;
+        }
+        sel_set = true;
+    }
+    std::string sel_name;
+    for (auto &r : rows) {
+        if (r.tid == sel) {
+            sel_name = r.name;
+        }
+    }
+    int total = AchievementCount(sel);
+    int done_n = AchievementsDoneFor(sel);
+    int pts = AchievementsPointsFor(sel), pts_total = AchievementsPointsTotalFor(sel);
 
     auto card = [&](float x, float w, const char *id, auto body) {
         ImVec2 ca(a.x + x, a.y);
@@ -8727,15 +9067,16 @@ void DrawAchievementsTab()
         ImGui::PopStyleColor();
     };
 
-    // The totals, with a progress bar
+    // The game's totals, with a progress bar
     auto summary = [&] {
         DashLabel(tr("Achievements"));
-        DashTitle(string_format(tr("%d of %d unlocked"), unlocked, total).c_str());
+        DashTitle(sel_name.empty() ? tr("No game") : sel_name.c_str());
+        ImGui::TextUnformatted(string_format(tr("%d of %d done"), done_n, total).c_str());
         ImVec2 p = ImGui::GetCursorScreenPos();
         float bw = ImGui::GetContentRegionAvail().x, bh = 10 * s;
         ShapeFill(dl, ImVec2(p.x, p.y + 6 * s), ImVec2(p.x + bw, p.y + 6 * s + bh),
                   IM_COL32(255, 255, 255, 28), 5 * s);
-        float f = total ? (float)unlocked / total : 0;
+        float f = total ? (float)done_n / total : 0;
         if (f > 0) {
             ShapeFill(dl, ImVec2(p.x, p.y + 6 * s),
                       ImVec2(p.x + std::max(bh, bw * f), p.y + 6 * s + bh), th.accent, 5 * s);
@@ -8743,30 +9084,53 @@ void DrawAchievementsTab()
         ImGui::Dummy(ImVec2(0, bh + 14 * s));
         ImGui::TextUnformatted(string_format(tr("%d of %d points"), pts, pts_total).c_str());
         ImGui::PushTextWrapPos(0.0f);
-        ImGui::TextDisabled("%s", tr("Milestones in xemu itself, kept on this PC. They "
-                                     "aren't achievements inside any Xbox game."));
+        std::string authors = AchievementsAuthors(sel);
+        if (!authors.empty()) {
+            ImGui::TextDisabled("%s", string_format(tr("Written by %s"), authors.c_str()).c_str());
+        }
+        int all_games = (int)AchievementsGames().size();
+        if (all_games > 0) {
+            ImGui::TextDisabled("%s", string_format(tr("All games: %d of %d done, %d points"),
+                                                    AchievementsDoneAll(), AchievementsCountAll(),
+                                                    AchievementsPointsAll()).c_str());
+        }
         ImGui::PopTextWrapPos();
     };
 
-    // Pop-up switch, and the RetroAchievements account
+    // Buttons, the pop-up switch and the RetroAchievements account
     auto side = [&] {
+        ImGui::BeginDisabled(!sel);
+        if (DashButton(tr("Add an achievement"), th.glass, th.white, ImVec2(0, 30 * s))) {
+            g_ach_edit = AchEdit();
+            g_ach_edit.open_request = true;
+            g_ach_edit.is_new = true;
+            g_ach_edit.tid = sel;
+            g_ach_edit.game = sel_name;
+        }
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip("%s", tr("Write your own achievement for this game. You tick "
+                                       "it off yourself when you get it."));
+        ImGui::Dummy(ImVec2(0, 4 * s));
+        if (DashButton(tr("Open the achievements folder"), th.glass, th.white,
+                       ImVec2(0, 30 * s))) {
+            SDL_OpenURL(("file:///" + fs::u8path(AchievementsPacksDir()).generic_u8string())
+                            .c_str());
+        }
+        ImGui::SetItemTooltip("%s", tr("Achievement packs are small files named after the "
+                                       "game's title ID. Put one here to add it, then "
+                                       "press Reload."));
+        ImGui::Dummy(ImVec2(0, 4 * s));
+        if (DashButton(tr("Reload"), th.glass, th.white, ImVec2(0, 30 * s))) {
+            AchievementsReloadPacks();
+        }
+        ImGui::Dummy(ImVec2(0, 10 * s));
         bool popups = AchievementsPopups();
-        if (ImGui::Checkbox(tr("Pop-up when I unlock one"), &popups)) {
+        if (ImGui::Checkbox(tr("Pop-up when I tick one off"), &popups)) {
             AchievementsSetPopups(popups);
         }
         ImGui::Dummy(ImVec2(0, 4 * s));
         if (DashButton(tr("Show a pop-up"), th.glass, th.white, ImVec2(0, 30 * s))) {
-            // Show the newest unlocked one, or the first
-            int pick = 0;
-            int64_t newest = -1;
-            for (int i = 0; i < total; i++) {
-                AchievementInfo ai = AchievementAt(i);
-                if (ai.unlocked && ai.unlocked_at > newest) {
-                    newest = ai.unlocked_at;
-                    pick = i;
-                }
-            }
-            AchievementsPreviewToast(pick);
+            AchievementsPreviewToast(sel);
         }
         ImGui::Dummy(ImVec2(0, 16 * s));
         DashLabel(tr("RetroAchievements"));
@@ -8818,34 +9182,76 @@ void DrawAchievementsTab()
     };
 
     auto list = [&] {
-        static int filter = 0; // all, unlocked, locked
+        static int filter = 0; // all, done, not yet
         if (!two_col) {
             summary();
             ImGui::Dummy(ImVec2(0, 8 * s));
         } else {
-            DashLabel(tr("All achievements"));
+            DashLabel(tr("Game"));
         }
-        ImGui::SetNextItemWidth(220 * s);
-        ImGui::Combo("##achfilter", &filter,
-                     tr_items("All\0" "Unlocked\0" "Not yet\0"));
+        // The game picker: games with achievements first
+        ImGui::SetNextItemWidth(std::min(420.0f * s, ImGui::GetContentRegionAvail().x));
+        if (ImGui::BeginCombo("##achgame", sel_name.empty() ? tr("Pick a game") : sel_name.c_str())) {
+            bool others_label = false;
+            for (auto &r : rows) {
+                if (!r.has && !others_label) {
+                    others_label = true;
+                    ImGui::SeparatorText(tr("Other games in your library"));
+                }
+                std::string label = r.name;
+                if (r.has) {
+                    label += string_format("  (%d / %d)", AchievementsDoneFor(r.tid),
+                                           AchievementCount(r.tid));
+                }
+                ImGui::PushID((int)r.tid);
+                if (ImGui::Selectable(label.c_str(), r.tid == sel)) {
+                    sel = r.tid;
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(160 * s);
+        ImGui::Combo("##achfilter", &filter, tr_items("All\0" "Done\0" "Not yet\0"));
         ImGui::Dummy(ImVec2(0, 6 * s));
         ImGui::BeginChild("##achlist", ImVec2(0, 0), ImGuiChildFlags_NavFlattened);
-        const char *last_cat = "";
+        if (total == 0) {
+            ImGui::PushTextWrapPos(0.0f);
+            if (rows.empty()) {
+                ImGui::TextDisabled("%s", tr("Add games to your library to give them "
+                                             "achievements."));
+            } else {
+                ImGui::TextDisabled("%s",
+                    string_format(tr("No achievements for this game yet. The original Xbox "
+                                     "had none, so they come from packs: files named after "
+                                     "the game's title ID (%s) in the achievements folder, "
+                                     "written by you or someone else. Or press \"Add an "
+                                     "achievement\" and write your own."),
+                                  TitleIdHex(sel).c_str()).c_str());
+            }
+            ImGui::PopTextWrapPos();
+        }
+        std::string last_group = "\x01";
         ImFont *icon_font = ImGui::GetIO().Fonts->Fonts[0];
         ImFont *title_font = FontOr(g_font_mgr.m_menu_font_small);
         for (int i = 0; i < total; i++) {
-            AchievementInfo ai = AchievementAt(i);
-            if ((filter == 1 && !ai.unlocked) || (filter == 2 && ai.unlocked)) {
+            AchievementInfo ai = AchievementAt(sel, i);
+            if ((filter == 1 && !ai.done) || (filter == 2 && ai.done)) {
                 continue;
             }
-            if (strcmp(ai.category, last_cat)) {
-                last_cat = ai.category;
-                ImGui::Dummy(ImVec2(0, 8 * s));
-                DashLabel(tr(ai.category));
+            if (ai.group != last_group) {
+                last_group = ai.group;
+                if (!ai.group.empty()) {
+                    ImGui::Dummy(ImVec2(0, 8 * s));
+                    DashLabel(ai.group.c_str());
+                }
             }
             float rw = ImGui::GetContentRegionAvail().x, rh = 66 * s;
             ImGui::PushID(i);
-            ImGui::Selectable("##row", false, 0, ImVec2(rw, rh));
+            ImGui::SetNextItemAllowOverlap();
+            bool clicked = ImGui::Selectable("##row", false, ImGuiSelectableFlags_AllowOverlap,
+                                             ImVec2(rw, rh));
             ImVec2 ra_ = ImGui::GetItemRectMin(), rb = ImGui::GetItemRectMax();
             bool hov = ImGui::IsItemHovered() || ImGui::IsItemFocused();
             ShapeFill(dl, ra_, rb, hov ? IM_COL32(255, 255, 255, 22) : IM_COL32(255, 255, 255, 10),
@@ -8856,45 +9262,70 @@ void DrawAchievementsTab()
             // Badge
             float bd = rh - 22 * s;
             ImVec2 c(ra_.x + 14 * s + bd / 2, ra_.y + rh / 2);
-            ImU32 base = ai.unlocked ? th.accent : IM_COL32(255, 255, 255, 36);
+            ImU32 base = ai.done ? th.accent : IM_COL32(255, 255, 255, 36);
             dl->AddCircleFilled(c, bd / 2, base, 32);
-            const char *ic = ai.unlocked ? ICON_FA_TROPHY : ICON_FA_LOCK;
+            const char *ic = ai.done ? ICON_FA_TROPHY : ICON_FA_LOCK;
             float isz = icon_font->FontSize * 1.2f;
             ImVec2 its = icon_font->CalcTextSizeA(isz, FLT_MAX, 0, ic);
             dl->AddText(icon_font, isz, ImVec2(c.x - its.x / 2, c.y - its.y / 2),
-                        ai.unlocked ? ImGui::ColorConvertFloat4ToU32(th.on_primary)
-                                    : th.dim,
-                        ic);
+                        ai.done ? ImGui::ColorConvertFloat4ToU32(th.on_primary) : th.dim, ic);
             // Points, right aligned
             std::string pt = string_format(tr("%d pts"), ai.points);
             ImVec2 pts_sz = ImGui::CalcTextSize(pt.c_str());
             float right = rb.x - 16 * s;
             dl->AddText(ImVec2(right - pts_sz.x, ra_.y + 12 * s),
-                        ai.unlocked ? th.accent : th.dim, pt.c_str());
-            // Name, what to do, and how far along
+                        ai.done ? th.accent : th.dim, pt.c_str());
+            // Name and what to do
+            bool hidden = ai.secret && !ai.done;
             float tx = ra_.x + 14 * s + bd + 14 * s;
+            float btns_w = ai.mine ? 150 * s : 0;
             float max_w = right - pts_sz.x - 16 * s - tx;
             ImVec4 clip(tx, ra_.y, tx + max_w, rb.y);
-            std::string nm = tr(ai.name);
+            std::string nm = hidden ? tr("Secret achievement") : ai.name;
             dl->AddText(title_font, title_font->FontSize, ImVec2(tx, ra_.y + 8 * s),
-                        ai.unlocked ? th.text : Alpha(th.text, 200), nm.c_str(), nullptr, 0,
+                        ai.done ? th.text : Alpha(th.text, 200), nm.c_str(), nullptr, 0,
                         &clip);
-            std::string ds = tr(ai.desc);
-            if (ai.unlocked) {
-                ds += "  -  " + FormatDate(ai.unlocked_at);
-            } else if (ai.target > 1 && ai.target < 100000) {
-                ds += string_format("  -  %lld / %lld", (long long)ai.progress,
-                                    (long long)ai.target);
-            } else if (ai.target >= 100000 && ai.progress > 0) {
-                // Seconds played: show hours
-                ds += string_format("  -  %.1f / %.0f h", ai.progress / 3600.0,
-                                    ai.target / 3600.0);
+            std::string ds = hidden ? std::string(tr("Tick it off when you get it.")) : ai.desc;
+            if (ai.done) {
+                ds += (ds.empty() ? "" : "  -  ") + FormatDate(ai.done_at);
             }
+            ImVec4 clip2(tx, ra_.y, tx + max_w - btns_w, rb.y);
             dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(),
                         ImVec2(tx, rb.y - 8 * s - ImGui::GetFontSize()), th.dim, ds.c_str(),
-                        nullptr, 0.0f, &clip);
+                        nullptr, 0.0f, &clip2);
+            if (clicked) {
+                AchievementsSet(sel, ai.id, !ai.done);
+            }
+            // Your own: edit or delete
+            bool edit = false, del = false;
+            if (ai.mine) {
+                float bh = ImGui::GetFrameHeight();
+                float ew = ImGui::CalcTextSize(tr("Edit")).x + 16 * s;
+                float dw = ImGui::CalcTextSize(tr("Delete")).x + 16 * s;
+                ImGui::SetCursorScreenPos(ImVec2(right - ew - dw - 6 * s, rb.y - 6 * s - bh));
+                edit = ImGui::SmallButton(tr("Edit"));
+                ImGui::SameLine(0, 6 * s);
+                del = ImGui::SmallButton(tr("Delete"));
+            }
             ImGui::PopID();
+            ImGui::SetCursorScreenPos(ImVec2(ra_.x, rb.y));
             ImGui::Dummy(ImVec2(0, 4 * s));
+            if (edit) {
+                g_ach_edit = AchEdit();
+                g_ach_edit.open_request = true;
+                g_ach_edit.is_new = false;
+                g_ach_edit.tid = sel;
+                g_ach_edit.game = sel_name;
+                g_ach_edit.id = ai.id;
+                snprintf(g_ach_edit.name, sizeof(g_ach_edit.name), "%s", ai.name.c_str());
+                snprintf(g_ach_edit.desc, sizeof(g_ach_edit.desc), "%s", ai.desc.c_str());
+                snprintf(g_ach_edit.group, sizeof(g_ach_edit.group), "%s", ai.group.c_str());
+                g_ach_edit.points = ai.points;
+            }
+            if (del) {
+                AchievementsDeleteMine(sel, ai.id);
+                break; // the list changed
+            }
         }
         ImGui::EndChild();
     };
@@ -8911,6 +9342,7 @@ void DrawAchievementsTab()
             list();
         });
     }
+    DrawAchEditPopup();
 }
 
 // --- Settings ------------------------------------------------------------------
@@ -9235,7 +9667,6 @@ void DrawClassicHeader()
                           "Library Style)"));
     ImGui::SameLine();
     if (ImGui::Button(ICON_FA_WINDOW_MINIMIZE "##minimize")) {
-        AchievementsEvent(kAchCollapse);
         game_library_window.Collapse();
     }
     ImGui::SetItemTooltip("%s", tr("Minimize: a small tab at the bottom of the screen "
@@ -9597,8 +10028,6 @@ void LaunchNow(const std::string &path)
     if (load_path != path) {
         name += std::string(" ") + tr("(patched)");
     }
-    AchievementsEvent(kAchLaunch, e && e->title_id ? e->title_id
-                                                   : (uint32_t)std::hash<std::string>()(path));
     // Restart the console so it boots the disc, like powering on a real Xbox
     // with the game in the tray. Swapping the disc alone leaves many
     // dashboards and BIOSes sitting at the menu until a manual reset.
@@ -9694,7 +10123,8 @@ void GameLibraryWindow::Update()
         g_loaded = true;
         atexit(GameLibraryShutdown);
         LoadLibrary();
-        AchievementsLoad((BasePath() / "achievements.json").u8string());
+        AchievementsLoad((BasePath() / "achievements.json").u8string(),
+                         (BasePath() / "achievements").u8string());
         StartCompatRefresh();
         g_last_tick = SDL_GetTicks();
         g_last_save_tick = g_last_tick;
@@ -9743,23 +10173,7 @@ void GameLibraryWindow::Update()
         g_last_save_tick = now;
     }
 
-    // Numbers the achievements look at
-    static uint64_t last_stats = 0;
-    if (now - last_stats > 2000) {
-        last_stats = now;
-        double secs = 0;
-        int favorites = 0;
-        for (auto &[path, st] : g_stats) {
-            secs += st.play_seconds;
-            favorites += st.favorite ? 1 : 0;
-        }
-        AchievementsSetStat("play_s", (int64_t)secs);
-        AchievementsSetStat("library", (int64_t)g_entries.size());
-        AchievementsSetStat("favorites", favorites);
-    }
-    AchievementsUpdate(g_config.display.filtering >= CONFIG_DISPLAY_FILTERING_CRT &&
-                           !cur.empty() && runstate_is_running(),
-                       g_config.display.ui.language);
+    AchievementsUpdate();
 }
 
 // ---- Blades and Metro dashboard styles -------------------------------------
@@ -10706,7 +11120,11 @@ void GameLibraryBeforeSettingsSave(void)
                        g_config.display.fsr_sharpness,
                        g_config.display.renderer,
                        g_config.display.quality.dynamic_resolution,
-                       g_config.audio.volume_limit };
+                       g_config.audio.volume_limit,
+                       InputProfileGet() };
+    if (g_applied.input_active && InputProfileGet() == g_applied.applied_input) {
+        InputProfileSet(g_applied.base_input); // the user's own, not this game's
+    }
     if (g_applied.active) {
         const GameOverrides &ov = g_applied.ov;
         if (ov.surface_scale > 0 &&
@@ -10793,7 +11211,6 @@ void GameLibraryQuickSave(bool load)
             return;
         }
         ActionLoadSnapshotChecked(name.c_str());
-        AchievementsEvent(kAchQuickLoad);
         xemu_queue_notification(tr(ICON_FA_CLOCK_ROTATE_LEFT "  Quick save loaded"));
         return;
     }
@@ -10806,7 +11223,6 @@ void GameLibraryQuickSave(bool load)
         return;
     }
     g_snapshot_mgr.Refresh();
-    AchievementsEvent(kAchQuickSave);
     xemu_queue_notification(string_format(tr(ICON_FA_FLOPPY_DISK "  Quick saved. %s loads it."),
                                           QuickSaveButtonName(true).c_str())
                                 .c_str());
@@ -10857,5 +11273,6 @@ void GameLibraryAfterSettingsSave(void)
     g_config.display.renderer = g_saved_config.renderer;
     g_config.display.quality.dynamic_resolution = g_saved_config.dynamic_res;
     g_config.audio.volume_limit = g_saved_config.volume;
+    InputProfileSet(g_saved_config.input);
     DynamicResAfterSettingsSave();
 }

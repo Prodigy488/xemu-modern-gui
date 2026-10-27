@@ -18,7 +18,6 @@
 //
 #include "rtx-video.hh"
 #include "common.hh"
-#include "achievements.hh"
 #include "osk.hh"
 #include "scene-manager.hh"
 #include "widgets.hh"
@@ -640,9 +639,9 @@ void MainMenuInputView::Draw()
 
     SectionTitle(tr("Mouse and keyboard"));
     Toggle(tr("Use the mouse as a stick"), &g_config.input.mouse.enabled,
-           tr("Click the game to capture the mouse. Moving it moves a stick, left "
-              "click is RT, right click is LT and middle click is the right stick "
-              "button. F3 or Esc lets go. The keyboard must be bound to a port."));
+           tr("Click the game to capture the mouse. Moving it moves a stick; what "
+              "the buttons and wheel do is set below. F3 or Esc lets go. The "
+              "keyboard must be bound to a port."));
     ChevronCombo(tr("Mouse moves"), &g_config.input.mouse.stick,
                  tr_items("Right stick (look)\0" "Left stick (move)\0"));
     {
@@ -658,6 +657,22 @@ void MainMenuInputView::Draw()
         }
     }
     Toggle(tr("Invert mouse up and down"), &g_config.input.mouse.invert_y);
+    {
+        // What each button and the wheel do
+        int *fields[7] = { &g_config.input.mouse.left,     &g_config.input.mouse.right,
+                           &g_config.input.mouse.middle,   &g_config.input.mouse.x1,
+                           &g_config.input.mouse.x2,       &g_config.input.mouse.wheel_up,
+                           &g_config.input.mouse.wheel_down };
+        for (int i = 0; i < 7; i++) {
+            ImGui::PushID(i);
+            ChevronCombo(MouseButtonName(i), fields[i],
+                         tr_items("Nothing\0" "A\0" "B\0" "X\0" "Y\0" "Back\0" "Start\0"
+                                  "Left Stick Button\0" "Right Stick Button\0" "White\0"
+                                  "Black\0" "DPad Up\0" "DPad Down\0" "DPad Left\0"
+                                  "DPad Right\0" "Left Trigger\0" "Right Trigger\0"));
+            ImGui::PopID();
+        }
+    }
     if (ImGui::Button(tr("Use WASD + mouse layout"))) {
         xemu_queue_notification(KeyboardMouseLayoutApply().c_str());
     }
@@ -1520,7 +1535,6 @@ void MainMenuSnapshotsView::Draw()
                       ImVec2(-FLT_MIN, 0))) {
         xemu_snapshots_save(m_search_buf.empty() ? NULL : m_search_buf.c_str(),
                             NULL);
-        AchievementsEvent(kAchSaveState);
         ClearSearch();
     }
     if (snapshot_with_create_name_exists) {
@@ -1670,7 +1684,6 @@ void MainMenuSnapshotsView::DrawSnapshotContextMenu(
 
     if (ImGui::MenuItem(tr("Replace"))) {
         xemu_snapshots_save(snapshot->name, &err);
-        AchievementsEvent(kAchSaveState);
     }
 
     if (ImGui::MenuItem(tr("Delete"))) {

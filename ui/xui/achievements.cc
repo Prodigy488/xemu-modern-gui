@@ -23,10 +23,12 @@
 #include <cstring>
 #include <ctime>
 #include <deque>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <mutex>
 #include <set>
+#include <sstream>
 #include <thread>
 #include <vector>
 
@@ -38,99 +40,33 @@ extern "C" int http_post_form(const char *url, const char *body, GByteArray *res
 #endif
 
 using json = nlohmann::json;
+namespace fs = std::filesystem;
 
 namespace {
 
-struct Def {
-    const char *id;
-    const char *name;
-    const char *desc;
-    const char *category;
-    int points;
-    const char *key; // the count it looks at
-    int64_t target;
+// A game's achievements, merged from all its pack files
+struct Game {
+    std::string name;
+    std::vector<std::string> authors;
+    std::vector<AchievementInfo> list; // done / done_at are filled in when asked
 };
-
-// Names and descriptions go through tr() where they're shown
-const Def kDefs[] = {
-    // Play
-    { "power_on", N_("Power On"), N_("Start a game from the library."), N_("Play"), 5,
-      "launches", 1 },
-    { "regular", N_("Regular"), N_("Start games 10 times."), N_("Play"), 10, "launches", 10 },
-    { "game_night", N_("Game Night"), N_("Play 5 different games."), N_("Play"), 10, "games", 5 },
-    { "full_shelf", N_("Full Shelf"), N_("Have 25 games in your library."), N_("Play"), 10,
-      "library", 25 },
-    { "collection", N_("The Collection"), N_("Have 100 games in your library."), N_("Play"), 25,
-      "library", 100 },
-    { "favorites", N_("Favorites"), N_("Mark 5 games as favorites."), N_("Play"), 5, "favorites", 5 },
-    // Time
-    { "warming_up", N_("Warming Up"), N_("Play for 1 hour in total."), N_("Time"), 10, "play_s", 3600 },
-    { "marathon", N_("Marathon"), N_("Play for 10 hours in total."), N_("Time"), 25, "play_s",
-      36000 },
-    { "dedicated", N_("Dedicated"), N_("Play for 50 hours in total."), N_("Time"), 50, "play_s",
-      180000 },
-    { "lost_in_time", N_("Lost in Time"), N_("Play for 100 hours in total."), N_("Time"), 100,
-      "play_s", 360000 },
-    { "night_owl", N_("Night Owl"), N_("Start a game between midnight and 5 AM."), N_("Time"), 10,
-      "night", 1 },
-    // Saves
-    { "time_traveler", N_("Time Traveler"), N_("Make a save state."), N_("Saves"), 5, "states", 1 },
-    { "safety_net", N_("Safety Net"), N_("Make 10 save states."), N_("Saves"), 15, "states", 10 },
-    { "quick_fingers", N_("Quick Fingers"), N_("Quick save a game."), N_("Saves"), 5,
-      "quick_saves", 1 },
-    { "rewind", N_("Rewind"), N_("Quick load a game."), N_("Saves"), 5, "quick_loads", 1 },
-    { "backed_up", N_("Backed Up"), N_("Back up the Xbox's game saves to your PC."), N_("Saves"), 10,
-      "backups", 1 },
-    // Homebrew and the drive
-    { "tinkerer", N_("Tinkerer"), N_("Install a homebrew app or game."), N_("Homebrew"), 10,
-      "homebrew", 1 },
-    { "homebrewer", N_("Homebrewer"), N_("Install 5 homebrew apps or games."), N_("Homebrew"), 25,
-      "homebrew", 5 },
-    { "file_manager", N_("File Manager"), N_("Change files on the Xbox's hard drive."),
-      N_("Homebrew"), 5, "drive_edits", 1 },
-    // Picture and sound
-    { "smooth_operator", N_("Smooth Operator"), N_("Turn on 60 FPS for a game."),
-      N_("Picture"), 10, "sixty", 1 },
-    { "patched_up", N_("Patched Up"), N_("Download a patch for a game."), N_("Picture"), 5,
-      "patches", 1 },
-    { "retro_look", N_("Retro Look"), N_("Play with the CRT TV or Scanlines filter."),
-      N_("Picture"), 5, "crt", 1 },
-    // Online
-    { "going_online", N_("Going Online"), N_("Set up Insignia with the Setup Assistant."),
-      N_("Online"), 15, "insignia_setup", 1 },
-    { "multiplayer", N_("Multiplayer"), N_("Start a game online."), N_("Online"), 10, "online", 1 },
-    // Your way
-    { "world_traveler", N_("World Traveler"), N_("Switch xemu to another language."),
-      N_("Your way"), 5, "lang", 1 },
-    { "mouse_keyboard", N_("Mouse and Keyboard"), N_("Play with the mouse captured."),
-      N_("Your way"), 10, "mouse", 1 },
-    { "typist", N_("Typist"), N_("Use the on-screen keyboard."), N_("Your way"), 5, "osk", 1 },
-    { "out_of_the_way", N_("Out of the Way"), N_("Minimize the dashboard."), N_("Your way"), 5,
-      "collapse", 1 },
-    { "explorer", N_("Explorer"), N_("Visit every tab of the dashboard."), N_("Your way"), 10,
-      "tabs", 9 },
-    // Everything else
-    { "completionist", N_("Completionist"), N_("Unlock every other achievement."),
-      N_("Everything"), 50, "others", 0 },
-};
-const int kDefCount = (int)(sizeof(kDefs) / sizeof(kDefs[0]));
 
 struct Toast {
-    int def;
+    std::string name;
+    int points;
     double t0;
 };
 
 std::mutex g_lock;
-std::string g_path;
+std::string g_path;       // progress file
+std::string g_packs_dir;
 bool g_dirty = false;
 double g_last_save = 0;
-std::map<std::string, int64_t> g_ctr;     // counts and stats
-std::map<std::string, int64_t> g_unlocked; // id -> unix time
-std::set<uint32_t> g_titles;               // distinct games started
-std::set<int> g_tabs;                      // dashboard tabs visited
+std::map<uint32_t, Game> g_games;
+std::map<uint32_t, std::map<std::string, int64_t>> g_done; // title -> id -> unix time
 bool g_popups = true;
-std::deque<Toast> g_pending;               // waiting to show
-std::vector<Toast> g_toasts;               // showing now
+std::deque<Toast> g_pending; // waiting to show
+std::vector<Toast> g_toasts; // showing now
 
 // RetroAchievements
 RaInfo g_ra;
@@ -138,71 +74,183 @@ std::string g_ra_token;
 std::thread g_ra_thread;
 bool g_ra_refreshed = false;
 
-int64_t Count(const std::string &key)
+std::string HexId(uint32_t id)
 {
-    if (key == "games") {
-        return (int64_t)g_titles.size();
-    }
-    if (key == "tabs") {
-        return (int64_t)g_tabs.size();
-    }
-    auto it = g_ctr.find(key);
-    return it == g_ctr.end() ? 0 : it->second;
+    char b[16];
+    snprintf(b, sizeof(b), "%08X", id);
+    return b;
 }
 
-int64_t Target(const Def &d)
+// 1 to 8 hex digits, all of them
+bool ParseHexId(const std::string &s, uint32_t *out)
 {
-    if (!strcmp(d.key, "others")) {
-        return kDefCount - 1;
+    if (s.empty() || s.size() > 8) {
+        return false;
     }
-    return d.target;
-}
-
-int64_t Progress(const Def &d)
-{
-    if (!strcmp(d.key, "others")) {
-        int64_t n = 0;
-        for (int i = 0; i < kDefCount; i++) {
-            if (&kDefs[i] != &d && g_unlocked.count(kDefs[i].id)) {
-                n++;
-            }
+    uint32_t v = 0;
+    for (char c : s) {
+        int d = c >= '0' && c <= '9' ? c - '0'
+                : c >= 'a' && c <= 'f' ? c - 'a' + 10
+                : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+        if (d < 0) {
+            return false;
         }
-        return n;
+        v = v * 16 + (uint32_t)d;
     }
-    return std::min(Count(d.key), d.target);
+    *out = v;
+    return true;
 }
 
-void ShowToast(int def)
+// At most n bytes, without cutting a UTF-8 character in half
+std::string Clip(std::string s, size_t n)
 {
-    if (g_popups) {
-        g_pending.push_back({ def, 0 });
+    if (s.size() <= n) {
+        return s;
     }
+    size_t k = n;
+    while (k > 0 && ((unsigned char)s[k] & 0xC0) == 0x80) {
+        k--;
+    }
+    s.resize(k);
+    return s;
 }
 
-// Unlocks whatever has just been reached
-void CheckLocked()
+std::string Str(const json &j, const char *key, size_t max)
 {
-    bool again = true;
-    while (again) {
-        again = false;
-        for (int i = 0; i < kDefCount; i++) {
-            const Def &d = kDefs[i];
-            if (g_unlocked.count(d.id) || Progress(d) < Target(d)) {
-                continue;
-            }
-            g_unlocked[d.id] = (int64_t)time(NULL);
-            g_dirty = true;
-            ShowToast(i);
-            again = true; // Completionist may now be reached
+    if (j.is_object() && j.contains(key) && j[key].is_string()) {
+        return Clip(j[key].get<std::string>(), max);
+    }
+    return "";
+}
+
+// Adds one pack's achievements to `games`. Returns how many were added, or
+// -1 if it isn't a usable pack. Pack files come from other people, so
+// every value is checked and limited.
+int ParsePackInto(const std::string &text, uint32_t file_tid, bool mine,
+                  std::map<uint32_t, Game> &games)
+{
+    json j = json::parse(text, nullptr, false);
+    if (!j.is_object() || !j.contains("achievements") || !j["achievements"].is_array()) {
+        return -1;
+    }
+    uint32_t tid = file_tid;
+    if (j.contains("title_id") && j["title_id"].is_string()) {
+        uint32_t t;
+        if (ParseHexId(j["title_id"].get<std::string>(), &t)) {
+            tid = t;
         }
     }
+    if (!tid) {
+        return -1;
+    }
+    Game &g = games[tid];
+    std::string gname = Str(j, "game", 80);
+    if (g.name.empty() && !gname.empty()) {
+        g.name = gname;
+    }
+    std::string author = mine ? "" : Str(j, "author", 60);
+    if (!author.empty() &&
+        std::find(g.authors.begin(), g.authors.end(), author) == g.authors.end()) {
+        g.authors.push_back(author);
+    }
+    std::set<std::string> seen;
+    for (auto &a : g.list) {
+        seen.insert(a.id);
+    }
+    int added = 0, idx = 0;
+    for (auto &e : j["achievements"]) {
+        if (idx++ >= 500 || g.list.size() >= 500) {
+            break;
+        }
+        if (!e.is_object()) {
+            continue;
+        }
+        AchievementInfo a;
+        a.name = Str(e, "name", 80);
+        if (a.name.empty()) {
+            continue;
+        }
+        a.id = Str(e, "id", 40);
+        if (a.id.empty()) {
+            a.id = "n" + std::to_string(idx);
+        }
+        if (!seen.insert(a.id).second) {
+            continue;
+        }
+        a.desc = Str(e, "description", 300);
+        a.group = Str(e, "group", 40);
+        a.points = 10;
+        if (e.contains("points") && e["points"].is_number_integer()) {
+            a.points = (int)std::clamp<int64_t>(e["points"].get<int64_t>(), 0, 1000);
+        }
+        a.secret = e.contains("secret") && e["secret"].is_boolean() && e["secret"].get<bool>();
+        a.mine = mine;
+        g.list.push_back(std::move(a));
+        added++;
+    }
+    return added;
 }
 
-void Bump(const char *key, int64_t by = 1)
+bool ReadFile(const fs::path &p, std::string &out, size_t max)
 {
-    g_ctr[key] += by;
-    g_dirty = true;
-    CheckLocked();
+    std::error_code ec;
+    auto sz = fs::file_size(p, ec);
+    if (ec || sz > max) {
+        return false;
+    }
+    std::ifstream f(p, std::ios::binary);
+    if (!f) {
+        return false;
+    }
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    out = ss.str();
+    return true;
+}
+
+void LoadPacksLocked()
+{
+    g_games.clear();
+    if (g_packs_dir.empty()) {
+        return;
+    }
+    std::error_code ec;
+    std::vector<fs::path> files;
+    for (auto &de : fs::directory_iterator(fs::u8path(g_packs_dir), ec)) {
+        if (!de.is_regular_file(ec)) {
+            continue;
+        }
+        std::string ext = de.path().extension().u8string();
+        for (auto &c : ext) {
+            c = (char)tolower((unsigned char)c);
+        }
+        if (ext == ".json") {
+            files.push_back(de.path());
+        }
+    }
+    // Your own come after the packs, so they list last
+    auto is_mine = [](const fs::path &p) {
+        std::string s = p.stem().u8string();
+        return s.size() > 5 && s.compare(s.size() - 5, 5, "-mine") == 0;
+    };
+    std::sort(files.begin(), files.end(), [&](const fs::path &a, const fs::path &b) {
+        bool ma = is_mine(a), mb = is_mine(b);
+        return ma != mb ? mb : a < b;
+    });
+    for (auto &p : files) {
+        std::string stem = p.stem().u8string();
+        uint32_t tid = 0;
+        // 4D530004.json, 4D530004-mine.json, 4D530004 something.json
+        ParseHexId(stem.substr(0, std::min<size_t>(8, stem.size())), &tid);
+        bool mine = stem.size() > 5 && stem.compare(stem.size() - 5, 5, "-mine") == 0;
+        std::string text;
+        if (ReadFile(p, text, 1 << 20)) {
+            ParsePackInto(text, tid, mine, g_games);
+        }
+    }
+    for (auto it = g_games.begin(); it != g_games.end();) {
+        it = it->second.list.empty() ? g_games.erase(it) : std::next(it);
+    }
 }
 
 // ---- Saving ----
@@ -213,10 +261,14 @@ void SaveLocked()
         return;
     }
     json j;
-    j["unlocked"] = g_unlocked;
-    j["counters"] = g_ctr;
-    j["titles"] = std::vector<uint32_t>(g_titles.begin(), g_titles.end());
-    j["tabs"] = std::vector<int>(g_tabs.begin(), g_tabs.end());
+    j["version"] = 2;
+    json done = json::object();
+    for (auto &[tid, m] : g_done) {
+        if (!m.empty()) {
+            done[HexId(tid)] = m;
+        }
+    }
+    j["done"] = done;
     j["popups"] = g_popups;
     if (!g_ra_token.empty()) {
         j["retroachievements"] = { { "user", g_ra.user }, { "token", g_ra_token } };
@@ -238,13 +290,95 @@ void SaveLocked()
     }
 }
 
+void ShowToast(const std::string &name, int points)
+{
+    if (g_popups) {
+        g_pending.push_back({ name, points, 0 });
+    }
+}
+
+AchievementInfo *FindLocked(uint32_t tid, const std::string &id)
+{
+    auto it = g_games.find(tid);
+    if (it == g_games.end()) {
+        return nullptr;
+    }
+    for (auto &a : it->second.list) {
+        if (a.id == id) {
+            return &a;
+        }
+    }
+    return nullptr;
+}
+
+// Your own achievements live in <TITLEID>-mine.json
+fs::path MinePath(uint32_t tid)
+{
+    return fs::u8path(g_packs_dir) / fs::u8path(HexId(tid) + "-mine.json");
+}
+
+json MineRead(uint32_t tid, const std::string &game_name)
+{
+    std::string text;
+    json j;
+    if (ReadFile(MinePath(tid), text, 1 << 20)) {
+        j = json::parse(text, nullptr, false);
+    }
+    if (!j.is_object() || !j.contains("achievements") || !j["achievements"].is_array()) {
+        j = json::object();
+        j["achievements"] = json::array();
+    }
+    j["format"] = 1;
+    j["title_id"] = HexId(tid);
+    if (!game_name.empty()) {
+        j["game"] = Clip(game_name, 80);
+    }
+    j["author"] = "me";
+    return j;
+}
+
+bool MineWrite(uint32_t tid, const json &j)
+{
+    std::error_code ec;
+    fs::create_directories(fs::u8path(g_packs_dir), ec);
+    fs::path p = MinePath(tid);
+    fs::path tmp = p;
+    tmp += ".tmp";
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        if (!f) {
+            return false;
+        }
+        f << j.dump(1);
+        if (!f.good()) {
+            return false;
+        }
+    }
+    fs::remove(p, ec);
+    fs::rename(tmp, p, ec);
+    return !ec;
+}
+
+json MineEntry(const std::string &id, const std::string &name, const std::string &desc,
+               int points, const std::string &group)
+{
+    json e = { { "id", id }, { "name", Clip(name, 80) }, { "description", Clip(desc, 300) },
+               { "points", std::clamp(points, 0, 1000) } };
+    if (!group.empty()) {
+        e["group"] = Clip(group, 40);
+    }
+    return e;
+}
+
 } // namespace
 
-void AchievementsLoad(const std::string &path)
+void AchievementsLoad(const std::string &progress_path, const std::string &packs_dir)
 {
     std::lock_guard<std::mutex> lk(g_lock);
-    g_path = path;
-    std::ifstream f(path, std::ios::binary);
+    g_path = progress_path;
+    g_packs_dir = packs_dir;
+    LoadPacksLocked();
+    std::ifstream f(progress_path, std::ios::binary);
     if (!f) {
         return;
     }
@@ -253,31 +387,17 @@ void AchievementsLoad(const std::string &path)
         return;
     }
     try {
-        if (j.contains("unlocked") && j["unlocked"].is_object()) {
-            for (auto &kv : j["unlocked"].items()) {
-                if (kv.value().is_number_integer()) {
-                    g_unlocked[kv.key()] = kv.value().get<int64_t>();
+        // Version 1 had built-in achievements ("unlocked", "counters"): dropped
+        if (j.contains("done") && j["done"].is_object()) {
+            for (auto &g : j["done"].items()) {
+                uint32_t tid;
+                if (!g.value().is_object() || !ParseHexId(g.key(), &tid)) {
+                    continue;
                 }
-            }
-        }
-        if (j.contains("counters") && j["counters"].is_object()) {
-            for (auto &kv : j["counters"].items()) {
-                if (kv.value().is_number_integer()) {
-                    g_ctr[kv.key()] = kv.value().get<int64_t>();
-                }
-            }
-        }
-        if (j.contains("titles") && j["titles"].is_array()) {
-            for (auto &v : j["titles"]) {
-                if (v.is_number_unsigned()) {
-                    g_titles.insert(v.get<uint32_t>());
-                }
-            }
-        }
-        if (j.contains("tabs") && j["tabs"].is_array()) {
-            for (auto &v : j["tabs"]) {
-                if (v.is_number_integer()) {
-                    g_tabs.insert(v.get<int>());
+                for (auto &kv : g.value().items()) {
+                    if (kv.value().is_number_integer()) {
+                        g_done[tid][kv.key()] = kv.value().get<int64_t>();
+                    }
                 }
             }
         }
@@ -298,6 +418,12 @@ void AchievementsLoad(const std::string &path)
     }
 }
 
+void AchievementsReloadPacks(void)
+{
+    std::lock_guard<std::mutex> lk(g_lock);
+    LoadPacksLocked();
+}
+
 void AchievementsSave(void)
 {
     std::lock_guard<std::mutex> lk(g_lock);
@@ -314,97 +440,9 @@ void AchievementsShutdown(void)
     AchievementsSave();
 }
 
-void AchievementsEvent(AchEvent e, uint32_t arg)
+void AchievementsUpdate(void)
 {
     std::lock_guard<std::mutex> lk(g_lock);
-    switch (e) {
-    case kAchLaunch: {
-        g_titles.insert(arg);
-        time_t now = time(NULL);
-        struct tm lt;
-#ifdef _WIN32
-        localtime_s(&lt, &now);
-#else
-        localtime_r(&now, &lt);
-#endif
-        if (lt.tm_hour < 5) {
-            g_ctr["night"] = 1;
-        }
-        Bump("launches");
-        break;
-    }
-    case kAchSaveState:
-        Bump("states");
-        break;
-    case kAchQuickSave:
-        Bump("quick_saves");
-        break;
-    case kAchQuickLoad:
-        Bump("quick_loads");
-        break;
-    case kAchBackup:
-        Bump("backups");
-        break;
-    case kAchHomebrew:
-        Bump("homebrew");
-        break;
-    case kAchDriveEdit:
-        Bump("drive_edits");
-        break;
-    case kAchSixtyFps:
-        Bump("sixty");
-        break;
-    case kAchPatches:
-        Bump("patches");
-        break;
-    case kAchInsigniaSetup:
-        Bump("insignia_setup");
-        break;
-    case kAchOnlinePlay:
-        Bump("online");
-        break;
-    case kAchMouse:
-        Bump("mouse");
-        break;
-    case kAchKeyboard:
-        Bump("osk");
-        break;
-    case kAchCollapse:
-        Bump("collapse");
-        break;
-    case kAchTab:
-        if (g_tabs.insert((int)arg).second) {
-            g_dirty = true;
-            CheckLocked();
-        }
-        break;
-    }
-}
-
-void AchievementsSetStat(const char *key, int64_t value)
-{
-    std::lock_guard<std::mutex> lk(g_lock);
-    auto it = g_ctr.find(key);
-    if (it == g_ctr.end() || value > it->second) {
-        g_ctr[key] = value;
-        g_dirty = true;
-        CheckLocked();
-    }
-}
-
-void AchievementsUpdate(bool filtering_crt, const char *language)
-{
-    std::lock_guard<std::mutex> lk(g_lock);
-    if (filtering_crt && Count("crt") == 0) {
-        g_ctr["crt"] = 1;
-        g_dirty = true;
-        CheckLocked();
-    }
-    if (language && language[0] && strcmp(language, "en") && Count("lang") == 0) {
-        g_ctr["lang"] = 1;
-        g_dirty = true;
-        CheckLocked();
-    }
     // Save a little after something changes
     double now = ImGui::GetTime();
     if (g_dirty && now - g_last_save > 5.0) {
@@ -413,57 +451,150 @@ void AchievementsUpdate(bool filtering_crt, const char *language)
     }
 }
 
-int AchievementCount(void)
-{
-    return kDefCount;
-}
-
-AchievementInfo AchievementAt(int i)
+std::vector<uint32_t> AchievementsGames(void)
 {
     std::lock_guard<std::mutex> lk(g_lock);
-    i = std::clamp(i, 0, kDefCount - 1);
-    const Def &d = kDefs[i];
-    auto it = g_unlocked.find(d.id);
-    AchievementInfo a;
-    a.id = d.id;
-    a.name = d.name;
-    a.desc = d.desc;
-    a.category = d.category;
-    a.points = d.points;
-    a.target = Target(d);
-    a.unlocked = it != g_unlocked.end();
-    a.unlocked_at = a.unlocked ? it->second : 0;
-    a.progress = a.unlocked ? a.target : Progress(d);
+    std::vector<uint32_t> v;
+    for (auto &[tid, g] : g_games) {
+        v.push_back(tid);
+    }
+    return v;
+}
+
+std::string AchievementsGameName(uint32_t tid)
+{
+    std::lock_guard<std::mutex> lk(g_lock);
+    auto it = g_games.find(tid);
+    return it == g_games.end() ? "" : it->second.name;
+}
+
+std::string AchievementsAuthors(uint32_t tid)
+{
+    std::lock_guard<std::mutex> lk(g_lock);
+    auto it = g_games.find(tid);
+    std::string s;
+    if (it != g_games.end()) {
+        for (auto &a : it->second.authors) {
+            s += (s.empty() ? "" : ", ") + a;
+        }
+    }
+    return s;
+}
+
+int AchievementCount(uint32_t tid)
+{
+    std::lock_guard<std::mutex> lk(g_lock);
+    auto it = g_games.find(tid);
+    return it == g_games.end() ? 0 : (int)it->second.list.size();
+}
+
+AchievementInfo AchievementAt(uint32_t tid, int i)
+{
+    std::lock_guard<std::mutex> lk(g_lock);
+    auto it = g_games.find(tid);
+    if (it == g_games.end() || i < 0 || i >= (int)it->second.list.size()) {
+        return AchievementInfo();
+    }
+    AchievementInfo a = it->second.list[i];
+    auto d = g_done.find(tid);
+    if (d != g_done.end()) {
+        auto k = d->second.find(a.id);
+        if (k != d->second.end()) {
+            a.done = true;
+            a.done_at = k->second;
+        }
+    }
     return a;
 }
 
-int AchievementsUnlocked(void)
+namespace {
+void CountFor(uint32_t tid, int *done, int *pts, int *pts_total, int *count)
+{
+    auto it = g_games.find(tid);
+    if (it == g_games.end()) {
+        return;
+    }
+    auto d = g_done.find(tid);
+    for (auto &a : it->second.list) {
+        bool is_done = d != g_done.end() && d->second.count(a.id);
+        *done += is_done ? 1 : 0;
+        *pts += is_done ? a.points : 0;
+        *pts_total += a.points;
+        *count += 1;
+    }
+}
+} // namespace
+
+int AchievementsDoneFor(uint32_t tid)
 {
     std::lock_guard<std::mutex> lk(g_lock);
-    int n = 0;
-    for (int i = 0; i < kDefCount; i++) {
-        n += g_unlocked.count(kDefs[i].id) ? 1 : 0;
-    }
-    return n;
+    int d = 0, p = 0, pt = 0, c = 0;
+    CountFor(tid, &d, &p, &pt, &c);
+    return d;
 }
 
-int AchievementsPoints(void)
+int AchievementsPointsFor(uint32_t tid)
 {
     std::lock_guard<std::mutex> lk(g_lock);
-    int n = 0;
-    for (int i = 0; i < kDefCount; i++) {
-        n += g_unlocked.count(kDefs[i].id) ? kDefs[i].points : 0;
-    }
-    return n;
+    int d = 0, p = 0, pt = 0, c = 0;
+    CountFor(tid, &d, &p, &pt, &c);
+    return p;
 }
 
-int AchievementsPointsTotal(void)
+int AchievementsPointsTotalFor(uint32_t tid)
 {
-    int n = 0;
-    for (int i = 0; i < kDefCount; i++) {
-        n += kDefs[i].points;
+    std::lock_guard<std::mutex> lk(g_lock);
+    int d = 0, p = 0, pt = 0, c = 0;
+    CountFor(tid, &d, &p, &pt, &c);
+    return pt;
+}
+
+int AchievementsDoneAll(void)
+{
+    std::lock_guard<std::mutex> lk(g_lock);
+    int d = 0, p = 0, pt = 0, c = 0;
+    for (auto &[tid, g] : g_games) {
+        CountFor(tid, &d, &p, &pt, &c);
     }
-    return n;
+    return d;
+}
+
+int AchievementsCountAll(void)
+{
+    std::lock_guard<std::mutex> lk(g_lock);
+    int d = 0, p = 0, pt = 0, c = 0;
+    for (auto &[tid, g] : g_games) {
+        CountFor(tid, &d, &p, &pt, &c);
+    }
+    return c;
+}
+
+int AchievementsPointsAll(void)
+{
+    std::lock_guard<std::mutex> lk(g_lock);
+    int d = 0, p = 0, pt = 0, c = 0;
+    for (auto &[tid, g] : g_games) {
+        CountFor(tid, &d, &p, &pt, &c);
+    }
+    return p;
+}
+
+void AchievementsSet(uint32_t tid, const std::string &id, bool done)
+{
+    std::lock_guard<std::mutex> lk(g_lock);
+    AchievementInfo *a = FindLocked(tid, id);
+    if (!a) {
+        return;
+    }
+    auto &m = g_done[tid];
+    if (done && !m.count(id)) {
+        m[id] = (int64_t)time(NULL);
+        g_dirty = true;
+        ShowToast(a->name, a->points);
+    } else if (!done && m.count(id)) {
+        m.erase(id);
+        g_dirty = true;
+    }
 }
 
 bool AchievementsPopups(void)
@@ -481,10 +612,107 @@ void AchievementsSetPopups(bool on)
     }
 }
 
-void AchievementsPreviewToast(int i)
+void AchievementsPreviewToast(uint32_t tid)
 {
     std::lock_guard<std::mutex> lk(g_lock);
-    g_pending.push_back({ std::clamp(i, 0, kDefCount - 1), 0 });
+    auto it = g_games.find(tid);
+    if (it != g_games.end() && !it->second.list.empty()) {
+        g_pending.push_back({ it->second.list[0].name, it->second.list[0].points, 0 });
+    } else {
+        g_pending.push_back({ tr("Example achievement"), 10, 0 });
+    }
+}
+
+std::string AchievementsPacksDir(void)
+{
+    std::lock_guard<std::mutex> lk(g_lock);
+    std::error_code ec;
+    if (!g_packs_dir.empty()) {
+        fs::create_directories(fs::u8path(g_packs_dir), ec);
+    }
+    return g_packs_dir;
+}
+
+int AchievementsParsePack(const std::string &text, uint32_t file_tid)
+{
+    std::map<uint32_t, Game> tmp;
+    return ParsePackInto(text, file_tid, false, tmp);
+}
+
+std::string AchievementsAddMine(uint32_t tid, const std::string &game_name,
+                                const std::string &name, const std::string &desc, int points,
+                                const std::string &group)
+{
+    if (name.empty() || g_packs_dir.empty()) {
+        return "";
+    }
+    std::lock_guard<std::mutex> lk(g_lock);
+    json j = MineRead(tid, game_name);
+    int n = 0;
+    for (auto &e : j["achievements"]) {
+        std::string id = e.is_object() ? Str(e, "id", 40) : "";
+        if (id.rfind("mine-", 0) == 0) {
+            n = std::max(n, atoi(id.c_str() + 5));
+        }
+    }
+    std::string id = "mine-" + std::to_string(n + 1);
+    j["achievements"].push_back(MineEntry(id, name, desc, points, group));
+    if (!MineWrite(tid, j)) {
+        return "";
+    }
+    LoadPacksLocked();
+    return id;
+}
+
+bool AchievementsEditMine(uint32_t tid, const std::string &id, const std::string &name,
+                          const std::string &desc, int points, const std::string &group)
+{
+    if (name.empty() || g_packs_dir.empty()) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lk(g_lock);
+    json j = MineRead(tid, "");
+    bool found = false;
+    for (auto &e : j["achievements"]) {
+        if (e.is_object() && Str(e, "id", 40) == id) {
+            e = MineEntry(id, name, desc, points, group);
+            found = true;
+        }
+    }
+    if (!found || !MineWrite(tid, j)) {
+        return false;
+    }
+    LoadPacksLocked();
+    return true;
+}
+
+bool AchievementsDeleteMine(uint32_t tid, const std::string &id)
+{
+    if (g_packs_dir.empty()) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lk(g_lock);
+    json j = MineRead(tid, "");
+    json keep = json::array();
+    bool found = false;
+    for (auto &e : j["achievements"]) {
+        if (e.is_object() && Str(e, "id", 40) == id) {
+            found = true;
+        } else {
+            keep.push_back(e);
+        }
+    }
+    if (!found) {
+        return false;
+    }
+    j["achievements"] = keep;
+    if (!MineWrite(tid, j)) {
+        return false;
+    }
+    g_done[tid].erase(id);
+    g_dirty = true;
+    LoadPacksLocked();
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -568,7 +796,6 @@ void AchievementsDraw(void)
     float y = vp->WorkPos.y + vp->WorkSize.y - margin - h; // newest at the bottom
     for (int idx = (int)g_toasts.size() - 1; idx >= 0; idx--) {
         const Toast &t = g_toasts[idx];
-        const Def &d = kDefs[t.def];
         float age = (float)(now - t.t0);
         float k = 1.0f; // 0 hidden .. 1 shown
         if (anim) {
@@ -615,13 +842,15 @@ void AchievementsDraw(void)
         }
         float hs = small->FontSize * 0.78f;
         dl->AddText(small, hs, ImVec2(tx, a.y + 12 * s), WithAlpha(th.accent, k), head.c_str());
-        std::string name = tr(d.name);
+        std::string name = t.name;
         ImVec4 clip(tx, a.y, tx + max_w, b.y);
         dl->AddText(font, font->FontSize, ImVec2(tx, a.y + 12 * s + hs + 4 * s),
                     WithAlpha(th.text, k), name.c_str(), nullptr, 0, &clip);
-        std::string pts = std::string("+") + std::to_string(d.points) + "  " + tr("points");
-        dl->AddText(small, hs, ImVec2(tx, b.y - 12 * s - hs), WithAlpha(th.dim, k),
-                    pts.c_str());
+        if (t.points > 0) {
+            std::string pts = std::string("+") + std::to_string(t.points) + "  " + tr("points");
+            dl->AddText(small, hs, ImVec2(tx, b.y - 12 * s - hs), WithAlpha(th.dim, k),
+                        pts.c_str());
+        }
         y -= h + gap;
     }
 }

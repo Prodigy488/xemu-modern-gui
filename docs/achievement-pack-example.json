@@ -1,0 +1,30 @@
+{
+  "format": 1,
+  "title_id": "00000000",
+  "game": "Name of the game",
+  "author": "Your name",
+  "achievements": [
+    {
+      "id": "first_mission",
+      "name": "First Steps",
+      "description": "Finish the first mission.",
+      "points": 10,
+      "group": "Story"
+    },
+    {
+      "id": "hard_mode",
+      "name": "The Hard Way",
+      "description": "Finish a mission on the hardest difficulty.",
+      "points": 50,
+      "group": "Challenges"
+    },
+    {
+      "id": "hidden_spot",
+      "name": "Off the Map",
+      "description": "Find the hidden spot.",
+      "points": 25,
+      "group": "Challenges",
+      "secret": true
+    }
+  ]
+}

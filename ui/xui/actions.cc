@@ -17,7 +17,6 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 #include "common.hh"
-#include "achievements.hh"
 #include "actions.hh"
 #include "misc.hh"
 #include "xemu-hud.h"
@@ -119,7 +118,6 @@ void ActionActivateBoundSnapshot(int slot, bool save)
     Error *err = NULL;
     if (save) {
         xemu_snapshots_save(snapshot_name, &err);
-        AchievementsEvent(kAchSaveState);
     } else {
         ActionLoadSnapshotChecked(snapshot_name);
     }

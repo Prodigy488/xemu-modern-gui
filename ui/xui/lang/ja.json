@@ -1191,5 +1191,8 @@
  "Mouse is on for the keyboard. You can turn it off under Mouse and keyboard.": "キーボード用にマウスをオンにしました。「マウスとキーボード」でオフにできます。",
  "Keyboard, mouse and controller": "キーボード、マウス、コントローラー",
  "This port hears the keyboard, the mouse and every connected controller at once, so there is nothing to switch. Controllers on other ports still work there too.": "このポートはキーボード、マウス、接続中のすべてのコントローラーを同時に受け付けるので、切り替えは不要です。他のポートのコントローラーもここで使えます。",
- "Mouse captured for play. F3 lets go, a click takes it back.": "プレイ用にマウスを取り込みました。F3 で解除、クリックで再び取り込みます。"
+ "Mouse captured for play. F3 lets go, a click takes it back.": "プレイ用にマウスを取り込みました。F3 で解除、クリックで再び取り込みます。",
+ "Controller ports": "コントローラーポート",
+ "Port %d": "ポート %d",
+ "Pick \"Keyboard, mouse and controller\" to play with the keyboard, the mouse and your controllers together.": "「キーボード、マウス、コントローラー」を選ぶと、キーボード・マウス・コントローラーをまとめて使えます。"
 }

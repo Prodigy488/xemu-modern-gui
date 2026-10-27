@@ -1191,5 +1191,8 @@
  "Mouse is on for the keyboard. You can turn it off under Mouse and keyboard.": "키보드에 마우스를 켰습니다. 마우스와 키보드 항목에서 끌 수 있습니다.",
  "Keyboard, mouse and controller": "키보드, 마우스, 컨트롤러",
  "This port hears the keyboard, the mouse and every connected controller at once, so there is nothing to switch. Controllers on other ports still work there too.": "이 포트는 키보드, 마우스, 연결된 모든 컨트롤러를 동시에 받으므로 전환할 필요가 없습니다. 다른 포트의 컨트롤러도 여기서 작동합니다.",
- "Mouse captured for play. F3 lets go, a click takes it back.": "게임용으로 마우스를 잡았습니다. F3으로 놓고, 클릭하면 다시 잡습니다."
+ "Mouse captured for play. F3 lets go, a click takes it back.": "게임용으로 마우스를 잡았습니다. F3으로 놓고, 클릭하면 다시 잡습니다.",
+ "Controller ports": "컨트롤러 포트",
+ "Port %d": "포트 %d",
+ "Pick \"Keyboard, mouse and controller\" to play with the keyboard, the mouse and your controllers together.": "'키보드, 마우스, 컨트롤러'를 고르면 키보드, 마우스, 컨트롤러를 함께 쓸 수 있습니다."
 }

@@ -1191,5 +1191,8 @@
  "Mouse is on for the keyboard. You can turn it off under Mouse and keyboard.": "已为键盘开启鼠标。可在“鼠标和键盘”中关闭。",
  "Keyboard, mouse and controller": "键盘、鼠标和手柄",
  "This port hears the keyboard, the mouse and every connected controller at once, so there is nothing to switch. Controllers on other ports still work there too.": "此端口同时接收键盘、鼠标和所有已连接的手柄，无需切换。其他端口上的手柄在此处同样有效。",
- "Mouse captured for play. F3 lets go, a click takes it back.": "已捕获鼠标用于游戏。按 F3 释放，点击可重新捕获。"
+ "Mouse captured for play. F3 lets go, a click takes it back.": "已捕获鼠标用于游戏。按 F3 释放，点击可重新捕获。",
+ "Controller ports": "手柄端口",
+ "Port %d": "端口 %d",
+ "Pick \"Keyboard, mouse and controller\" to play with the keyboard, the mouse and your controllers together.": "选择“键盘、鼠标和手柄”，即可同时使用键盘、鼠标和手柄游玩。"
 }

@@ -9536,6 +9536,18 @@ void DrawDashSettingsTab()
                      tr_items("Keep playing\0" "Quieter\0" "Mute\0"));
         ImGui::Dummy(ImVec2(0, 14 * s));
         DashLabel(tr("Controller"));
+        DashTitle(tr("Controller ports"));
+        for (int port = 0; port < 4; port++) {
+            ImGui::PushID(port);
+            label(string_format(tr("Port %d"), port + 1).c_str());
+            InputPortCombo("##port", port);
+            ImGui::PopID();
+        }
+        ImGui::Checkbox(tr("Auto-bind controllers"), &g_config.input.auto_bind);
+        ImGui::TextDisabled("%s", tr("Pick \"Keyboard, mouse and controller\" to play with the keyboard, "
+                                    "the mouse and your controllers together."));
+        ImGui::Dummy(ImVec2(0, 14 * s));
+        DashLabel(tr("Controller"));
         DashTitle(tr("Rumble and quick saves"));
         label(tr("Rumble strength"));
         {

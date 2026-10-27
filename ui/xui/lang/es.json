@@ -1191,5 +1191,8 @@
  "Mouse is on for the keyboard. You can turn it off under Mouse and keyboard.": "El ratón está activado para el teclado. Puedes desactivarlo en Ratón y teclado.",
  "Keyboard, mouse and controller": "Teclado, ratón y mando",
  "This port hears the keyboard, the mouse and every connected controller at once, so there is nothing to switch. Controllers on other ports still work there too.": "Este puerto recibe el teclado, el ratón y todos los mandos conectados a la vez, así que no hay que cambiar nada. Los mandos de otros puertos también siguen funcionando allí.",
- "Mouse captured for play. F3 lets go, a click takes it back.": "Ratón capturado para jugar. F3 lo suelta; un clic lo recupera."
+ "Mouse captured for play. F3 lets go, a click takes it back.": "Ratón capturado para jugar. F3 lo suelta; un clic lo recupera.",
+ "Controller ports": "Puertos de mando",
+ "Port %d": "Puerto %d",
+ "Pick \"Keyboard, mouse and controller\" to play with the keyboard, the mouse and your controllers together.": "Elige «Teclado, ratón y mando» para jugar con el teclado, el ratón y tus mandos a la vez."
 }

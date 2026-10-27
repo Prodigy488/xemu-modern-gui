@@ -1191,5 +1191,8 @@
  "Mouse is on for the keyboard. You can turn it off under Mouse and keyboard.": "Die Maus ist für die Tastatur eingeschaltet. Unter Maus und Tastatur lässt sie sich ausschalten.",
  "Keyboard, mouse and controller": "Tastatur, Maus und Controller",
  "This port hears the keyboard, the mouse and every connected controller at once, so there is nothing to switch. Controllers on other ports still work there too.": "Dieser Anschluss hört Tastatur, Maus und alle verbundenen Controller gleichzeitig, es muss also nichts umgeschaltet werden. Controller an anderen Anschlüssen funktionieren dort ebenfalls.",
- "Mouse captured for play. F3 lets go, a click takes it back.": "Maus fürs Spielen erfasst. F3 gibt sie frei, ein Klick holt sie zurück."
+ "Mouse captured for play. F3 lets go, a click takes it back.": "Maus fürs Spielen erfasst. F3 gibt sie frei, ein Klick holt sie zurück.",
+ "Controller ports": "Controller-Anschlüsse",
+ "Port %d": "Anschluss %d",
+ "Pick \"Keyboard, mouse and controller\" to play with the keyboard, the mouse and your controllers together.": "Wähle „Tastatur, Maus und Controller“, um mit Tastatur, Maus und deinen Controllern zusammen zu spielen."
 }

@@ -556,3 +556,55 @@ bool AudioOutputDeviceCombo(const char *label)
     }
     return changed;
 }
+
+void InputPortCombo(const char *id, int port)
+{
+    ControllerState *bound = xemu_input_get_bound(port);
+    const char *name = tr("Not Connected");
+    if (bound) {
+        name = bound->type == INPUT_DEVICE_SDL_KEYBOARD
+                   ? tr("Keyboard, mouse and controller") : bound->name;
+    }
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (!ImGui::BeginCombo(id, name)) {
+        return;
+    }
+    if (ImGui::Selectable(tr("Not Connected"), bound == nullptr)) {
+        xemu_input_bind(port, nullptr, 1);
+        bound = nullptr;
+    }
+    ControllerState *iter;
+    QTAILQ_FOREACH(iter, &available_controllers, entry) {
+        const bool is_keyboard = iter->type == INPUT_DEVICE_SDL_KEYBOARD;
+        const bool here = bound == iter;
+        std::string label = is_keyboard ? std::string(tr("Keyboard, mouse and controller"))
+                                        : std::string(iter->name);
+        if (iter->bound >= 0 && !here) {
+            label += string_format(" (%s)", string_format(tr("Port %d"), iter->bound + 1).c_str());
+        }
+        ImGui::PushID(iter);
+        if (ImGui::Selectable(label.c_str(), here)) {
+            if (!here) {
+                xemu_input_bind(port, iter, 1);
+                if (bound == nullptr) {
+                    xemu_input_rebind_xmu(port);
+                }
+                if (is_keyboard) {
+                    // The mouse comes on with the keyboard; it can be turned
+                    // off in the mouse settings
+                    g_config.input.mouse.enabled = true;
+                    g_config.input.mouse.defaulted = true;
+                    xemu_queue_notification(tr(
+                        "Mouse is on for the keyboard. You can turn it off under Mouse and keyboard."));
+                }
+                bound = iter;
+            }
+        }
+        if (here) {
+            ImGui::SetItemDefaultFocus();
+        }
+        ImGui::PopID();
+    }
+    ImGui::EndCombo();
+}
+

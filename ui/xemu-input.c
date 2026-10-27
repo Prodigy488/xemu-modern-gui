@@ -737,25 +737,50 @@ static bool auto_switch_mouse_active(int64_t now)
            now < mouse_wheel_down_until;
 }
 
+/* Trade places: the two devices swap ports, hub and XID device, and memory
+ * cards. Nothing is plugged or unplugged, the guest just reads the other
+ * device from the same port, so it is instant and can't upset a memory card
+ * file. A device that isn't on a port has bound = -1 and no device. */
+static void auto_switch_swap(ControllerState *a, ControllerState *b)
+{
+    int bound = a->bound;
+    a->bound = b->bound;
+    b->bound = bound;
+
+    void *device = a->device;
+    a->device = b->device;
+    b->device = device;
+
+    for (int i = 0; i < 2; i++) {
+        enum peripheral_type t = a->peripheral_types[i];
+        a->peripheral_types[i] = b->peripheral_types[i];
+        b->peripheral_types[i] = t;
+        void *p = a->peripherals[i];
+        a->peripherals[i] = b->peripherals[i];
+        b->peripherals[i] = p;
+    }
+
+    if (a->bound >= 0) {
+        bound_controllers[a->bound] = a;
+    }
+    if (b->bound >= 0) {
+        bound_controllers[b->bound] = b;
+    }
+    /* Don't leave the one that stepped off rumbling */
+    a->rumble_l = a->rumble_r = b->rumble_l = b->rumble_r = 0;
+}
+
 static void auto_switch_to_keyboard(ControllerState *kbd, int64_t now)
 {
     ControllerState *pad = auto_sw.pad;
-    int port = auto_sw.port, home = auto_sw.home;
+    int port = auto_sw.port;
     auto_sw.swapped = false;
     auto_sw.pad = NULL;
     auto_sw.last_us = now;
     if (!pad || bound_controllers[port] != pad) {
         return;
     }
-    if (kbd->bound >= 0) {
-        xemu_input_bind(kbd->bound, NULL, 0);
-    }
-    xemu_input_bind(port, kbd, 0);
-    xemu_input_rebind_xmu(port);
-    if (home >= 0 && !xemu_input_get_bound(home)) {
-        xemu_input_bind(home, pad, 0);
-        xemu_input_rebind_xmu(home);
-    }
+    auto_switch_swap(kbd, pad);
     char buf[64];
     snprintf(buf, sizeof(buf), "Keyboard on port %d", port + 1);
     xemu_queue_notification(buf);
@@ -766,15 +791,7 @@ static void auto_switch_to_pad(ControllerState *kbd, ControllerState *pad,
 {
     int port = kbd->bound;
     int home = pad->bound;
-    if (home >= 0) {
-        xemu_input_bind(home, NULL, 0); /* frees the controller, unsaved */
-    }
-    xemu_input_bind(port, pad, 0);      /* the keyboard steps off */
-    xemu_input_rebind_xmu(port);
-    if (home >= 0) {
-        xemu_input_bind(home, kbd, 0);
-        xemu_input_rebind_xmu(home);
-    }
+    auto_switch_swap(kbd, pad);
     auto_sw.swapped = true;
     auto_sw.port = port;
     auto_sw.home = home;
@@ -809,7 +826,7 @@ static void xemu_input_auto_switch(void)
     if (auto_sw.swapped) {
         /* Settings were changed by hand meanwhile: stop looking after it */
         if (!auto_sw.pad || bound_controllers[auto_sw.port] != auto_sw.pad ||
-            (kbd->bound >= 0 && kbd->bound != auto_sw.home)) {
+            kbd->bound != auto_sw.home || auto_sw.pad->bound != auto_sw.port) {
             auto_sw.swapped = false;
             auto_sw.pad = NULL;
             return;
@@ -830,6 +847,13 @@ static void xemu_input_auto_switch(void)
     if (!g_config.input.auto_switch || kbd->bound < 0 ||
         now - auto_sw.last_us < AUTO_SWITCH_COOLDOWN_US) {
         return;
+    }
+    /* Only for player 1: the keyboard has to be on the first port in use,
+     * otherwise a controller already on an earlier port is player 1 */
+    for (int p = 0; p < kbd->bound; p++) {
+        if (bound_controllers[p]) {
+            return;
+        }
     }
     ControllerState *iter;
     QTAILQ_FOREACH(iter, &available_controllers, entry) {

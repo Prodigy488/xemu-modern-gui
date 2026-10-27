@@ -222,7 +222,7 @@ see the [Releases](../../releases) page.
 - **Keyboard and controller, automatically:** while the keyboard is on a
   port, moving a controller puts that controller on the port, and using the
   keyboard or mouse puts the keyboard back. It doesn't change your saved
-  ports, and there's a switch for it in Settings > Input if you'd rather
+  ports (it only applies when the keyboard is player 1), and there's a switch for it in Settings > Input if you'd rather
   keep both on their own ports.
 - **Keys and mouse for each game:** in a game's settings, "Own keyboard and
   mouse setup for this game" gives it its own keys, mouse speed and mouse

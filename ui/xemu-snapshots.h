@@ -48,6 +48,10 @@ char *xemu_get_currently_loaded_disc_path(void);
 int xemu_snapshots_list(QEMUSnapshotInfo **info, XemuSnapshotData **extra_data,
                         Error **err);
 void xemu_snapshots_load(const char *vm_name, Error **err);
+// The next load plugs the controllers in again afterwards (for resuming a
+// game; not for quick loads, which shouldn't make the game flash a
+// "controller reconnected" message)
+void xemu_snapshots_request_controller_replug(void);
 void xemu_snapshots_save(const char *vm_name, Error **err);
 void xemu_snapshots_delete(const char *vm_name, Error **err);
 

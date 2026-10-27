@@ -1190,5 +1190,6 @@
  "While the keyboard is on a port, moving a controller puts that controller on the port, and using the keyboard or mouse puts the keyboard back. Turn it off for two players on one keyboard and one controller.": "Пока клавиатура подключена к порту, движение геймпада переводит его на этот порт, а клавиатура или мышь возвращают клавиатуру. Отключите для двух игроков: один на клавиатуре, другой на геймпаде.",
  "Mouse is on for the keyboard. You can turn it off under Mouse and keyboard.": "Мышь включена для клавиатуры. Её можно отключить в разделе «Мышь и клавиатура».",
  "Keyboard, mouse and controller": "Клавиатура, мышь и геймпад",
- "This port hears the keyboard, the mouse and every connected controller at once, so there is nothing to switch. Controllers on other ports still work there too.": "Этот порт получает ввод с клавиатуры, мыши и всех подключённых геймпадов одновременно, поэтому ничего переключать не нужно. Геймпады на других портах тоже здесь работают."
+ "This port hears the keyboard, the mouse and every connected controller at once, so there is nothing to switch. Controllers on other ports still work there too.": "Этот порт получает ввод с клавиатуры, мыши и всех подключённых геймпадов одновременно, поэтому ничего переключать не нужно. Геймпады на других портах тоже здесь работают.",
+ "Mouse captured for play. F3 lets go, a click takes it back.": "Мышь захвачена для игры. F3 отпускает её, щелчок захватывает снова."
 }

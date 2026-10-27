@@ -222,7 +222,12 @@ see the [Releases](../../releases) page.
 - **Keyboard, mouse and controller together:** in Settings > Input, the
   Input Device list has a "Keyboard, mouse and controller" choice. That port
   hears the keyboard, the mouse and every connected controller at once, so
-  there is nothing to switch and no button to press first.
+  there is nothing to switch and no button to press first. The mouse is
+  captured by itself while you play (F3 lets go, a click takes it back), so
+  there is nothing to turn on in the settings either.
+- **Resuming keeps your controllers:** when you resume a game or load a saved
+  state from the library, your controllers are plugged in again so the game
+  doesn't sit on a "connect a controller" message.
 - **Keyboard and controller, automatically:** while the keyboard is on a
   port, moving a controller puts that controller on the port, and using the
   keyboard or mouse puts the keyboard back. It doesn't change your saved

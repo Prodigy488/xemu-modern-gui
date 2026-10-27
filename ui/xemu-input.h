@@ -155,6 +155,8 @@ int xemu_input_bind_keyboard(void);
 bool xemu_input_auto_switch_standby(void);
 // True when the keyboard is on a port and set to "Keyboard, mouse and controller"
 bool xemu_input_combined_active(void);
+// Plug every bound controller in again (ports with memory cards are skipped)
+void xemu_input_replug_all(void);
 
 void xemu_input_set_test_mode(int enabled);
 int xemu_input_get_test_mode(void);

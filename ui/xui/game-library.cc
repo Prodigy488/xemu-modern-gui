@@ -4483,6 +4483,7 @@ void DrawResumeWarningPopup()
         std::string name = g_resume_warn_name;
         ImGui::CloseCurrentPopup();
         RequestPreviewStop();
+        xemu_snapshots_request_controller_replug();
         ActionLoadSnapshotChecked(name.c_str());
         game_library_window.is_open = false;
     }
@@ -4930,6 +4931,7 @@ void DrawSaveStates(LibraryEntry &e, float w, int max_shown = 6)
         ImGui::PopID();
     }
     if (!load_name.empty()) {
+        xemu_snapshots_request_controller_replug();
         ActionLoadSnapshotChecked(load_name.c_str());
         game_library_window.is_open = false;
     }
@@ -5034,6 +5036,7 @@ void ResumeGame(const LibraryEntry &e, const std::string &snapshot_name)
         g_open_resume_warning = true;
     } else {
         RequestPreviewStop();
+        xemu_snapshots_request_controller_replug();
         ActionLoadSnapshotChecked(name.c_str());
         game_library_window.is_open = false;
     }

@@ -17,6 +17,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "xemu-input.h"
 #include "xemu-snapshots.h"
 #include "xemu-settings.h"
 #include "xemu-xbe.h"
@@ -238,11 +239,24 @@ char *xemu_get_currently_loaded_disc_path(void)
     return file;
 }
 
+static bool replug_pending;
+
+void xemu_snapshots_request_controller_replug(void)
+{
+    replug_pending = true;
+}
+
 void xemu_snapshots_load(const char *vm_name, Error **err)
 {
     bool vm_running = runstate_is_running();
     vm_stop(RUN_STATE_RESTORE_VM);
-    if (load_snapshot(vm_name, NULL, false, NULL, err) && vm_running) {
+    bool ok = load_snapshot(vm_name, NULL, false, NULL, err);
+    if (ok && replug_pending) {
+        /* So a resumed game sees its controllers arrive */
+        xemu_input_replug_all();
+    }
+    replug_pending = false;
+    if (ok && vm_running) {
         vm_start();
     }
 }

@@ -174,9 +174,14 @@ void PlayExtrasMouse(bool playing)
         return;
     }
     ImGuiIO &io = ImGui::GetIO();
+    /* With "Keyboard, mouse and controller" the mouse is taken as soon as
+     * you're playing, so there's nothing to turn on or click. F3 or Esc lets
+     * go and a click takes it back. */
+    static bool let_go = false;
     if (captured) {
         if (ImGui::IsKeyPressed(ImGuiKey_F3, false) ||
             ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            let_go = true;
             MouseRelease(tr("Mouse released"));
         }
         return;
@@ -184,18 +189,30 @@ void PlayExtrasMouse(bool playing)
     bool want = ImGui::IsKeyPressed(ImGuiKey_F3, false) ||
                 (ImGui::IsMouseClicked(ImGuiMouseButton_Left, false) &&
                  !io.WantCaptureMouse && !io.WantCaptureKeyboard);
-    if (!want) {
+    bool automatic = !let_go && !want && focused && xemu_input_combined_active() &&
+                     !io.WantCaptureMouse && !io.WantCaptureKeyboard;
+    if (!want && !automatic) {
         return;
+    }
+    if (want) {
+        let_go = false;
     }
     ControllerState *kbd = xemu_input_get_keyboard();
     if (!kbd || (kbd->bound < 0 && !xemu_input_auto_switch_standby())) {
-        xemu_queue_notification(
-            tr("Bind the keyboard to a controller port first (Settings > Input)"));
+        if (want) {
+            xemu_queue_notification(
+                tr("Bind the keyboard to a controller port first (Settings > Input)"));
+        }
         return;
     }
     xemu_input_mouse_set_captured(true);
     SDL_SetWindowRelativeMouseMode(w, true);
-    xemu_queue_notification(tr("Mouse captured. F3 or Esc lets go."));
+    static bool told = false;
+    if (want || !told) {
+        told = true;
+        xemu_queue_notification(automatic ? tr("Mouse captured for play. F3 lets go, a click takes it back.")
+                                          : tr("Mouse captured. F3 or Esc lets go."));
+    }
 }
 
 // ---------------------------------------------------------------------------

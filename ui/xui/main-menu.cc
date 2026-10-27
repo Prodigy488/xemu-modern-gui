@@ -383,8 +383,8 @@ void MainMenuInputView::Draw()
                         xemu_input_bind(active, iter, 1);
                     }
                     g_config.input.keyboard_with_controller = true;
+                    g_config.input.mouse.enabled = true; // nothing else to turn on
                     if (!here) {
-                        g_config.input.mouse.enabled = true;
                         xemu_queue_notification(
                             tr("Mouse is on for the keyboard. You can turn it off under Mouse and keyboard."));
                     }

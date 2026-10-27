@@ -1388,6 +1388,26 @@ void xemu_input_rebind_xmu(int port)
     }
 }
 
+/*
+ * After a saved game is loaded the game can think the controller is missing
+ * (the save may have been made while it was unplugged, or with other devices
+ * on the ports). Plugging each one in again makes the game see it arrive, as
+ * if you'd just connected it. Ports with a memory card are left alone, since
+ * its file can't be reopened straight away.
+ */
+void xemu_input_replug_all(void)
+{
+    for (int port = 0; port < 4; port++) {
+        ControllerState *c = bound_controllers[port];
+        if (!c || !c->device || c->peripherals[0] || c->peripherals[1] ||
+            c->peripheral_types[0] != PERIPHERAL_NONE ||
+            c->peripheral_types[1] != PERIPHERAL_NONE) {
+            continue;
+        }
+        xemu_input_bind(port, c, 0);
+    }
+}
+
 void xemu_input_set_test_mode(int enabled)
 {
     test_mode = enabled;

@@ -1190,5 +1190,6 @@
  "While the keyboard is on a port, moving a controller puts that controller on the port, and using the keyboard or mouse puts the keyboard back. Turn it off for two players on one keyboard and one controller.": "Tant que le clavier est sur un port, bouger une manette place cette manette sur le port, et utiliser le clavier ou la souris remet le clavier. Désactivez pour deux joueurs avec un clavier et une manette.",
  "Mouse is on for the keyboard. You can turn it off under Mouse and keyboard.": "La souris est activée avec le clavier. Vous pouvez la désactiver dans Souris et clavier.",
  "Keyboard, mouse and controller": "Clavier, souris et manette",
- "This port hears the keyboard, the mouse and every connected controller at once, so there is nothing to switch. Controllers on other ports still work there too.": "Ce port reçoit le clavier, la souris et toutes les manettes connectées en même temps, donc rien à basculer. Les manettes des autres ports y fonctionnent aussi."
+ "This port hears the keyboard, the mouse and every connected controller at once, so there is nothing to switch. Controllers on other ports still work there too.": "Ce port reçoit le clavier, la souris et toutes les manettes connectées en même temps, donc rien à basculer. Les manettes des autres ports y fonctionnent aussi.",
+ "Mouse captured for play. F3 lets go, a click takes it back.": "Souris capturée pour jouer. F3 la libère, un clic la reprend."
 }

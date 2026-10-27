@@ -31,6 +31,7 @@
 #include "xemu-input.h"
 #include "xemu-notifications.h"
 #include "xemu-settings.h"
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -357,6 +358,124 @@ void xemu_save_peripheral_settings(int player_index, int peripheral_index,
         peripheral_parameter == NULL ? "" : peripheral_parameter);
 }
 
+/* Mouse as a controller: motion adds up here (main thread only) until the
+ * keyboard's state is next updated */
+static bool mouse_captured;
+static float mouse_dx, mouse_dy;
+static uint32_t mouse_buttons; /* bit n = SDL button n (1 left, 2 middle, 3 right) */
+static float mouse_stick_x, mouse_stick_y; /* -1..1, smoothed */
+static int64_t mouse_consumed_ts;
+
+void xemu_input_mouse_set_captured(bool captured)
+{
+    if (mouse_captured == captured) {
+        return;
+    }
+    mouse_captured = captured;
+    mouse_dx = mouse_dy = 0;
+    mouse_buttons = 0;
+    mouse_stick_x = mouse_stick_y = 0;
+    mouse_consumed_ts = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
+}
+
+bool xemu_input_mouse_is_captured(void)
+{
+    return mouse_captured;
+}
+
+ControllerState *xemu_input_get_keyboard(void)
+{
+    ControllerState *iter;
+    QTAILQ_FOREACH(iter, &available_controllers, entry) {
+        if (iter->type == INPUT_DEVICE_SDL_KEYBOARD) {
+            return iter;
+        }
+    }
+    return NULL;
+}
+
+int xemu_input_bind_keyboard(void)
+{
+    ControllerState *kbd = xemu_input_get_keyboard();
+    if (!kbd) {
+        return -1;
+    }
+    if (kbd->bound >= 0) {
+        return kbd->bound;
+    }
+    for (int port = 0; port < 4; port++) {
+        if (!xemu_input_get_bound(port)) {
+            xemu_input_bind(port, kbd, 1);
+            xemu_input_rebind_xmu(port);
+            return port;
+        }
+    }
+    return -1;
+}
+
+static float mouse_clamp1(float v)
+{
+    return v < -1.0f ? -1.0f : (v > 1.0f ? 1.0f : v);
+}
+
+static int16_t mouse_axis(float v)
+{
+    return (int16_t)(v * 32767.0f);
+}
+
+/* Turn the mouse's movement since last time into a stick position. Games
+ * ignore the middle of a stick (the dead zone), so a slow movement starts
+ * just outside it instead of doing nothing. */
+static void xemu_input_apply_mouse(ControllerState *state)
+{
+    int64_t now = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
+    int64_t dt = now - mouse_consumed_ts;
+    if (dt >= 8000) {
+        float secs = dt / 1000000.0f;
+        float sens = g_config.input.mouse.sensitivity;
+        sens = sens < 0.1f ? 0.1f : (sens > 5.0f ? 5.0f : sens);
+        /* Full tilt at about 1200 pixels a second at sensitivity 1 */
+        float full = 1200.0f / sens;
+        float nx = mouse_clamp1(mouse_dx / secs / full);
+        float ny = mouse_clamp1(mouse_dy / secs / full);
+        mouse_dx = mouse_dy = 0;
+        mouse_consumed_ts = now;
+        /* A little smoothing so a 60 Hz game doesn't see every jitter */
+        mouse_stick_x = mouse_stick_x * 0.35f + nx * 0.65f;
+        mouse_stick_y = mouse_stick_y * 0.35f + ny * 0.65f;
+    }
+    const float dz = 0.27f;
+    float ox = 0, oy = 0;
+    if (fabsf(mouse_stick_x) > 0.01f) {
+        ox = (mouse_stick_x < 0 ? -1.0f : 1.0f) * (dz + (1 - dz) * fabsf(mouse_stick_x));
+    }
+    if (fabsf(mouse_stick_y) > 0.01f) {
+        oy = (mouse_stick_y < 0 ? -1.0f : 1.0f) * (dz + (1 - dz) * fabsf(mouse_stick_y));
+    }
+    /* Mouse down is stick down (negative) */
+    oy = g_config.input.mouse.invert_y ? oy : -oy;
+
+    int ax = CONTROLLER_AXIS_RSTICK_X, ay = CONTROLLER_AXIS_RSTICK_Y;
+    if (g_config.input.mouse.stick == CONFIG_INPUT_MOUSE_STICK_LEFT) {
+        ax = CONTROLLER_AXIS_LSTICK_X;
+        ay = CONTROLLER_AXIS_LSTICK_Y;
+    }
+    float sx = state->axis[ax] / 32767.0f + ox;
+    float sy = state->axis[ay] / 32767.0f + oy;
+    state->axis[ax] = mouse_axis(mouse_clamp1(sx));
+    state->axis[ay] = mouse_axis(mouse_clamp1(sy));
+
+    if (mouse_buttons & (1u << 1)) {
+        state->axis[CONTROLLER_AXIS_RTRIG] = 32767; /* left click: RT */
+    }
+    if (mouse_buttons & (1u << 3)) {
+        state->axis[CONTROLLER_AXIS_LTRIG] = 32767; /* right click: LT */
+    }
+    if (mouse_buttons & (1u << 2)) {
+        state->buttons |= CONTROLLER_BUTTON_RSTICK; /* middle click: R3 */
+    }
+}
+
 void xemu_input_process_sdl_events(const SDL_Event *event)
 {
     if (event->type == SDL_EVENT_GAMEPAD_ADDED) {
@@ -487,6 +606,22 @@ void xemu_input_process_sdl_events(const SDL_Event *event)
         }
     } else if (event->type == SDL_EVENT_GAMEPAD_REMAPPED) {
         DPRINTF("Controller Remapped: %d\n", event->gdevice.which);
+    } else if (event->type == SDL_EVENT_MOUSE_MOTION) {
+        if (mouse_captured) {
+            mouse_dx += event->motion.xrel;
+            mouse_dy += event->motion.yrel;
+        }
+    } else if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+               event->type == SDL_EVENT_MOUSE_BUTTON_UP) {
+        if (mouse_captured && event->button.button >= 1 &&
+            event->button.button <= 3) {
+            uint32_t bit = 1u << event->button.button;
+            if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+                mouse_buttons |= bit;
+            } else {
+                mouse_buttons &= ~bit;
+            }
+        }
     } else if (event->type == SDL_EVENT_JOYSTICK_ADDED) {
         if (!SDL_IsGamepad(event->jdevice.which)) {
             const char *name = SDL_GetJoystickNameForID(event->jdevice.which);
@@ -581,6 +716,10 @@ void xemu_input_update_sdl_kbd_controller_state(ControllerState *state)
         state->axis[CONTROLLER_AXIS_RTRIG] = 32767;
 
 #undef KBD_STATE
+
+    if (mouse_captured && g_config.input.mouse.enabled) {
+        xemu_input_apply_mouse(state);
+    }
 }
 
 void xemu_input_update_sdl_controller_state(ControllerState *state)

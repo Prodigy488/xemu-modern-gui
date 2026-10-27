@@ -23,8 +23,17 @@ upscaling and CRT TV filters, a homebrew tab and store, game save backups,
 tools for finding out why a game is slow, a guided Insignia setup, and
 quality-of-life features.
 
+> [!NOTE]
+> **Vibe coded with Claude.** Every change in this fork was written by an AI,
+> [Claude Code](https://claude.com/claude-code) from Anthropic, working
+> from plain-language requests by the repository owner, who describes what
+> they want, tests the builds and publishes the releases. The emulator
+> underneath is xemu's own code; the changes on top haven't had the review a
+> long-running project gets. Expect rough edges, and please open an issue if
+> you find one.
+>
 > **Agent Declaration**: These changes were created with assistance from
-> Claude Code (Anthropic, Claude Opus 5.5).
+> Claude Code (Anthropic, Claude Sonnet 5.5; earlier versions Claude Opus 5.5).
 
 ![Home tab, Neon theme](docs/screenshots/home.jpg)
 
@@ -40,15 +49,15 @@ quality-of-life features.
 |---|---|---|---|
 | ![On-screen keyboard](docs/screenshots/keyboard.jpg) | ![Performance Capture](docs/screenshots/perf-capture.jpg) | ![Settings](docs/screenshots/settings.jpg) | ![Setup check](docs/screenshots/setup.jpg) |
 
-| 60 FPS games | Game saves |
-|---|---|
-| ![60 FPS games](docs/screenshots/sixty-fps.jpg) | ![Game saves](docs/screenshots/game-saves.jpg) |
+| 60 FPS games | Game saves | Achievements |
+|---|---|---|
+| ![60 FPS games](docs/screenshots/sixty-fps.jpg) | ![Game saves](docs/screenshots/game-saves.jpg) | ![Achievements](docs/screenshots/achievements.jpg) |
 
 | Deutsch | 日本語 | Русский |
 |---|---|---|
 | ![German](docs/screenshots/lang-de.jpg) | ![Japanese](docs/screenshots/lang-ja.jpg) | ![Russian](docs/screenshots/lang-ru.jpg) |
 
-<sub>Screenshots use original placeholder cover art (not the real box art), example compatibility ratings and invented example homebrew. The Performance Capture screenshot shows a real recording of Project Gotham Racing.</sub>
+<sub>Screenshots use original placeholder cover art (not the real box art), example compatibility ratings, invented example homebrew and example achievement progress with a made-up RetroAchievements account. The Performance Capture screenshot shows a real recording of Project Gotham Racing.</sub>
 
 ## Download
 
@@ -173,7 +182,41 @@ see the [Releases](../../releases) page.
 - **Video mode switches:** widescreen, 480p, 720p and 1080i, the same as
   the Xbox dashboard's settings.
 
+### Achievements
+
+- **An Achievements tab** with 30 milestones in xemu itself: starting your
+  first game, hours played, save states, quick saves, game save backups,
+  homebrew, 60 FPS, Insignia setup, picture filters and more, with points,
+  progress bars and the date each was unlocked. A pop-up slides in at the
+  lower right when you unlock one (it can be switched off, and "Show a
+  pop-up" tries it out). Progress is kept in `achievements.json` next to
+  your library.
+- **These are not in-game achievements.** The original Xbox didn't have
+  them, and xemu can't see inside a game. They are milestones in this
+  program only.
+- **RetroAchievements sign-in:** you can sign in with a
+  [RetroAchievements](https://retroachievements.org) account. RetroAchievements
+  has no original Xbox games yet, so for now this only keeps your account
+  ready for when that changes. Your password is never saved, only the token
+  RetroAchievements sends back. I looked for a community-made set of Xbox
+  achievements to use and didn't find one, so none are included.
+
 ### Sound and controllers
+
+- **Mouse and keyboard:** move the mouse to play with it. Click the game to
+  capture the mouse and press F3 or Esc to let go. The mouse moves the right
+  stick (or the left, your choice) with its own sensitivity, left click is
+  the right trigger, right click the left trigger, and middle click R3.
+  **Use WASD + mouse layout** binds a ready-made keyboard layout in one
+  click.
+- **On-screen keyboard capitals:** hold RT (R2) for capitals and LT (L2) for
+  symbols. Before, the triggers didn't reach the keyboard at all.
+- **Quick save buttons for modern controllers:** quick save and load were
+  Back + LB/RB, and modern controllers have no button called Back (it's View
+  on Xbox One and Series, Share on PS4, Create on PS5), which is awkward to
+  find and hold. Choose what you press while holding that button: LB/RB, the
+  triggers, stick clicks or D-pad left/right. The hints show the right button
+  names for the controller you have connected.
 
 - **Output device:** send the game's sound to headphones, speakers or the
   TV without changing the Windows default.

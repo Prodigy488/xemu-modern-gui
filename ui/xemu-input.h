@@ -142,6 +142,16 @@ void xemu_save_peripheral_settings(int player_index, int peripheral_index,
                                    int peripheral_type,
                                    const char *peripheral_parameter);
 
+// Mouse and keyboard play: while the mouse is captured (and the keyboard is
+// bound to a port), mouse movement moves a stick and clicks pull triggers
+void xemu_input_mouse_set_captured(bool captured);
+bool xemu_input_mouse_is_captured(void);
+// The keyboard's input device, or NULL
+ControllerState *xemu_input_get_keyboard(void);
+// Bind the keyboard to the first free port if it isn't bound; the port
+// (0-3) it's on, or -1 if all four ports are taken
+int xemu_input_bind_keyboard(void);
+
 void xemu_input_set_test_mode(int enabled);
 int xemu_input_get_test_mode(void);
 void xemu_input_reset_input_mapping(ControllerState *state);

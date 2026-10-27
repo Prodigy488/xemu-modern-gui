@@ -29,6 +29,7 @@
 #include "common.hh"
 #include "osk.hh"
 #include "play-extras.hh"
+#include "achievements.hh"
 #include "game-library.hh"
 #include "game-library-scan.hh"
 #include "rtx-video.hh"
@@ -2208,6 +2209,9 @@ void Set60Fps(LibraryEntry &e, bool on)
         return;
     }
     SaveLibrary();
+    if (on) {
+        AchievementsEvent(kAchSixtyFps);
+    }
     xemu_queue_notification(
         IsCurrentDisc(e)
             ? (on ? tr("60 FPS is on. It starts the next time you start the game.")
@@ -2561,6 +2565,7 @@ void MergePatchResults()
             }
         }
         added++;
+        AchievementsEvent(kAchPatches);
         games.insert(r.title_id);
         touched.insert(r.title_id);
     }
@@ -5039,10 +5044,11 @@ void UpdateDiscordPresence()
 // ---------------------------------------------------------------------------
 
 enum DashTab { kTabHome, kTabLibrary, kTabInsignia, kTabMedia, kTabDrive,
-               kTabStore, kTabPatches, kTabSettings, kTabCount };
+               kTabStore, kTabPatches, kTabAchievements, kTabSettings, kTabCount };
 const char *const kTabNames[kTabCount] = { N_("Home"),  N_("Library"), N_("Insignia"),
                                            N_("Media"), N_("Drive"),   N_("Homebrew"),
-                                           N_("Patches"), N_("Settings") };
+                                           N_("Patches"), N_("Achievements"),
+                                           N_("Settings") };
 int g_dash_tab = kTabHome;
 
 std::string g_home_path;        // game shown in the Home hero
@@ -5204,6 +5210,7 @@ void SwitchTab(int tab)
     }
     g_dash_tab = next;
     RequestPreviewStop();
+    AchievementsEvent(kAchTab, (uint32_t)next);
 }
 
 // A soft band of light flowing across the screen (the "wave"): a triangle
@@ -5596,6 +5603,7 @@ void DrawDashTopBar()
     }
     ImGui::SetCursorScreenPos(ImVec2(right - close_w - 8 * s - min_w, y_mid - 16 * s));
     if (DashButton(min_label, th.glass, th.white, ImVec2(min_w, 32 * s))) {
+        AchievementsEvent(kAchCollapse);
         game_library_window.Collapse();
     }
     ImGui::SetItemTooltip("%s", tr("Minimize: a small tab at the bottom of the screen "
@@ -6716,6 +6724,7 @@ void DrawInsigniaTab(int &tex_budget)
         if (DashRow(*e, sub, tr(ICON_FA_PLAY "  Play online"), w, tex_budget, sel,
                     T().neon ? T().accent : IM_COL32(168, 236, 107, 255))) {
             g_selected_path = e->path;
+            AchievementsEvent(kAchOnlinePlay);
             game_library_window.Launch(e->path);
         }
     }
@@ -7317,6 +7326,7 @@ void StorePump()
             StoreRememberInstall("/" + g_store.inst_dir + "/" + g_store.inst_name,
                                  g_store.inst_id);
             HomebrewMarkDirty(); // list it under Installed
+            AchievementsEvent(kAchHomebrew);
         }
         g_store.inst_msg =
             error ? status
@@ -8127,6 +8137,7 @@ void InsigniaSetupWatch()
     }
     g_isa.watch = 0;
     g_isa.returned = true;
+    AchievementsEvent(kAchInsigniaSetup);
     ActionEjectDiscNow(); // so it doesn't start again
     g_isa.msg = tr("The Setup Assistant was closed. Next: get an invite code.");
     g_isa.msg_err = false;
@@ -8665,6 +8676,243 @@ void DrawPatchesTab(int &tex_budget)
     ImGui::PopStyleColor();
 }
 
+// --- Achievements ----------------------------------------------------------
+
+std::string FormatDate(int64_t t)
+{
+    time_t tt = (time_t)t;
+    struct tm lt;
+#ifdef _WIN32
+    localtime_s(&lt, &tt);
+#else
+    localtime_r(&tt, &lt);
+#endif
+    char buf[32];
+    strftime(buf, sizeof(buf), "%Y-%m-%d", &lt);
+    return buf;
+}
+
+void DrawAchievementsTab()
+{
+    const float s = g_viewport_mgr.m_scale;
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    float gap = 22 * s;
+    bool two_col = avail.x > 900 * s;
+    float left_w = two_col ? std::floor(std::min(avail.x * 0.36f, 440.0f * s)) : 0;
+    float right_w = two_col ? avail.x - left_w - gap : avail.x;
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 a = ImGui::GetCursorScreenPos();
+    const LibTheme &th = T();
+    static bool ra_checked = false;
+    if (!ra_checked) {
+        ra_checked = true;
+        RaRefresh();
+    }
+
+    int total = AchievementCount();
+    int unlocked = AchievementsUnlocked();
+    int pts = AchievementsPoints(), pts_total = AchievementsPointsTotal();
+
+    auto card = [&](float x, float w, const char *id, auto body) {
+        ImVec2 ca(a.x + x, a.y);
+        DashCard(dl, ca, ImVec2(ca.x + w, ca.y + avail.y));
+        ImGui::SetCursorScreenPos(ca);
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(26 * s, 22 * s));
+        ImGui::BeginChild(id, ImVec2(w, avail.y),
+                          ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened);
+        body();
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+    };
+
+    // The totals, with a progress bar
+    auto summary = [&] {
+        DashLabel(tr("Achievements"));
+        DashTitle(string_format(tr("%d of %d unlocked"), unlocked, total).c_str());
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        float bw = ImGui::GetContentRegionAvail().x, bh = 10 * s;
+        ShapeFill(dl, ImVec2(p.x, p.y + 6 * s), ImVec2(p.x + bw, p.y + 6 * s + bh),
+                  IM_COL32(255, 255, 255, 28), 5 * s);
+        float f = total ? (float)unlocked / total : 0;
+        if (f > 0) {
+            ShapeFill(dl, ImVec2(p.x, p.y + 6 * s),
+                      ImVec2(p.x + std::max(bh, bw * f), p.y + 6 * s + bh), th.accent, 5 * s);
+        }
+        ImGui::Dummy(ImVec2(0, bh + 14 * s));
+        ImGui::TextUnformatted(string_format(tr("%d of %d points"), pts, pts_total).c_str());
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("%s", tr("Milestones in xemu itself, kept on this PC. They "
+                                     "aren't achievements inside any Xbox game."));
+        ImGui::PopTextWrapPos();
+    };
+
+    // Pop-up switch, and the RetroAchievements account
+    auto side = [&] {
+        bool popups = AchievementsPopups();
+        if (ImGui::Checkbox(tr("Pop-up when I unlock one"), &popups)) {
+            AchievementsSetPopups(popups);
+        }
+        ImGui::Dummy(ImVec2(0, 4 * s));
+        if (DashButton(tr("Show a pop-up"), th.glass, th.white, ImVec2(0, 30 * s))) {
+            // Show the newest unlocked one, or the first
+            int pick = 0;
+            int64_t newest = -1;
+            for (int i = 0; i < total; i++) {
+                AchievementInfo ai = AchievementAt(i);
+                if (ai.unlocked && ai.unlocked_at > newest) {
+                    newest = ai.unlocked_at;
+                    pick = i;
+                }
+            }
+            AchievementsPreviewToast(pick);
+        }
+        ImGui::Dummy(ImVec2(0, 16 * s));
+        DashLabel(tr("RetroAchievements"));
+        RaInfo ra = RaGetInfo();
+        static char user[64] = "", pass[64] = "";
+        if (ra.state == kRaSignedIn) {
+            ImGui::TextWrapped("%s", string_format(tr("Signed in as %s"), ra.user.c_str()).c_str());
+            if (ra.points || ra.softcore) {
+                ImGui::TextDisabled("%s",
+                                    string_format(tr("%lld points"),
+                                                  (long long)std::max(ra.points, ra.softcore))
+                                        .c_str());
+            }
+            if (!ra.error.empty()) {
+                ImGui::TextWrapped("%s", tr(ra.error.c_str()));
+            }
+            if (DashButton(tr("Sign out"), th.glass, th.white, ImVec2(0, 30 * s))) {
+                RaSignOut();
+            }
+        } else if (ra.state == kRaWorking) {
+            ImGui::TextUnformatted(tr("Signing in..."));
+        } else {
+            ImGui::PushItemWidth(-FLT_MIN);
+            ImGui::InputTextWithHint("##rauser", tr("RetroAchievements username"), user,
+                                     sizeof(user));
+            OskTextBox();
+            ImGui::InputTextWithHint("##rapass", tr("Password"), pass, sizeof(pass),
+                                     ImGuiInputTextFlags_Password);
+            OskTextBox();
+            ImGui::PopItemWidth();
+            if (DashButton(tr("Sign in"), th.glass, th.white, ImVec2(0, 30 * s))) {
+                RaSignIn(user, pass);
+                pass[0] = 0; // not kept
+            }
+            if (ra.state == kRaFailed && !ra.error.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                                      ImGui::ColorConvertU32ToFloat4(th.bad));
+                ImGui::TextWrapped("%s", tr(ra.error.c_str()));
+                ImGui::PopStyleColor();
+            }
+        }
+        ImGui::Dummy(ImVec2(0, 4 * s));
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("%s", tr("RetroAchievements has no original Xbox games yet, "
+                                     "so there is nothing to show for them. Signing in "
+                                     "only saves your account for when that changes. Only "
+                                     "the token it sends back is kept, not your password."));
+        ImGui::PopTextWrapPos();
+    };
+
+    auto list = [&] {
+        static int filter = 0; // all, unlocked, locked
+        if (!two_col) {
+            summary();
+            ImGui::Dummy(ImVec2(0, 8 * s));
+        } else {
+            DashLabel(tr("All achievements"));
+        }
+        ImGui::SetNextItemWidth(220 * s);
+        ImGui::Combo("##achfilter", &filter,
+                     tr_items("All\0" "Unlocked\0" "Not yet\0"));
+        ImGui::Dummy(ImVec2(0, 6 * s));
+        ImGui::BeginChild("##achlist", ImVec2(0, 0), ImGuiChildFlags_NavFlattened);
+        const char *last_cat = "";
+        ImFont *icon_font = ImGui::GetIO().Fonts->Fonts[0];
+        ImFont *title_font = FontOr(g_font_mgr.m_menu_font_small);
+        for (int i = 0; i < total; i++) {
+            AchievementInfo ai = AchievementAt(i);
+            if ((filter == 1 && !ai.unlocked) || (filter == 2 && ai.unlocked)) {
+                continue;
+            }
+            if (strcmp(ai.category, last_cat)) {
+                last_cat = ai.category;
+                ImGui::Dummy(ImVec2(0, 8 * s));
+                DashLabel(tr(ai.category));
+            }
+            float rw = ImGui::GetContentRegionAvail().x, rh = 66 * s;
+            ImGui::PushID(i);
+            ImGui::Selectable("##row", false, 0, ImVec2(rw, rh));
+            ImVec2 ra_ = ImGui::GetItemRectMin(), rb = ImGui::GetItemRectMax();
+            bool hov = ImGui::IsItemHovered() || ImGui::IsItemFocused();
+            ShapeFill(dl, ra_, rb, hov ? IM_COL32(255, 255, 255, 22) : IM_COL32(255, 255, 255, 10),
+                      12 * s);
+            if (ImGui::IsItemFocused()) {
+                ShapeStroke(dl, ra_, rb, th.accent, 12 * s, 1.5f * s);
+            }
+            // Badge
+            float bd = rh - 22 * s;
+            ImVec2 c(ra_.x + 14 * s + bd / 2, ra_.y + rh / 2);
+            ImU32 base = ai.unlocked ? th.accent : IM_COL32(255, 255, 255, 36);
+            dl->AddCircleFilled(c, bd / 2, base, 32);
+            const char *ic = ai.unlocked ? ICON_FA_TROPHY : ICON_FA_LOCK;
+            float isz = icon_font->FontSize * 1.2f;
+            ImVec2 its = icon_font->CalcTextSizeA(isz, FLT_MAX, 0, ic);
+            dl->AddText(icon_font, isz, ImVec2(c.x - its.x / 2, c.y - its.y / 2),
+                        ai.unlocked ? ImGui::ColorConvertFloat4ToU32(th.on_primary)
+                                    : th.dim,
+                        ic);
+            // Points, right aligned
+            std::string pt = string_format(tr("%d pts"), ai.points);
+            ImVec2 pts_sz = ImGui::CalcTextSize(pt.c_str());
+            float right = rb.x - 16 * s;
+            dl->AddText(ImVec2(right - pts_sz.x, ra_.y + 12 * s),
+                        ai.unlocked ? th.accent : th.dim, pt.c_str());
+            // Name, what to do, and how far along
+            float tx = ra_.x + 14 * s + bd + 14 * s;
+            float max_w = right - pts_sz.x - 16 * s - tx;
+            ImVec4 clip(tx, ra_.y, tx + max_w, rb.y);
+            std::string nm = tr(ai.name);
+            dl->AddText(title_font, title_font->FontSize, ImVec2(tx, ra_.y + 8 * s),
+                        ai.unlocked ? th.text : Alpha(th.text, 200), nm.c_str(), nullptr, 0,
+                        &clip);
+            std::string ds = tr(ai.desc);
+            if (ai.unlocked) {
+                ds += "  -  " + FormatDate(ai.unlocked_at);
+            } else if (ai.target > 1 && ai.target < 100000) {
+                ds += string_format("  -  %lld / %lld", (long long)ai.progress,
+                                    (long long)ai.target);
+            } else if (ai.target >= 100000 && ai.progress > 0) {
+                // Seconds played: show hours
+                ds += string_format("  -  %.1f / %.0f h", ai.progress / 3600.0,
+                                    ai.target / 3600.0);
+            }
+            dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(),
+                        ImVec2(tx, rb.y - 8 * s - ImGui::GetFontSize()), th.dim, ds.c_str(),
+                        nullptr, 0.0f, &clip);
+            ImGui::PopID();
+            ImGui::Dummy(ImVec2(0, 4 * s));
+        }
+        ImGui::EndChild();
+    };
+
+    if (two_col) {
+        card(0, left_w, "##achside", [&] {
+            summary();
+            ImGui::Dummy(ImVec2(0, 14 * s));
+            side();
+        });
+        card(left_w + gap, right_w, "##achlistcard", list);
+    } else {
+        card(0, right_w, "##achlistcard", [&] {
+            list();
+        });
+    }
+}
+
 // --- Settings ------------------------------------------------------------------
 
 void DrawDashSettingsTab()
@@ -8845,8 +9093,36 @@ void DrawDashSettingsTab()
             }
         }
         ImGui::Checkbox(tr("Quick save buttons"), &g_config.input.quick_save_buttons);
-        ImGui::TextDisabled(tr("Back + LB saves the game you're playing, Back + RB "
-                            "loads it (one quick save per game)."));
+        label(tr("Hold Back, then press"));
+        ImGui::Combo("##qscombo", &g_config.input.quick_save_combo,
+                     tr_items("LB / RB (L1 / R1)\0" "Triggers (LT / RT)\0"
+                              "Stick clicks (L3 / R3)\0" "D-pad left / right\0"));
+        ImGui::TextDisabled("%s", string_format(tr("%s saves the game you're playing "
+                                                  "and %s loads it (one quick save per "
+                                                  "game)."),
+                                                QuickSaveButtonName(false).c_str(),
+                                                QuickSaveButtonName(true).c_str())
+                                      .c_str());
+        ImGui::Dummy(ImVec2(0, 14 * s));
+        DashLabel(tr("Controller"));
+        DashTitle(tr("Mouse and keyboard"));
+        ImGui::Checkbox(tr("Use the mouse as a stick"), &g_config.input.mouse.enabled);
+        ImGui::TextDisabled(tr("Click the game to capture the mouse: moving it moves a "
+                            "stick, left click is RT, right click is LT, middle click "
+                            "is the right stick button. F3 or Esc lets go."));
+        label(tr("Mouse moves"));
+        ImGui::Combo("##mousestick", &g_config.input.mouse.stick,
+                     tr_items("Right stick (look)\0" "Left stick (move)\0"));
+        label(tr("Mouse sensitivity"));
+        ImGui::SliderFloat("##mousesens", &g_config.input.mouse.sensitivity, 0.25f, 3.0f,
+                           "%.2fx");
+        ImGui::Checkbox(tr("Invert mouse up and down"), &g_config.input.mouse.invert_y);
+        if (DashButton(tr("Use WASD + mouse layout"), T().glass, T().white,
+                       ImVec2(0, 30 * s))) {
+            xemu_queue_notification(KeyboardMouseLayoutApply().c_str());
+        }
+        ImGui::TextDisabled(tr("WASD moves, Space is A, E is B, R is X, Q is Y. Turns the "
+                            "mouse on and binds the keyboard to a free port."));
     });
     if (!two_col) {
         return; // the second card only fits side by side
@@ -8959,6 +9235,7 @@ void DrawClassicHeader()
                           "Library Style)"));
     ImGui::SameLine();
     if (ImGui::Button(ICON_FA_WINDOW_MINIMIZE "##minimize")) {
+        AchievementsEvent(kAchCollapse);
         game_library_window.Collapse();
     }
     ImGui::SetItemTooltip("%s", tr("Minimize: a small tab at the bottom of the screen "
@@ -9320,6 +9597,8 @@ void LaunchNow(const std::string &path)
     if (load_path != path) {
         name += std::string(" ") + tr("(patched)");
     }
+    AchievementsEvent(kAchLaunch, e && e->title_id ? e->title_id
+                                                   : (uint32_t)std::hash<std::string>()(path));
     // Restart the console so it boots the disc, like powering on a real Xbox
     // with the game in the tray. Swapping the disc alone leaves many
     // dashboards and BIOSes sitting at the menu until a manual reset.
@@ -9415,6 +9694,7 @@ void GameLibraryWindow::Update()
         g_loaded = true;
         atexit(GameLibraryShutdown);
         LoadLibrary();
+        AchievementsLoad((BasePath() / "achievements.json").u8string());
         StartCompatRefresh();
         g_last_tick = SDL_GetTicks();
         g_last_save_tick = g_last_tick;
@@ -9462,6 +9742,24 @@ void GameLibraryWindow::Update()
         SaveLibrary();
         g_last_save_tick = now;
     }
+
+    // Numbers the achievements look at
+    static uint64_t last_stats = 0;
+    if (now - last_stats > 2000) {
+        last_stats = now;
+        double secs = 0;
+        int favorites = 0;
+        for (auto &[path, st] : g_stats) {
+            secs += st.play_seconds;
+            favorites += st.favorite ? 1 : 0;
+        }
+        AchievementsSetStat("play_s", (int64_t)secs);
+        AchievementsSetStat("library", (int64_t)g_entries.size());
+        AchievementsSetStat("favorites", favorites);
+    }
+    AchievementsUpdate(g_config.display.filtering >= CONFIG_DISPLAY_FILTERING_CRT &&
+                           !cur.empty() && runstate_is_running(),
+                       g_config.display.ui.language);
 }
 
 // ---- Blades and Metro dashboard styles -------------------------------------
@@ -9502,6 +9800,9 @@ void DrawTabContent(int tab, int &tex_budget)
         break;
     case kTabPatches:
         DrawPatchesTab(tex_budget);
+        break;
+    case kTabAchievements:
+        DrawAchievementsTab();
         break;
     case kTabSettings:
         DrawDashSettingsTab();
@@ -9599,13 +9900,15 @@ ImU32 SectionColor(int tab)
         IM_COL32(86, 178, 22, 255),  IM_COL32(32, 132, 72, 255),
         IM_COL32(0, 150, 136, 255),  IM_COL32(52, 120, 200, 255),
         IM_COL32(110, 90, 190, 255), IM_COL32(196, 64, 96, 255),
-        IM_COL32(214, 120, 30, 255), IM_COL32(96, 110, 104, 255),
+        IM_COL32(214, 120, 30, 255), IM_COL32(200, 160, 30, 255),
+        IM_COL32(96, 110, 104, 255),
     };
     static const ImU32 neon[kTabCount] = {
         IM_COL32(0, 200, 230, 255),  IM_COL32(40, 110, 255, 255),
         IM_COL32(57, 210, 130, 255), IM_COL32(150, 70, 255, 255),
         IM_COL32(255, 46, 136, 255), IM_COL32(255, 90, 60, 255),
-        IM_COL32(255, 160, 0, 255),  IM_COL32(110, 116, 150, 255),
+        IM_COL32(255, 160, 0, 255),  IM_COL32(255, 214, 10, 255),
+        IM_COL32(110, 116, 150, 255),
     };
     int i = tab < 0 ? 0 : (tab >= kTabCount ? kTabCount - 1 : tab);
     return (T().neon ? neon : green)[i];
@@ -10271,6 +10574,9 @@ void GameLibraryWindow::Draw()
         case kTabPatches:
             DrawPatchesTab(tex_budget);
             break;
+        case kTabAchievements:
+            DrawAchievementsTab();
+            break;
         case kTabSettings:
             DrawDashSettingsTab();
             break;
@@ -10451,6 +10757,7 @@ static void GameLibraryShutdown(void)
         g_compat_thread.join();
     }
     if (g_loaded) {
+        AchievementsShutdown();
         SaveLibrary();
     }
 }
@@ -10479,11 +10786,14 @@ void GameLibraryQuickSave(bool load)
             found |= name == g_snapshot_mgr.m_snapshots[i].name;
         }
         if (!found) {
-            xemu_queue_notification(tr("No quick save for this game yet. Back + LB "
-                                       "saves one."));
+            xemu_queue_notification(
+                string_format(tr("No quick save for this game yet. %s saves one."),
+                              QuickSaveButtonName(false).c_str())
+                    .c_str());
             return;
         }
         ActionLoadSnapshotChecked(name.c_str());
+        AchievementsEvent(kAchQuickLoad);
         xemu_queue_notification(tr(ICON_FA_CLOCK_ROTATE_LEFT "  Quick save loaded"));
         return;
     }
@@ -10496,7 +10806,10 @@ void GameLibraryQuickSave(bool load)
         return;
     }
     g_snapshot_mgr.Refresh();
-    xemu_queue_notification(tr(ICON_FA_FLOPPY_DISK "  Quick saved. Back + RB loads it."));
+    AchievementsEvent(kAchQuickSave);
+    xemu_queue_notification(string_format(tr(ICON_FA_FLOPPY_DISK "  Quick saved. %s loads it."),
+                                          QuickSaveButtonName(true).c_str())
+                                .c_str());
 }
 
 void GameLibraryNoteDriveChange(const std::string &what)

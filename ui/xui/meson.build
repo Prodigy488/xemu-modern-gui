@@ -15,6 +15,7 @@ xemu_ss.add(files(
   'perf-capture.cc',
   'perf-voice.cc',
   'insignia-net.cc',
+  'achievements.cc',
   'osk.cc',
   'play-extras.cc',
   'shader-cache.cc',

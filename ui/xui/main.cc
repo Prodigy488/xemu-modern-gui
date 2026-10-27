@@ -33,6 +33,7 @@
 
 #include "actions.hh"
 #include "common.hh"
+#include "achievements.hh"
 #include "xemu-hud.h"
 #include "misc.hh"
 #include "gl-helpers.hh"
@@ -296,8 +297,11 @@ void xemu_hud_update(void)
         ImGui::SetMouseCursor(ImGuiMouseCursor_None);
     }
 
-    if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_AnyWindow) &&
-        !g_scene_mgr.IsDisplayingScene()) {
+    bool game_has_input = !ImGui::IsWindowFocused(ImGuiFocusedFlags_AnyWindow) &&
+                          !g_scene_mgr.IsDisplayingScene();
+    PlayExtrasMouse(game_has_input);
+
+    if (game_has_input) {
 
         // If the guide button is pressed, wake the ui
         bool menu_button = false;
@@ -312,8 +316,8 @@ void xemu_hud_update(void)
             menu_button = true;
         }
 
-        // Back + LB / Back + RB: quick save / quick load
-        PlayExtrasButtons(buttons);
+        // Back + two buttons: quick save / quick load
+        PlayExtrasButtons(buttons, g_input_mgr.CombinedTriggers());
 
         if (ImGui::IsKeyPressed(ImGuiKey_F1)) {
             g_scene_mgr.PushScene(g_main_menu);
@@ -321,9 +325,11 @@ void xemu_hud_update(void)
             g_scene_mgr.PushScene(g_popup_menu);
         } else if (menu_button ||
                    (ImGui::IsMouseClicked(ImGuiMouseButton_Right) &&
+                    !PlayExtrasMouseCaptured() &&
                     !ImGui::IsAnyItemFocused() && !ImGui::IsAnyItemHovered())) {
             g_scene_mgr.PushScene(g_popup_menu);
-        } else if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+        } else if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
+                   !PlayExtrasMouseCaptured()) {
             xemu_toggle_fullscreen();
         }
 
@@ -355,6 +361,20 @@ void xemu_hud_update(void)
         DynamicResDraw();
     }
     g_snapshot_mgr.Draw();
+    {
+        // First time with the on-screen keyboard up / the mouse captured
+        static bool osk_was = false, mouse_was = false;
+        bool osk_now = OskVisible(), mouse_now = PlayExtrasMouseCaptured();
+        if (osk_now && !osk_was) {
+            AchievementsEvent(kAchKeyboard);
+        }
+        if (mouse_now && !mouse_was) {
+            AchievementsEvent(kAchMouse);
+        }
+        osk_was = osk_now;
+        mouse_was = mouse_now;
+    }
+    AchievementsDraw();
     OskDraw(); // on top of everything
 
     // static bool show_demo = true;

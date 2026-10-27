@@ -122,6 +122,54 @@ int http_get(const char *url, GByteArray *response_body,
     return http_response_code;
 }
 
+int http_post_form(const char *url, const char *body, GByteArray *response_body,
+                   Error **errp)
+{
+    if (!ensure_libcurl_initialized(errp)) {
+        return -1;
+    }
+
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+        error_setg(errp, "curl_easy_init failed");
+        return -1;
+    }
+
+    struct curl_slist *headers = curl_slist_append(
+        NULL, "Content-Type: application/x-www-form-urlencoded");
+    if (!headers) {
+        error_setg(errp, "curl_slist_append failed");
+        curl_easy_cleanup(curl);
+        return -1;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, http_get_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, response_body);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, xemu_user_agent);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 20L);
+#if ALLOW_INSECURE_HOSTS
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+#endif
+
+    long http_response_code = -1;
+    CURLcode res = curl_easy_perform(curl);
+    if (res == CURLE_OK) {
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_response_code);
+    } else {
+        error_setg(errp, "curl_easy_perform failed with code %d", res);
+    }
+
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+
+    return http_response_code;
+}
+
 int http_post_json(const char *url, const char *json_data, Error **errp)
 {
     if (!ensure_libcurl_initialized(errp)) {

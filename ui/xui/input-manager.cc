@@ -9,6 +9,8 @@ InputManager::InputManager()
 {
     m_last_mouse_pos = ImVec2(0, 0);
     m_navigating_with_controller = false;
+    m_buttons = 0;
+    m_triggers = 0;
 }
 
 void InputManager::Update()
@@ -17,6 +19,7 @@ void InputManager::Update()
 
     // Combine all controller states to allow any controller to navigate
     m_buttons = 0;
+    m_triggers = 0;
     int16_t axis[CONTROLLER_AXIS__COUNT] = {0};
 
     // If we are rebinding a controller, prevent navigation
@@ -26,6 +29,12 @@ void InputManager::Update()
             if (iter->type != INPUT_DEVICE_SDL_GAMEPAD)
                 continue;
             m_buttons |= iter->buttons;
+            if (iter->axis[CONTROLLER_AXIS_LTRIG] > 16384) {
+                m_triggers |= 1;
+            }
+            if (iter->axis[CONTROLLER_AXIS_RTRIG] > 16384) {
+                m_triggers |= 2;
+            }
             // We simply take any axis that is >10 % activation
             for (int i = 0; i < CONTROLLER_AXIS__COUNT; i++) {
                 if ((iter->axis[i] > 3276) || (iter->axis[i] < -3276)) {
@@ -75,8 +84,9 @@ void InputManager::Update()
     MAP_BUTTON(ImGuiKey_GamepadDpadDown,        CONTROLLER_BUTTON_DPAD_DOWN);
     MAP_BUTTON(ImGuiKey_GamepadL1,              CONTROLLER_BUTTON_WHITE);
     MAP_BUTTON(ImGuiKey_GamepadR1,              CONTROLLER_BUTTON_BLACK);
-    //MAP_ANALOG(ImGuiKey_GamepadL2,              SDL_CONTROLLER_AXIS_TRIGGERLEFT,  0.0f, 32767);
-    //MAP_ANALOG(ImGuiKey_GamepadR2,              SDL_CONTROLLER_AXIS_TRIGGERRIGHT, 0.0f, 32767);
+    // The triggers (the on-screen keyboard holds RT for capitals, LT for symbols)
+    MAP_ANALOG(ImGuiKey_GamepadL2,              CONTROLLER_AXIS_LTRIG, 0, 32767);
+    MAP_ANALOG(ImGuiKey_GamepadR2,              CONTROLLER_AXIS_RTRIG, 0, 32767);
     //MAP_BUTTON(ImGuiKey_GamepadL3,              SDL_CONTROLLER_BUTTON_LEFTSTICK);
     //MAP_BUTTON(ImGuiKey_GamepadR3,              SDL_CONTROLLER_BUTTON_RIGHTSTICK);
     MAP_ANALOG(ImGuiKey_GamepadLStickLeft,  CONTROLLER_AXIS_LSTICK_X, -thumb_dead_zone, -32768);

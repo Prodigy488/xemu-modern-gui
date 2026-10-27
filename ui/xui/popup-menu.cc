@@ -22,6 +22,7 @@
 #include <filesystem>
 #include <map>
 #include "misc.hh"
+#include "achievements.hh"
 #include "actions.hh"
 #include "font-manager.hh"
 #include "viewport-manager.hh"
@@ -438,6 +439,7 @@ public:
         }
         if (PopupMenuButton(tr("Save Snapshot"), ICON_FA_DOWNLOAD)) {
             xemu_snapshots_save(NULL, NULL);
+            AchievementsEvent(kAchSaveState);
             xemu_queue_notification(tr("Created new snapshot"));
             pop = true;
         }

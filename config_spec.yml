@@ -101,6 +101,28 @@ input:
   quick_save_buttons:
     type: bool
     default: true
+  # Which buttons held with Back do it: LB / RB (the original Xbox's White and
+  # Black), the triggers, the stick clicks or the D-pad left / right
+  quick_save_combo:
+    type: enum
+    values: [bumpers, triggers, sticks, dpad]
+    default: bumpers
+  # Mouse and keyboard play: the keyboard (bound to a port) plus the mouse
+  mouse:
+    # Mouse movement moves a stick; left click is RT, right click is LT,
+    # middle click is the right stick button
+    enabled:
+      type: bool
+      default: false
+    # Which stick the mouse moves
+    stick:
+      type: enum
+      values: [right, left]
+      default: right
+    sensitivity:
+      type: number
+      default: 1
+    invert_y: bool
   keyboard_controller_scancode_map:
     # Scancode reference : https://github.com/libsdl-org/SDL/blob/main/include/SDL_scancode.h
     a:

@@ -39,6 +39,9 @@ bool ensure_libcurl_initialized(Error **errp);
 
 int http_get(const char *url, GByteArray *response_body,
              http_progress_cb_info *progress_info, Error **errp);
+/* POST a form-encoded body (a=b&c=d, already escaped) and collect the reply */
+int http_post_form(const char *url, const char *body, GByteArray *response_body,
+                   Error **errp);
 int http_post_json(const char *url, const char *json_data, Error **errp);
 
 #ifdef __cplusplus

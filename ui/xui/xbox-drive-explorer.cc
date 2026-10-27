@@ -21,6 +21,7 @@
 #include "common.hh"
 #include "osk.hh"
 #include "game-library.hh"
+#include "achievements.hh"
 #include "IconsFontAwesome6.h"
 #include "misc.hh"
 #include "viewport-manager.hh"
@@ -367,6 +368,7 @@ void FinishJob()
         if (j.i > 0) {
             // Remembered so loading an older save state asks first
             GameLibraryNoteDriveChange(j.title);
+            AchievementsEvent(kAchDriveEdit);
         }
     }
     if (!j.err.empty()) {
@@ -596,6 +598,7 @@ void SimpleWrite(const std::string &title, std::function<bool(std::string *)> op
     g_paused_for_job = false;
     if (ok) {
         GameLibraryNoteDriveChange(title);
+        AchievementsEvent(kAchDriveEdit);
     }
     SetStatus(ok ? title + " - " + tr("done. The Xbox restarted to load the change.")
                  : (err.empty() ? g_open_err : err),
@@ -934,6 +937,8 @@ void OpenHostFolder(const std::string &path)
     SDL_OpenURL(url.c_str());
 }
 
+bool g_backup_started = false; // "Back up now" was pressed, not a restore
+
 void DrawSavesPopup()
 {
     const float s = g_viewport_mgr.m_scale;
@@ -964,6 +969,8 @@ void DrawSavesPopup()
         std::string dest = (fs::u8path(GameLibrarySaveBackupDir()) / stamp).u8string();
         if (!XboxExplorerBackupSaves(dest, &err)) {
             SetStatus(err, true);
+        } else {
+            g_backup_started = true;
         }
     }
     ImGui::EndDisabled();
@@ -985,6 +992,10 @@ void DrawSavesPopup()
     static bool was_busy = false;
     if (was_busy && !busy) {
         ListBackups(); // a backup just finished
+        if (g_backup_started && !status_err) {
+            AchievementsEvent(kAchBackup);
+        }
+        g_backup_started = false;
     }
     was_busy = busy;
 

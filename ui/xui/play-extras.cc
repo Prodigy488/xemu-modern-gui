@@ -10,6 +10,7 @@
 #include "common.hh"
 #include "game-library.hh"
 #include "misc.hh"
+#include "../xemu-notifications.h"
 #include "../xemu-input.h"
 #include "hw/xbox/mcpx/apu/apu_output.h"
 
@@ -20,6 +21,7 @@ namespace {
 float g_gain = 1.0f;         // what the audio is set to now
 float g_gain_sent = -1.0f;   // last value passed on
 uint32_t g_prev_buttons = 0;
+uint32_t g_prev_triggers = 0;
 uint64_t g_last_quick_ms = 0;
 } // namespace
 
@@ -56,16 +58,35 @@ void PlayExtrasUpdate(void)
     }
 }
 
-void PlayExtrasButtons(uint32_t buttons)
+void PlayExtrasButtons(uint32_t buttons, uint32_t triggers)
 {
     uint32_t pressed = buttons & ~g_prev_buttons;
+    uint32_t trig_pressed = triggers & ~g_prev_triggers;
     g_prev_buttons = buttons;
+    g_prev_triggers = triggers;
     if (!g_config.input.quick_save_buttons || !(buttons & CONTROLLER_BUTTON_BACK)) {
         return;
     }
-    // LB and RB are the Xbox controller's White and Black buttons
-    bool save = pressed & CONTROLLER_BUTTON_WHITE;
-    bool load = pressed & CONTROLLER_BUTTON_BLACK;
+    bool save = false, load = false;
+    switch (g_config.input.quick_save_combo) {
+    case CONFIG_INPUT_QUICK_SAVE_COMBO_TRIGGERS:
+        save = trig_pressed & 1;
+        load = trig_pressed & 2;
+        break;
+    case CONFIG_INPUT_QUICK_SAVE_COMBO_STICKS:
+        save = pressed & CONTROLLER_BUTTON_LSTICK;
+        load = pressed & CONTROLLER_BUTTON_RSTICK;
+        break;
+    case CONFIG_INPUT_QUICK_SAVE_COMBO_DPAD:
+        save = pressed & CONTROLLER_BUTTON_DPAD_LEFT;
+        load = pressed & CONTROLLER_BUTTON_DPAD_RIGHT;
+        break;
+    default:
+        // LB and RB are the Xbox controller's White and Black buttons
+        save = pressed & CONTROLLER_BUTTON_WHITE;
+        load = pressed & CONTROLLER_BUTTON_BLACK;
+        break;
+    }
     if (!save && !load) {
         return;
     }
@@ -76,6 +97,144 @@ void PlayExtrasButtons(uint32_t buttons)
     }
     g_last_quick_ms = now;
     GameLibraryQuickSave(load);
+}
+
+std::string QuickSaveButtonName(bool load)
+{
+    // What the controller in the first port calls its buttons
+    SDL_GamepadType type = SDL_GAMEPAD_TYPE_UNKNOWN;
+    for (int i = 0; i < 4; i++) {
+        ControllerState *c = xemu_input_get_bound(i);
+        if (c && c->type == INPUT_DEVICE_SDL_GAMEPAD && c->sdl_gamepad) {
+            type = SDL_GetGamepadType(c->sdl_gamepad);
+            break;
+        }
+    }
+    bool ps = type == SDL_GAMEPAD_TYPE_PS3 || type == SDL_GAMEPAD_TYPE_PS4 ||
+              type == SDL_GAMEPAD_TYPE_PS5;
+    std::string back = "Back";
+    if (type == SDL_GAMEPAD_TYPE_PS4) {
+        back = "Share";
+    } else if (type == SDL_GAMEPAD_TYPE_PS5) {
+        back = "Create";
+    } else if (type == SDL_GAMEPAD_TYPE_PS3) {
+        back = "Select";
+    } else if (type == SDL_GAMEPAD_TYPE_XBOXONE) {
+        back = "View";
+    }
+    const char *second;
+    switch (g_config.input.quick_save_combo) {
+    case CONFIG_INPUT_QUICK_SAVE_COMBO_TRIGGERS:
+        second = ps ? (load ? "R2" : "L2") : (load ? "RT" : "LT");
+        break;
+    case CONFIG_INPUT_QUICK_SAVE_COMBO_STICKS:
+        second = load ? "R3" : "L3";
+        break;
+    case CONFIG_INPUT_QUICK_SAVE_COMBO_DPAD:
+        second = load ? "D-pad right" : "D-pad left";
+        break;
+    default:
+        second = ps ? (load ? "R1" : "L1") : (load ? "RB" : "LB");
+        break;
+    }
+    return back + " + " + second;
+}
+
+bool PlayExtrasMouseCaptured(void)
+{
+    return xemu_input_mouse_is_captured();
+}
+
+static void MouseRelease(const char *why)
+{
+    if (!xemu_input_mouse_is_captured()) {
+        return;
+    }
+    xemu_input_mouse_set_captured(false);
+    SDL_Window *w = xemu_get_window();
+    if (w) {
+        SDL_SetWindowRelativeMouseMode(w, false);
+    }
+    if (why) {
+        xemu_queue_notification(why);
+    }
+}
+
+void PlayExtrasMouse(bool playing)
+{
+    SDL_Window *w = xemu_get_window();
+    bool on = g_config.input.mouse.enabled;
+    bool captured = xemu_input_mouse_is_captured();
+    bool focused = !w || (SDL_GetWindowFlags(w) & SDL_WINDOW_INPUT_FOCUS);
+    if (captured && (!on || !playing || !focused)) {
+        MouseRelease(nullptr);
+        return;
+    }
+    if (!on || !playing || !w) {
+        return;
+    }
+    ImGuiIO &io = ImGui::GetIO();
+    if (captured) {
+        if (ImGui::IsKeyPressed(ImGuiKey_F3, false) ||
+            ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            MouseRelease(tr("Mouse released"));
+        }
+        return;
+    }
+    bool want = ImGui::IsKeyPressed(ImGuiKey_F3, false) ||
+                (ImGui::IsMouseClicked(ImGuiMouseButton_Left, false) &&
+                 !io.WantCaptureMouse && !io.WantCaptureKeyboard);
+    if (!want) {
+        return;
+    }
+    ControllerState *kbd = xemu_input_get_keyboard();
+    if (!kbd || kbd->bound < 0) {
+        xemu_queue_notification(
+            tr("Bind the keyboard to a controller port first (Settings > Input)"));
+        return;
+    }
+    xemu_input_mouse_set_captured(true);
+    SDL_SetWindowRelativeMouseMode(w, true);
+    xemu_queue_notification(tr("Mouse captured. F3 or Esc lets go."));
+}
+
+std::string KeyboardMouseLayoutApply(void)
+{
+    // SDL scancodes: letters A=4 ... Z=29, 1-4 = 30-33, Return 40, Tab 43,
+    // Space 44, Left Shift 225
+    auto &m = g_config.input.keyboard_controller_scancode_map;
+    m.lstick_up = 26;    // W
+    m.lstick_left = 4;   // A
+    m.lstick_down = 22;  // S
+    m.lstick_right = 7;  // D
+    m.rstick_up = 82;    // arrow keys
+    m.rstick_left = 80;
+    m.rstick_down = 81;
+    m.rstick_right = 79;
+    m.a = 44;            // Space
+    m.b = 8;             // E
+    m.x = 21;            // R
+    m.y = 20;            // Q
+    m.white = 10;        // G
+    m.black = 9;         // F
+    m.lstick_btn = 225;  // Left Shift
+    m.rstick_btn = 25;   // V
+    m.start = 40;        // Return
+    m.back = 43;         // Tab
+    m.dpad_up = 30;      // 1-4
+    m.dpad_down = 31;
+    m.dpad_left = 32;
+    m.dpad_right = 33;
+    m.ltrigger = 29;     // Z
+    m.rtrigger = 27;     // X
+    g_config.input.mouse.enabled = true;
+    int port = xemu_input_bind_keyboard();
+    if (port < 0) {
+        return tr("All four controller ports are in use. Unplug one, then try again.");
+    }
+    return string_format(tr("Keyboard and mouse ready on port %d. Click the game to "
+                            "capture the mouse."),
+                         port + 1);
 }
 
 std::vector<std::string> AudioOutputDevices(void)

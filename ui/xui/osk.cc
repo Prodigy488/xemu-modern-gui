@@ -70,6 +70,22 @@ bool Pressed(ImGuiKey k, bool repeat = true)
     return ImGui::IsKeyPressed(k, repeat ? ImGuiInputFlags_Repeat : 0, kOwner);
 }
 
+// The layer in use: the Shift / #+= keys, or a trigger held down (RT for
+// capitals, LT for symbols), like holding Shift on a real keyboard
+int EffLayer()
+{
+    if (g_osk.layer != 0) {
+        return g_osk.layer;
+    }
+    if (ImGui::IsKeyDown(ImGuiKey_GamepadR2, kOwner)) {
+        return 1;
+    }
+    if (ImGui::IsKeyDown(ImGuiKey_GamepadL2, kOwner)) {
+        return 2;
+    }
+    return 0;
+}
+
 // The active text box, or 0
 ImGuiID ActiveTextBox()
 {
@@ -116,7 +132,7 @@ void TapKey(ImGuiKey k)
 void Press()
 {
     if (g_osk.row < 4) {
-        Type(kRows[g_osk.layer][g_osk.row][g_osk.col]);
+        Type(kRows[EffLayer()][g_osk.row][g_osk.col]);
         if (g_osk.layer == 1) {
             g_osk.layer = 0; // capitals for one letter, like a phone
         }
@@ -124,10 +140,10 @@ void Press()
     }
     switch (SpecialAt(g_osk.col)) {
     case kShift:
-        g_osk.layer = g_osk.layer == 1 ? 0 : 1;
+        g_osk.layer = EffLayer() == 1 ? 0 : 1;
         break;
     case kSymbols:
-        g_osk.layer = g_osk.layer == 2 ? 0 : 2;
+        g_osk.layer = EffLayer() == 2 ? 0 : 2;
         break;
     case kSpace:
         Type(' ');
@@ -249,12 +265,6 @@ void OskBeginFrame()
     if (Pressed(ImGuiKey_GamepadR1)) {
         TapKey(ImGuiKey_RightArrow);
     }
-    if (Pressed(ImGuiKey_GamepadL2, false)) {
-        g_osk.layer = g_osk.layer == 2 ? 0 : 2;
-    }
-    if (Pressed(ImGuiKey_GamepadR2, false)) {
-        g_osk.layer = g_osk.layer == 1 ? 0 : 1;
-    }
     if (Pressed(ImGuiKey_GamepadFaceRight, false) || Pressed(ImGuiKey_GamepadBack, false)) {
         g_osk.want_close = true;
     }
@@ -350,6 +360,7 @@ void OskDraw()
         k = 1 - EaseOut((float)(now - g_osk.hidden_t) / out_dur);
     }
     const GameLibraryColors th = GameLibraryThemeColors();
+    const int layer = EffLayer();
     const float s = g_viewport_mgr.m_scale;
     ImGuiViewport *vp = ImGui::GetMainViewport();
     ImDrawList *dl = ImGui::GetForegroundDrawList(vp);
@@ -488,7 +499,7 @@ void OskDraw()
     std::string space_label = tr("Space");
     const char *special[kSpecialCount] = {
         ICON_FA_ARROW_UP,
-        g_osk.layer == 2 ? "abc" : "#+=",
+        layer == 2 ? "abc" : "#+=",
         space_label.c_str(),
         ICON_FA_DELETE_LEFT,
         ICON_FA_CHECK,
@@ -496,7 +507,7 @@ void OskDraw()
     ImVec2 sp_a[kSpecialCount], sp_b[kSpecialCount];
     for (int i = 0, col = 0; i < kSpecialCount; col += kSpecialSpan[i], i++) {
         key_rect(4, col, kSpecialSpan[i], &sp_a[i], &sp_b[i]);
-        bool on = (i == kShift && g_osk.layer == 1) || (i == kSymbols && g_osk.layer == 2) ||
+        bool on = (i == kShift && layer == 1) || (i == kSymbols && layer == 2) ||
                   i == kDone;
         draw_key(sp_a[i], sp_b[i], on);
     }
@@ -509,7 +520,7 @@ void OskDraw()
         for (int c = 0; c < 10; c++) {
             ImVec2 ka, kb;
             key_rect(rr, c, 1, &ka, &kb);
-            char label[2] = { kRows[g_osk.layer][rr][c], 0 };
+            char label[2] = { kRows[layer][rr][c], 0 };
             draw_label(ka, kb, label, g_osk.row == rr && g_osk.col == c);
         }
     }
@@ -525,8 +536,8 @@ void OskDraw()
         { "X", IM_COL32(40, 110, 220, 255), tr("Delete") },
         { "Y", IM_COL32(226, 180, 23, 255), tr("Space") },
         { "LB/RB", 0, tr("Move") },
-        { "LT", 0, tr("Symbols") },
-        { "RT", 0, tr("Capitals") },
+        { "LT", 0, tr("Hold: symbols") },
+        { "RT", 0, tr("Hold: capitals") },
         { "B", IM_COL32(200, 50, 42, 255), tr("Done") },
         { "Start", 0, tr("Enter") },
     };

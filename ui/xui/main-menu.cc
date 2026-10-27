@@ -18,6 +18,7 @@
 //
 #include "rtx-video.hh"
 #include "common.hh"
+#include "achievements.hh"
 #include "osk.hh"
 #include "scene-manager.hh"
 #include "widgets.hh"
@@ -622,12 +623,47 @@ void MainMenuInputView::Draw()
            &g_config.input.background_input_capture,
            tr("Capture even if window is unfocused (requires restart)"));
     Toggle(tr("Quick save buttons"), &g_config.input.quick_save_buttons,
-           tr("Back + LB saves the game you're playing, Back + RB loads it "
-              "(one quick save per game)"));
+           string_format(tr("%s saves the game you're playing and %s loads it "
+                            "(one quick save per game)"),
+                         QuickSaveButtonName(false).c_str(),
+                         QuickSaveButtonName(true).c_str())
+               .c_str());
+    ChevronCombo(tr("Hold Back, then press"), &g_config.input.quick_save_combo,
+                 tr_items("LB / RB (L1 / R1)\0" "Triggers (LT / RT)\0"
+                          "Stick clicks (L3 / R3)\0" "D-pad left / right\0"),
+                 tr("Which two buttons quick save and quick load use. Change it if "
+                    "your controller makes LB / RB awkward."));
     char rumble[96];
     snprintf(rumble, sizeof(rumble), tr("How strong controllers rumble (%d%%)"),
              (int)(g_config.input.rumble_strength * 100 + 0.5f));
     Slider(tr("Rumble strength"), &g_config.input.rumble_strength, rumble);
+
+    SectionTitle(tr("Mouse and keyboard"));
+    Toggle(tr("Use the mouse as a stick"), &g_config.input.mouse.enabled,
+           tr("Click the game to capture the mouse. Moving it moves a stick, left "
+              "click is RT, right click is LT and middle click is the right stick "
+              "button. F3 or Esc lets go. The keyboard must be bound to a port."));
+    ChevronCombo(tr("Mouse moves"), &g_config.input.mouse.stick,
+                 tr_items("Right stick (look)\0" "Left stick (move)\0"));
+    {
+        float t = (g_config.input.mouse.sensitivity - 0.25f) / 2.75f;
+        t = t < 0 ? 0 : (t > 1 ? 1 : t);
+        char desc[96];
+        snprintf(desc, sizeof(desc), tr("How fast the picture turns (%.1fx)"),
+                 g_config.input.mouse.sensitivity);
+        float nt = t;
+        Slider(tr("Mouse sensitivity"), &nt, desc);
+        if (nt != t) {
+            g_config.input.mouse.sensitivity = 0.25f + nt * 2.75f;
+        }
+    }
+    Toggle(tr("Invert mouse up and down"), &g_config.input.mouse.invert_y);
+    if (ImGui::Button(tr("Use WASD + mouse layout"))) {
+        xemu_queue_notification(KeyboardMouseLayoutApply().c_str());
+    }
+    ImGui::SetItemTooltip("%s", tr("WASD moves, Space is A, E is B, R is X, Q is Y. "
+                                   "Turns the mouse on and binds the keyboard to a "
+                                   "free port. Change keys in Mapping above."));
 }
 
 void MainMenuInputView::Hide()
@@ -1484,6 +1520,7 @@ void MainMenuSnapshotsView::Draw()
                       ImVec2(-FLT_MIN, 0))) {
         xemu_snapshots_save(m_search_buf.empty() ? NULL : m_search_buf.c_str(),
                             NULL);
+        AchievementsEvent(kAchSaveState);
         ClearSearch();
     }
     if (snapshot_with_create_name_exists) {
@@ -1633,6 +1670,7 @@ void MainMenuSnapshotsView::DrawSnapshotContextMenu(
 
     if (ImGui::MenuItem(tr("Replace"))) {
         xemu_snapshots_save(snapshot->name, &err);
+        AchievementsEvent(kAchSaveState);
     }
 
     if (ImGui::MenuItem(tr("Delete"))) {

@@ -221,6 +221,15 @@ see the [Releases](../../releases) page.
 - **You tick them off yourself.** xemu can't see inside a game, so it can't
   tell when you've done something. A pop-up slides in at the lower right when
   you tick one (it can be switched off, and "Show a pop-up" tries it).
+- **Unlock by itself (new, experimental):** an achievement can have a
+  *trigger*: conditions about numbers in the running game's memory, like
+  "lives is 0" or "level is at least 5". xemu checks them while the game
+  runs and unlocks the achievement when they hold. The **Address finder**
+  (button in the Achievements tab) helps you find those numbers, like a
+  cheat search: look for a value, change it in the game, look again. It only
+  reads memory, never changes it. Triggers need someone to find the addresses
+  game by game, so only games people have set up unlock this way; see
+  [docs/achievement-packs.md](docs/achievement-packs.md).
 - **The Achievements tab** has a game picker, a progress bar with points and
   the list for the game (grouped, filterable, with secret ones hidden until
   you get them). Games without a pack are listed too.

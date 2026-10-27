@@ -29,6 +29,7 @@
 #include "common.hh"
 #include "osk.hh"
 #include "input-ui.hh"
+#include "ach-finder.hh"
 #include "play-extras.hh"
 #include "achievements.hh"
 #include "game-library.hh"
@@ -9245,6 +9246,39 @@ void DrawAchEditPopup()
                                      "hard one, 50 or more for the toughest."));
     }
 
+    // Unlocking by itself (experimental): conditions on the game's memory
+    if (!ed.is_new) {
+        ImGui::Dummy(ImVec2(0, 6 * s));
+        ImGui::TextUnformatted(tr("Unlock by itself (experimental)"));
+        AchievementInfo cur;
+        for (int i = 0; i < AchievementCount(ed.tid); i++) {
+            AchievementInfo a = AchievementAt(ed.tid, i);
+            if (a.id == ed.id) {
+                cur = a;
+                break;
+            }
+        }
+        if (cur.trigger) {
+            for (auto &c : cur.trigger->all) {
+                ImGui::BulletText("%s", AchCondText(c).c_str());
+            }
+            for (auto &c : cur.trigger->any) {
+                ImGui::BulletText("%s %s", tr("one of:"), AchCondText(c).c_str());
+            }
+            if (ImGui::SmallButton(tr("Remove trigger"))) {
+                AchievementsClearTrigger(ed.tid, ed.id);
+            }
+        } else {
+            ImGui::TextDisabled("%s", tr("No trigger: you tick this one off yourself."));
+        }
+        if (ImGui::Button(tr("Open the address finder"), ImVec2(0, 0))) {
+            AchFinderOpen(ed.tid);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SetItemTooltip("%s", tr("Find where the running game keeps the number that "
+                                       "shows you got this, and add it as a trigger."));
+    }
+
     // How it will look in the list
     ImGui::Dummy(ImVec2(0, 4 * s));
     ImGui::TextUnformatted(tr("Preview"));
@@ -9422,6 +9456,16 @@ void DrawAchievementsTab()
         ImGui::SetItemTooltip("%s", tr("Write your own achievement for this game. You tick "
                                        "it off yourself when you get it."));
         ImGui::Dummy(ImVec2(0, 4 * s));
+        ImGui::BeginDisabled(!sel);
+        if (DashButton(tr("Address finder (experimental)..."), th.glass, th.white,
+                       ImVec2(0, 30 * s))) {
+            AchFinderOpen(sel);
+        }
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip("%s", tr("Find where the running game keeps a number, so one of "
+                                       "your achievements can unlock by itself when it reaches "
+                                       "a value. Experimental."));
+        ImGui::Dummy(ImVec2(0, 4 * s));
         if (DashButton(tr("Browse community packs..."), th.glass, th.white,
                        ImVec2(0, 30 * s))) {
             Community().open_request = true;
@@ -9592,6 +9636,12 @@ void DrawAchievementsTab()
             float right = rb.x - 16 * s;
             dl->AddText(ImVec2(right - pts_sz.x, ra_.y + 12 * s),
                         ai.done ? th.accent : th.dim, pt.c_str());
+            if (ai.trigger) {
+                // Unlocks by itself while the game runs
+                const char *au = tr("Auto");
+                ImVec2 aus = ImGui::CalcTextSize(au);
+                dl->AddText(ImVec2(right - aus.x, ra_.y + 14 * s + pts_sz.y), th.accent, au);
+            }
             // Name and what to do
             bool hidden = ai.secret && !ai.done;
             float tx = ra_.x + 14 * s + bd + 14 * s;

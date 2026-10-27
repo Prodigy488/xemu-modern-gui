@@ -34,6 +34,7 @@
 #include "actions.hh"
 #include "common.hh"
 #include "achievements.hh"
+#include "ach-finder.hh"
 #include "xemu-hud.h"
 #include "misc.hh"
 #include "gl-helpers.hh"
@@ -361,6 +362,8 @@ void xemu_hud_update(void)
         DynamicResDraw();
     }
     g_snapshot_mgr.Draw();
+    AchievementsTick();
+    AchFinderDraw();
     AchievementsDraw();
     OskDraw(); // on top of everything
 

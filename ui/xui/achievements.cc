@@ -7,6 +7,7 @@
 // (at your option) any later version.
 //
 #include "achievements.hh"
+#include "ach-memory.hh"
 #include "common.hh"
 #include "font-manager.hh"
 #include "game-library.hh"
@@ -39,6 +40,14 @@ extern "C" int http_post_form(const char *url, const char *body, GByteArray *res
                               void *errp);
 #endif
 
+// The emulator side (which game is running, reading its memory). Left out
+// when testing this file alone (-DACH_NO_EMU).
+#ifndef ACH_NO_EMU
+#include "system/runstate.h"
+#include "xemu-guestmem.h"
+#include "xemu-xbe.h"
+#endif
+
 using json = nlohmann::json;
 namespace fs = std::filesystem;
 
@@ -65,6 +74,7 @@ double g_last_save = 0;
 std::map<uint32_t, Game> g_games;
 std::map<uint32_t, std::map<std::string, int64_t>> g_done; // title -> id -> unix time
 bool g_popups = true;
+std::set<std::pair<uint32_t, std::string>> g_suppressed; // untick: no auto-unlock this run
 std::deque<Toast> g_pending; // waiting to show
 std::vector<Toast> g_toasts; // showing now
 
@@ -157,6 +167,16 @@ int ParsePackInto(const std::string &text, uint32_t file_tid, bool mine,
     for (auto &a : g.list) {
         seen.insert(a.id);
     }
+    // XBE builds the pack's addresses were found in (a trigger can name its own)
+    std::vector<uint32_t> pack_builds;
+    if (j.contains("builds") && j["builds"].is_array()) {
+        for (auto &b : j["builds"]) {
+            uint32_t v;
+            if (b.is_string() && ParseHexId(b.get<std::string>(), &v) && pack_builds.size() < 16) {
+                pack_builds.push_back(v);
+            }
+        }
+    }
     int added = 0, idx = 0;
     for (auto &e : j["achievements"]) {
         if (idx++ >= 500 || g.list.size() >= 500) {
@@ -185,6 +205,15 @@ int ParsePackInto(const std::string &text, uint32_t file_tid, bool mine,
         }
         a.secret = e.contains("secret") && e["secret"].is_boolean() && e["secret"].get<bool>();
         a.mine = mine;
+        if (e.contains("trigger")) {
+            AchTrigger t;
+            if (AchTriggerParse(e["trigger"], t)) {
+                if (t.builds.empty()) {
+                    t.builds = pack_builds;
+                }
+                a.trigger = std::make_shared<AchTrigger>(std::move(t));
+            }
+        }
         g.list.push_back(std::move(a));
         added++;
     }
@@ -594,7 +623,159 @@ void AchievementsSet(uint32_t tid, const std::string &id, bool done)
     } else if (!done && m.count(id)) {
         m.erase(id);
         g_dirty = true;
+        if (a->trigger) {
+            // You took it back: don't let the trigger give it again right away
+            g_suppressed.insert({ tid, id });
+        }
     }
+}
+
+namespace {
+// Gives one the way AchievementsSet does (caller holds the lock)
+void UnlockLocked(uint32_t tid, AchievementInfo &a)
+{
+    auto &m = g_done[tid];
+    if (!m.count(a.id)) {
+        m[a.id] = (int64_t)time(NULL);
+        g_dirty = true;
+        ShowToast(a.name, a.points);
+    }
+}
+
+void ResetTriggersLocked()
+{
+    for (auto &[tid, g] : g_games) {
+        for (auto &a : g.list) {
+            if (a.trigger) {
+                AchTriggerReset(*a.trigger);
+            }
+        }
+    }
+}
+} // namespace
+
+void AchievementsTickFor(uint32_t tid, uint32_t build, AchReadFn fn, void *user)
+{
+    std::lock_guard<std::mutex> lk(g_lock);
+    auto it = g_games.find(tid);
+    if (it == g_games.end()) {
+        return;
+    }
+    auto d = g_done.find(tid);
+    for (auto &a : it->second.list) {
+        if (!a.trigger || (d != g_done.end() && d->second.count(a.id)) ||
+            g_suppressed.count({ tid, a.id })) {
+            continue;
+        }
+        const auto &b = a.trigger->builds;
+        if (!b.empty() && std::find(b.begin(), b.end(), build) == b.end()) {
+            continue; // addresses from a different build of the game
+        }
+        if (AchTriggerTick(*a.trigger, fn, user)) {
+            UnlockLocked(tid, a);
+            d = g_done.find(tid);
+        }
+    }
+}
+
+#ifndef ACH_NO_EMU
+static bool GuestRead(uint32_t addr, void *buf, uint32_t len, void *)
+{
+    return xemu_guest_read(addr, buf, len);
+}
+
+void AchievementsTick(void)
+{
+    static double next = 0, next_id = 0, started = 0;
+    static uint32_t cur_tid = 0, cur_build = 0;
+    const double now = ImGui::GetTime();
+    if (now < next) {
+        return;
+    }
+    next = now + 0.1;
+    if (!runstate_is_running() || !xemu_guest_available()) {
+        return;
+    }
+    if (now >= next_id) {
+        // Which game is running (once a second)
+        next_id = now + 1.0;
+        struct xbe *x = xemu_get_xbe_info();
+        uint32_t tid = x && x->cert ? x->cert->m_titleid : 0;
+        uint32_t build = x && x->header ? x->header->m_timedate : 0;
+        if (tid != cur_tid || build != cur_build) {
+            cur_tid = tid;
+            cur_build = build;
+            started = now;
+            std::lock_guard<std::mutex> lk(g_lock);
+            ResetTriggersLocked();
+            g_suppressed.clear();
+        }
+    }
+    // Give the game a few seconds to set itself up first
+    if (!cur_tid || now - started < 3.0) {
+        return;
+    }
+    xemu_guest_sync();
+    AchievementsTickFor(cur_tid, cur_build, GuestRead, nullptr);
+}
+#endif
+
+bool AchievementsAddCondition(uint32_t tid, const std::string &id, const AchCond &cond,
+                              bool any, uint32_t build)
+{
+    if (g_packs_dir.empty()) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lk(g_lock);
+    json j = MineRead(tid, "");
+    for (auto &e : j["achievements"]) {
+        if (!e.is_object() || Str(e, "id", 40) != id) {
+            continue;
+        }
+        AchTrigger t;
+        if (e.contains("trigger")) {
+            AchTriggerParse(e["trigger"], t); // an unusable one starts over
+        }
+        auto &list = any ? t.any : t.all;
+        if (list.size() >= 16) {
+            return false;
+        }
+        AchCond c = cond;
+        c.have_prev = c.latched = false;
+        list.push_back(c);
+        if (build && std::find(t.builds.begin(), t.builds.end(), build) == t.builds.end() &&
+            t.builds.size() < 16) {
+            t.builds.push_back(build);
+        }
+        e["trigger"] = AchTriggerToJson(t);
+        if (!MineWrite(tid, j)) {
+            return false;
+        }
+        g_suppressed.erase({ tid, id });
+        LoadPacksLocked();
+        return true;
+    }
+    return false;
+}
+
+bool AchievementsClearTrigger(uint32_t tid, const std::string &id)
+{
+    if (g_packs_dir.empty()) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lk(g_lock);
+    json j = MineRead(tid, "");
+    for (auto &e : j["achievements"]) {
+        if (e.is_object() && Str(e, "id", 40) == id && e.contains("trigger")) {
+            e.erase("trigger");
+            if (!MineWrite(tid, j)) {
+                return false;
+            }
+            LoadPacksLocked();
+            return true;
+        }
+    }
+    return false;
 }
 
 bool AchievementsPopups(void)
@@ -675,7 +856,11 @@ bool AchievementsEditMine(uint32_t tid, const std::string &id, const std::string
     bool found = false;
     for (auto &e : j["achievements"]) {
         if (e.is_object() && Str(e, "id", 40) == id) {
+            json old_trigger = e.contains("trigger") ? e["trigger"] : json();
             e = MineEntry(id, name, desc, points, group);
+            if (!old_trigger.is_null()) {
+                e["trigger"] = old_trigger; // editing the text keeps the trigger
+            }
             found = true;
         }
     }

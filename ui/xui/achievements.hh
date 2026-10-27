@@ -20,8 +20,11 @@
 //
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
+
+#include "ach-memory.hh"
 
 // Where the progress file is and where the packs are; loads both. Call once
 // at startup.
@@ -50,6 +53,9 @@ struct AchievementInfo {
     bool mine = false;   // made here, can be edited
     bool done = false;
     int64_t done_at = 0; // unix time
+    // Unlocks by itself when the game's memory fits (experimental). Shared
+    // with the pack; the engine updates its running state, so only read it.
+    std::shared_ptr<AchTrigger> trigger;
 };
 
 // Games that have achievements, by title ID
@@ -70,6 +76,20 @@ int AchievementsPointsAll(void);
 
 // Ticks one off (or back on). Shows the pop-up when it becomes done.
 void AchievementsSet(uint32_t title_id, const std::string &id, bool done);
+// Every frame: while a game runs, checks the triggers of its achievements
+// (about ten times a second) and unlocks the ones whose conditions hold.
+void AchievementsTick(void);
+// The same check with a given game and memory reader, for testing. `build` is
+// the XBE's build stamp (0 if unknown).
+void AchievementsTickFor(uint32_t title_id, uint32_t build, AchReadFn fn, void *user);
+// Adds a condition to one of your own achievements' trigger (made if it has
+// none). `any` puts it in the "at least one of these" group. `build` is the
+// XBE build stamp the address belongs to (0 = don't record one).
+bool AchievementsAddCondition(uint32_t title_id, const std::string &id, const AchCond &cond,
+                              bool any, uint32_t build);
+// Removes the trigger from one of your own achievements
+bool AchievementsClearTrigger(uint32_t title_id, const std::string &id);
+
 // Shows the pop-up for the first achievement of a game (for trying it out)
 void AchievementsPreviewToast(uint32_t title_id);
 

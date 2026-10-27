@@ -16,6 +16,8 @@ xemu_ss.add(files(
   'perf-voice.cc',
   'insignia-net.cc',
   'achievements.cc',
+  'ach-memory.cc',
+  'ach-finder.cc',
   'osk.cc',
   'input-ui.cc',
   'play-extras.cc',

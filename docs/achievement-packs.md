@@ -37,7 +37,59 @@ See [achievement-pack-example.json](achievement-pack-example.json).
 | `achievements[].group` | Optional heading to keep them in sections. |
 | `achievements[].secret` | `true` hides the name and text until you tick it off. |
 
-Files over 1 MB and more than 500 achievements per game are ignored, and anything that isn't valid is skipped. Packs are only text that is shown; they can't do anything else.
+Files over 1 MB and more than 500 achievements per game are ignored, and anything that isn't valid is skipped. Packs can't run anything. The only thing a pack can ask xemu to do is *read* numbers from the running game (see below); it can never change them.
+
+## Unlocking by itself (experimental)
+
+By default you tick achievements off yourself. An achievement can also have a **trigger**: conditions about numbers in the running game's memory, such as "lives is 0" or "level is at least 5". xemu checks them about ten times a second while that game runs and unlocks the achievement when they hold. You can still tick it off yourself, and if you untick it, it stays off until you restart the game.
+
+This is experimental. It only works for games someone has found the right addresses in, and the addresses can change between versions of a game (see `builds`).
+
+### Finding the addresses
+
+Open the Achievements tab, pick the game, press **Address finder (experimental)...** and start the game. It works like a cheat search:
+
+1. Type a number the game shows (lives, level, score) and press **Search**. Or press **Search without a value** if you don't know it.
+2. Change it in the game, type the new value and press **Equals** (or use **Changed**, **Unchanged**, **Increased**, **Decreased**).
+3. Repeat until a few addresses are left, press **Watch** on them and keep playing to see which one follows your number.
+4. Press **Use as a trigger**, pick one of your achievements and say when it should unlock ("is at least 5", "has gone down"...).
+
+The finder only reads memory. It writes the trigger into your `<TITLEID>-mine.json`, together with the game's build, so it won't fire on a different version.
+
+### Writing one by hand
+
+Add a `trigger` to an achievement:
+
+```json
+{
+  "id": "level5",
+  "name": "Getting somewhere",
+  "description": "Reach level 5.",
+  "trigger": {
+    "all": [ { "addr": "0x0045A3C0", "size": "u32", "op": ">=", "value": 5 } ],
+    "hold": 3
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `all` | List of conditions that must all hold. A trigger can also be just a list, which means `all`. |
+| `any` | Optional list: at least one of these must hold as well. |
+| `hold` | How many checks in a row (0.1 s each) the conditions must hold. 1 to 100, default 3. |
+| `builds` | Optional list of the game's build stamps (`"0x3E8F12A0"`) the addresses are for. The finder fills this in. A pack can also put `builds` at its top level. Empty means any build. |
+
+A condition:
+
+| Field | Meaning |
+|---|---|
+| `addr` | The game's own address, as hex text (`"0x0045A3C0"`). Addresses in the game's XBE sections stay the same each run; memory the game allocates may not. |
+| `size` | `u8`, `u16`, `u32` (unsigned), `i8`, `i16`, `i32` (signed) or `f32` (decimal). Default `u32`. |
+| `op` | `==` (default), `!=`, `<`, `<=`, `>`, `>=`. |
+| `value` | A number, or `"prev"` to compare with the value at the previous check (`">"` with `"prev"` means "has gone up"). A `"prev"` condition counts as true for the rest of the game once it has happened. |
+| `mask` | Optional bits to look at, for flag words (`"0x04"` looks at one bit). Not for `f32`. |
+
+Up to 16 conditions in each of `all` and `any`. A trigger that isn't valid is ignored and the achievement is ticked off by hand as usual. Triggers start 3 seconds after a game starts, and only watch games whose title ID matches the pack.
 
 ## Sharing
 

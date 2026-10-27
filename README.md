@@ -217,7 +217,13 @@ see the [Releases](../../releases) page.
   mouse button, the side buttons and the wheel do (any Xbox button or
   trigger; by default left click is the right trigger, right click the left
   trigger and middle click R3). **Use WASD + mouse layout** binds a
-  ready-made keyboard layout in one click.
+  ready-made keyboard layout in one click. Picking the keyboard for a port
+  turns the mouse on (you can turn it off again).
+- **Keyboard and controller, automatically:** while the keyboard is on a
+  port, moving a controller puts that controller on the port, and using the
+  keyboard or mouse puts the keyboard back. It doesn't change your saved
+  ports, and there's a switch for it in Settings > Input if you'd rather
+  keep both on their own ports.
 - **Keys and mouse for each game:** in a game's settings, "Own keyboard and
   mouse setup for this game" gives it its own keys, mouse speed and mouse
   buttons, switched on when the game starts and put back when it's done.

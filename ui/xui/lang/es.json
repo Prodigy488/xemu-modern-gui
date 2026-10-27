@@ -1184,5 +1184,9 @@
  "Suggested for this game: %s": "Sugerido para este juego: %s",
  "A guess from the game's name, not its own layout. You can change every key afterwards.": "Una suposición según el nombre del juego, no su propia distribución. Después puedes cambiar cada tecla.",
  "Start from:": "Empezar desde:",
- "Pick one...": "Elige uno..."
+ "Pick one...": "Elige uno...",
+ "Custom": "Personalizado",
+ "Switch between keyboard and controller": "Alternar entre teclado y mando",
+ "While the keyboard is on a port, moving a controller puts that controller on the port, and using the keyboard or mouse puts the keyboard back. Turn it off for two players on one keyboard and one controller.": "Mientras el teclado esté en un puerto, al mover un mando ese mando pasa al puerto, y al usar el teclado o el ratón vuelve el teclado. Desactívalo para dos jugadores con un teclado y un mando.",
+ "Mouse is on for the keyboard. You can turn it off under Mouse and keyboard.": "El ratón está activado para el teclado. Puedes desactivarlo en Ratón y teclado."
 }

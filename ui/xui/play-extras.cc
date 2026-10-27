@@ -188,7 +188,7 @@ void PlayExtrasMouse(bool playing)
         return;
     }
     ControllerState *kbd = xemu_input_get_keyboard();
-    if (!kbd || kbd->bound < 0) {
+    if (!kbd || (kbd->bound < 0 && !xemu_input_auto_switch_standby())) {
         xemu_queue_notification(
             tr("Bind the keyboard to a controller port first (Settings > Input)"));
         return;

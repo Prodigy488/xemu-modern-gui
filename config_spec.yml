@@ -107,6 +107,12 @@ input:
     type: enum
     values: [bumpers, triggers, sticks, dpad]
     default: bumpers
+  # While the keyboard is bound to a port, moving a controller's stick or
+  # pressing its buttons puts that controller on the port, and using the
+  # keyboard or mouse puts the keyboard back
+  auto_switch:
+    type: bool
+    default: true
   # Mouse and keyboard play: the keyboard (bound to a port) plus the mouse
   mouse:
     # Mouse movement moves a stick. What each mouse button, and the wheel,
@@ -116,7 +122,7 @@ input:
     # trigger
     enabled:
       type: bool
-      default: false
+      default: true
     # Which stick the mouse moves
     stick:
       type: enum

@@ -1184,5 +1184,9 @@
  "Suggested for this game: %s": "Рекомендуется для этой игры: %s",
  "A guess from the game's name, not its own layout. You can change every key afterwards.": "Предположение по названию игры, а не её настоящая раскладка. Потом можно изменить любую клавишу.",
  "Start from:": "Начать с:",
- "Pick one...": "Выбрать..."
+ "Pick one...": "Выбрать...",
+ "Custom": "Свой вариант",
+ "Switch between keyboard and controller": "Переключаться между клавиатурой и геймпадом",
+ "While the keyboard is on a port, moving a controller puts that controller on the port, and using the keyboard or mouse puts the keyboard back. Turn it off for two players on one keyboard and one controller.": "Пока клавиатура подключена к порту, движение геймпада переводит его на этот порт, а клавиатура или мышь возвращают клавиатуру. Отключите для двух игроков: один на клавиатуре, другой на геймпаде.",
+ "Mouse is on for the keyboard. You can turn it off under Mouse and keyboard.": "Мышь включена для клавиатуры. Её можно отключить в разделе «Мышь и клавиатура»."
 }

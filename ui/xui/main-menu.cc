@@ -335,6 +335,14 @@ void MainMenuInputView::Draw()
             if (ImGui::Selectable(selectable_label, is_selected)) {
                 xemu_input_bind(active, iter, 1);
 
+                // Picking the keyboard turns the mouse on; it can be turned
+                // off again in the Mouse and keyboard section
+                if (iter->type == INPUT_DEVICE_SDL_KEYBOARD && !is_selected) {
+                    g_config.input.mouse.enabled = true;
+                    xemu_queue_notification(
+                        tr("Mouse is on for the keyboard. You can turn it off under Mouse and keyboard."));
+                }
+
                 // FIXME: We want to bind the XMU here, but we can't because we
                 // just unbound it and we need to wait for Qemu to release the
                 // file
@@ -638,6 +646,11 @@ void MainMenuInputView::Draw()
     Slider(tr("Rumble strength"), &g_config.input.rumble_strength, rumble);
 
     SectionTitle(tr("Mouse and keyboard"));
+    Toggle(tr("Switch between keyboard and controller"), &g_config.input.auto_switch,
+           tr("While the keyboard is on a port, moving a controller puts that "
+              "controller on the port, and using the keyboard or mouse puts the "
+              "keyboard back. Turn it off for two players on one keyboard and "
+              "one controller."));
     Toggle(tr("Use the mouse as a stick"), &g_config.input.mouse.enabled,
            tr("Click the game to capture the mouse. Moving it moves a stick; what "
               "the buttons and wheel do is set below. F3 or Esc lets go. The "

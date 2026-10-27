@@ -151,6 +151,8 @@ ControllerState *xemu_input_get_keyboard(void);
 // Bind the keyboard to the first free port if it isn't bound; the port
 // (0-3) it's on, or -1 if all four ports are taken
 int xemu_input_bind_keyboard(void);
+// True while a controller is standing in for the keyboard (auto-switch)
+bool xemu_input_auto_switch_standby(void);
 
 void xemu_input_set_test_mode(int enabled);
 int xemu_input_get_test_mode(void);

@@ -512,6 +512,8 @@ static void xemu_input_apply_mouse(ControllerState *state)
     }
 }
 
+static void auto_switch_pad_removed(ControllerState *pad);
+
 void xemu_input_process_sdl_events(const SDL_Event *event)
 {
     if (event->type == SDL_EVENT_GAMEPAD_ADDED) {
@@ -605,6 +607,9 @@ void xemu_input_process_sdl_events(const SDL_Event *event)
             if (iter->sdl_joystick_id == event->gdevice.which) {
                 DPRINTF("Device removed: %s\n", iter->name);
 
+                // If it was standing in for the keyboard, give the port back
+                auto_switch_pad_removed(iter);
+
                 // Disconnect
                 if (iter->bound >= 0) {
                     // Queue a notification to inform user controller disconnected
@@ -685,6 +690,157 @@ void xemu_input_process_sdl_events(const SDL_Event *event)
     }
 }
 
+/*
+ * Auto-switch: while the keyboard is bound to a port, a controller that
+ * moves takes that port, and the keyboard or mouse taking over again hands
+ * it back. Nothing here is saved, so the ports you chose in Settings stay as
+ * they are next time. A controller that was on another port swaps places
+ * with the keyboard so it isn't lost.
+ */
+static bool kbd_keys_active;
+static struct {
+    bool swapped;           /* a controller is standing in for the keyboard */
+    int port;               /* the keyboard's port */
+    int home;               /* where the controller came from, or -1 */
+    ControllerState *pad;
+    int64_t last_us;
+} auto_sw = { false, -1, -1, NULL, 0 };
+
+#define AUTO_SWITCH_COOLDOWN_US 400000
+
+bool xemu_input_auto_switch_standby(void)
+{
+    return auto_sw.swapped;
+}
+
+static bool auto_switch_pad_active(ControllerState *s)
+{
+    if (s->buttons) {
+        return true;
+    }
+    for (int i = CONTROLLER_AXIS_LSTICK_X; i <= CONTROLLER_AXIS_RSTICK_Y; i++) {
+        if (abs((int)s->axis[i]) > 16000) {
+            return true;
+        }
+    }
+    return s->axis[CONTROLLER_AXIS_LTRIG] > 10000 ||
+           s->axis[CONTROLLER_AXIS_RTRIG] > 10000;
+}
+
+static bool auto_switch_mouse_active(int64_t now)
+{
+    if (!mouse_captured || !g_config.input.mouse.enabled) {
+        return false;
+    }
+    return fabsf(mouse_stick_x) > 0.12f || fabsf(mouse_stick_y) > 0.12f ||
+           (mouse_buttons & 0x3e) != 0 || now < mouse_wheel_up_until ||
+           now < mouse_wheel_down_until;
+}
+
+static void auto_switch_to_keyboard(ControllerState *kbd, int64_t now)
+{
+    ControllerState *pad = auto_sw.pad;
+    int port = auto_sw.port, home = auto_sw.home;
+    auto_sw.swapped = false;
+    auto_sw.pad = NULL;
+    auto_sw.last_us = now;
+    if (!pad || bound_controllers[port] != pad) {
+        return;
+    }
+    if (kbd->bound >= 0) {
+        xemu_input_bind(kbd->bound, NULL, 0);
+    }
+    xemu_input_bind(port, kbd, 0);
+    xemu_input_rebind_xmu(port);
+    if (home >= 0 && !xemu_input_get_bound(home)) {
+        xemu_input_bind(home, pad, 0);
+        xemu_input_rebind_xmu(home);
+    }
+    char buf[64];
+    snprintf(buf, sizeof(buf), "Keyboard on port %d", port + 1);
+    xemu_queue_notification(buf);
+}
+
+static void auto_switch_to_pad(ControllerState *kbd, ControllerState *pad,
+                               int64_t now)
+{
+    int port = kbd->bound;
+    int home = pad->bound;
+    if (home >= 0) {
+        xemu_input_bind(home, NULL, 0); /* frees the controller, unsaved */
+    }
+    xemu_input_bind(port, pad, 0);      /* the keyboard steps off */
+    xemu_input_rebind_xmu(port);
+    if (home >= 0) {
+        xemu_input_bind(home, kbd, 0);
+        xemu_input_rebind_xmu(home);
+    }
+    auto_sw.swapped = true;
+    auto_sw.port = port;
+    auto_sw.home = home;
+    auto_sw.pad = pad;
+    auto_sw.last_us = now;
+    char buf[64];
+    snprintf(buf, sizeof(buf), "Controller on port %d", port + 1);
+    xemu_queue_notification(buf);
+}
+
+/* A controller that is standing in for the keyboard is going away */
+static void auto_switch_pad_removed(ControllerState *pad)
+{
+    if (auto_sw.swapped && auto_sw.pad == pad) {
+        ControllerState *kbd = xemu_input_get_keyboard();
+        if (kbd) {
+            auto_switch_to_keyboard(kbd, qemu_clock_get_us(QEMU_CLOCK_REALTIME));
+        }
+        auto_sw.swapped = false;
+        auto_sw.pad = NULL;
+    }
+}
+
+static void xemu_input_auto_switch(void)
+{
+    ControllerState *kbd = xemu_input_get_keyboard();
+    if (!kbd) {
+        return;
+    }
+    int64_t now = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
+
+    if (auto_sw.swapped) {
+        /* Settings were changed by hand meanwhile: stop looking after it */
+        if (!auto_sw.pad || bound_controllers[auto_sw.port] != auto_sw.pad ||
+            (kbd->bound >= 0 && kbd->bound != auto_sw.home)) {
+            auto_sw.swapped = false;
+            auto_sw.pad = NULL;
+            return;
+        }
+        if (!g_config.input.auto_switch) {
+            auto_switch_to_keyboard(kbd, now);
+            return;
+        }
+        if (now - auto_sw.last_us < AUTO_SWITCH_COOLDOWN_US) {
+            return;
+        }
+        if (kbd_keys_active || auto_switch_mouse_active(now)) {
+            auto_switch_to_keyboard(kbd, now);
+        }
+        return;
+    }
+
+    if (!g_config.input.auto_switch || kbd->bound < 0 ||
+        now - auto_sw.last_us < AUTO_SWITCH_COOLDOWN_US) {
+        return;
+    }
+    ControllerState *iter;
+    QTAILQ_FOREACH(iter, &available_controllers, entry) {
+        if (iter->type == INPUT_DEVICE_SDL_GAMEPAD &&
+            auto_switch_pad_active(iter)) {
+            auto_switch_to_pad(kbd, iter, now);
+            return;
+        }
+    }
+}
+
 void xemu_input_update_controller(ControllerState *state)
 {
     int64_t now = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
@@ -711,6 +867,7 @@ void xemu_input_update_controllers(void)
     QTAILQ_FOREACH(iter, &available_controllers, entry) {
         xemu_input_update_rumble(iter);
     }
+    xemu_input_auto_switch();
 }
 
 void xemu_input_update_sdl_kbd_controller_state(ControllerState *state)
@@ -762,6 +919,12 @@ void xemu_input_update_sdl_kbd_controller_state(ControllerState *state)
         state->axis[CONTROLLER_AXIS_RTRIG] = 32767;
 
 #undef KBD_STATE
+
+    /* Remember whether keys (not the mouse) are held, for auto-switching */
+    kbd_keys_active = state->buttons != 0;
+    for (int i = 0; i < 6 && !kbd_keys_active; i++) {
+        kbd_keys_active = state->axis[i] != 0;
+    }
 
     if (mouse_captured && g_config.input.mouse.enabled) {
         xemu_input_apply_mouse(state);

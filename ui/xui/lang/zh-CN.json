@@ -1184,5 +1184,9 @@
  "Suggested for this game: %s": "推荐用于此游戏：%s",
  "A guess from the game's name, not its own layout. You can change every key afterwards.": "根据游戏名称的推测，并非该游戏自身的按键布局。之后可以修改每个按键。",
  "Start from:": "从以下开始：",
- "Pick one...": "请选择..."
+ "Pick one...": "请选择...",
+ "Custom": "自定义",
+ "Switch between keyboard and controller": "在键盘和手柄之间自动切换",
+ "While the keyboard is on a port, moving a controller puts that controller on the port, and using the keyboard or mouse puts the keyboard back. Turn it off for two players on one keyboard and one controller.": "键盘接在端口上时，移动手柄会让该手柄接管端口，使用键盘或鼠标则切回键盘。若一人用键盘、一人用手柄双人游玩，请关闭。",
+ "Mouse is on for the keyboard. You can turn it off under Mouse and keyboard.": "已为键盘开启鼠标。可在“鼠标和键盘”中关闭。"
 }

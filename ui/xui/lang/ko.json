@@ -1184,5 +1184,9 @@
  "Suggested for this game: %s": "이 게임에 추천: %s",
  "A guess from the game's name, not its own layout. You can change every key afterwards.": "게임 이름을 바탕으로 한 추측이며 게임 고유의 배치가 아닙니다. 이후 모든 키를 바꿀 수 있습니다.",
  "Start from:": "시작 설정:",
- "Pick one...": "선택..."
+ "Pick one...": "선택...",
+ "Custom": "사용자 지정",
+ "Switch between keyboard and controller": "키보드와 컨트롤러 자동 전환",
+ "While the keyboard is on a port, moving a controller puts that controller on the port, and using the keyboard or mouse puts the keyboard back. Turn it off for two players on one keyboard and one controller.": "키보드가 포트에 있을 때 컨트롤러를 움직이면 그 컨트롤러가 포트를 쓰고, 키보드나 마우스를 쓰면 키보드로 돌아갑니다. 키보드와 컨트롤러로 2인 플레이할 때는 끄세요.",
+ "Mouse is on for the keyboard. You can turn it off under Mouse and keyboard.": "키보드에 마우스를 켰습니다. 마우스와 키보드 항목에서 끌 수 있습니다."
 }

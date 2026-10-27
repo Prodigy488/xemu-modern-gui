@@ -3798,16 +3798,33 @@ void DrawGameInputPopup(GameOverrides &edit, const std::string &game)
     }
     ImGui::TextUnformatted(tr("Start from:"));
     ImGui::SameLine();
-    if (ImGui::BeginCombo("##preset", tr("Pick one..."))) {
+    // Show which layout this is, or "Custom" once a key has been changed
+    std::string current = tr("Custom");
+    int current_preset = 0; // 1.. presets, -1 xemu's keys, -2 usual setup
+    for (int i = 1; i <= InputPresetCount() && !current_preset; i++) {
+        if (pr == InputPresetProfile(i)) {
+            current_preset = i;
+            current = InputPresetName(i);
+        }
+    }
+    if (!current_preset && pr == InputProfileDefault()) {
+        current_preset = -1;
+        current = tr("xemu's keys");
+    }
+    if (!current_preset && pr == InputProfileGet()) {
+        current_preset = -2;
+        current = tr("Like my usual setup");
+    }
+    if (ImGui::BeginCombo("##preset", current.c_str())) {
         for (int i = 1; i <= InputPresetCount(); i++) {
-            if (ImGui::Selectable(InputPresetName(i))) {
+            if (ImGui::Selectable(InputPresetName(i), current_preset == i)) {
                 pr = InputPresetProfile(i);
             }
         }
-        if (ImGui::Selectable(tr("xemu's keys"))) {
+        if (ImGui::Selectable(tr("xemu's keys"), current_preset == -1)) {
             pr = InputProfileDefault();
         }
-        if (ImGui::Selectable(tr("Like my usual setup"))) {
+        if (ImGui::Selectable(tr("Like my usual setup"), current_preset == -2)) {
             pr = InputProfileGet();
         }
         ImGui::EndCombo();

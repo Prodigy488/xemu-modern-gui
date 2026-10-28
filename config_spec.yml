@@ -522,3 +522,8 @@ perf:
   boost_threads:
     type: bool
     default: true
+  # On CPUs with performance and efficiency cores, keep the emulation threads
+  # on the fast cores (Windows only; applies when xemu starts)
+  prefer_fast_cores:
+    type: bool
+    default: false

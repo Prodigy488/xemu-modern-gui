@@ -95,6 +95,10 @@ void MainMenuGeneralView::Draw()
            tr("Give the emulated CPU, GPU and audio a higher priority than "
            "other programs, for fewer stutters and audio crackles "
            "(requires restart)"));
+    Toggle(tr("Prefer the fastest CPU cores"), &g_config.perf.prefer_fast_cores,
+           tr("On CPUs with performance and efficiency cores, keep the emulated "
+              "CPU, GPU and audio on the fast cores (requires restart). It does "
+              "nothing on other CPUs."));
 #endif
 
     SectionTitle(tr("Miscellaneous"));

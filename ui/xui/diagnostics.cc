@@ -88,9 +88,10 @@ std::string DiagnosticsText()
         Pick(renderers, 3, g_config.display.renderer), nv2a_get_surface_scale_factor(),
         OnOff(g_config.display.quality.dynamic_resolution),
         Pick(filters, 10, g_config.display.filtering), OnOff(g_config.display.window.vsync));
-    add("Performance: hard FPU %s, shader cache %s, high priority %s, realtime DSP %s\n",
+    add("Performance: hard FPU %s, shader cache %s, high priority %s, fast cores %s, realtime DSP %s\n",
         OnOff(g_config.perf.hard_fpu), OnOff(g_config.perf.cache_shaders),
-        OnOff(g_config.perf.boost_threads), OnOff(g_config.audio.use_dsp));
+        OnOff(g_config.perf.boost_threads), OnOff(g_config.perf.prefer_fast_cores),
+        OnOff(g_config.audio.use_dsp));
 
     // Memory and AV pack apply at restart, so read them from the machine
     {

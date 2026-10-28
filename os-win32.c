@@ -89,8 +89,109 @@ static void os_disable_power_throttling(void)
     }
 }
 
+/*
+ * CPUs with performance and efficiency cores (Intel 12th gen and later and
+ * others): Windows may run a busy emulation thread on a slower core. When
+ * asked to in the settings, keep the emulation threads on the fastest cores.
+ * Looked up at runtime (Windows 10 and later); does nothing on CPUs whose
+ * cores are all alike.
+ */
+static ULONG *fast_core_ids;
+static ULONG fast_core_count;
+static bool fast_cores_ready;
+
+static void os_find_fast_cores(void)
+{
+    typedef BOOL(WINAPI * get_cpu_sets_fn)(void *, ULONG, PULONG, HANDLE, ULONG);
+    fast_cores_ready = true;
+
+    HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
+    get_cpu_sets_fn get_sets =
+        kernel32 ? (get_cpu_sets_fn)(void (*)(void))GetProcAddress(
+                       kernel32, "GetSystemCpuSetInformation")
+                 : NULL;
+    if (!get_sets) {
+        return;
+    }
+    ULONG len = 0;
+    get_sets(NULL, 0, &len, GetCurrentProcess(), 0);
+    if (len == 0) {
+        return;
+    }
+    uint8_t *buf = g_malloc(len);
+    if (!get_sets(buf, len, &len, GetCurrentProcess(), 0)) {
+        g_free(buf);
+        return;
+    }
+
+    /* SYSTEM_CPU_SET_INFORMATION: Size (0), Type (4, 0 = a CPU set), then
+     * Id (8), EfficiencyClass (18). A higher class is a faster core. */
+    int max_class = 0, min_class = 255;
+    ULONG n = 0;
+    for (ULONG off = 0; off + 24 <= len;) {
+        ULONG size = *(ULONG *)(buf + off);
+        if (size < 24 || off + size > len) {
+            break;
+        }
+        if (*(ULONG *)(buf + off + 4) == 0) {
+            int cls = buf[off + 18];
+            max_class = cls > max_class ? cls : max_class;
+            min_class = cls < min_class ? cls : min_class;
+            n++;
+        }
+        off += size;
+    }
+    if (max_class > min_class) {
+        ULONG *ids = g_new(ULONG, n);
+        ULONG count = 0;
+        for (ULONG off = 0; off + 24 <= len;) {
+            ULONG size = *(ULONG *)(buf + off);
+            if (size < 24 || off + size > len) {
+                break;
+            }
+            if (*(ULONG *)(buf + off + 4) == 0 && buf[off + 18] == max_class) {
+                ids[count++] = *(ULONG *)(buf + off + 8);
+            }
+            off += size;
+        }
+        /* Needs enough fast cores for the emulation threads to share */
+        if (count >= 4) {
+            fast_core_ids = ids;
+            fast_core_count = count;
+        } else {
+            g_free(ids);
+        }
+    }
+    g_free(buf);
+}
+
+static void os_prefer_fast_cores(void)
+{
+    typedef BOOL(WINAPI * set_thread_cpu_sets_fn)(HANDLE, const ULONG *, ULONG);
+    static GMutex lock;
+    g_mutex_lock(&lock);
+    if (!fast_cores_ready) {
+        os_find_fast_cores();
+    }
+    g_mutex_unlock(&lock);
+    if (!fast_core_ids) {
+        return;
+    }
+    HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
+    set_thread_cpu_sets_fn set_sets =
+        kernel32 ? (set_thread_cpu_sets_fn)(void (*)(void))GetProcAddress(
+                       kernel32, "SetThreadSelectedCpuSets")
+                 : NULL;
+    if (set_sets) {
+        set_sets(GetCurrentThread(), fast_core_ids, fast_core_count);
+    }
+}
+
 void xemu_boost_current_thread(int level)
 {
+    if (g_config.perf.prefer_fast_cores) {
+        os_prefer_fast_cores();
+    }
     if (!g_config.perf.boost_threads) {
         return;
     }

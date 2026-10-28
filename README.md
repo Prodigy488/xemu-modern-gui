@@ -325,6 +325,9 @@ see the [Releases](../../releases) page.
 - **Shader caches:** Vulkan shader and pipeline caches, OpenGL reusing
   saved shaders even after a crash, and **Clear shader cache** per game or
   for all games.
+- **Prefer the fastest CPU cores (optional):** on CPUs with performance and
+  efficiency cores, keeps the emulated CPU, GPU and audio on the fast cores
+  (Settings > General > Performance, restart needed). Off by default.
 - **Under the hood:** higher-priority emulation threads, a larger CPU code
   cache, Windows power throttling turned off, and fixes for some Vulkan and
   audio crashes. These are the only changes to emulation.

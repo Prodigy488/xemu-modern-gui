@@ -94,7 +94,7 @@ std::string DiagnosticsText()
         OnOff(g_config.perf.boost_threads), OnOff(g_config.perf.prefer_fast_cores),
         OnOff(g_config.audio.use_dsp));
     {
-        char hitch[256];
+        char hitch[440];
         nv2a_hitch_summary(hitch, sizeof(hitch));
         if (hitch[0]) {
             add("Frame hitches: %s\n", hitch);

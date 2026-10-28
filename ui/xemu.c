@@ -1466,9 +1466,33 @@ int main(int argc, char **argv)
     return exit_status;
 }
 
+/*
+ * The disc functions use the block layer, which insists on running with the
+ * global lock. They are called from the interface, which normally holds it,
+ * but a call from anywhere else (the log of a crash on eject-then-close
+ * showed this assertion) would abort the whole program. Take it when it isn't
+ * held.
+ */
+static bool disc_lock_if_needed(void)
+{
+    if (bql_locked()) {
+        return false;
+    }
+    xemu_main_loop_lock();
+    return true;
+}
+
+static void disc_unlock_if_taken(bool taken)
+{
+    if (taken) {
+        xemu_main_loop_unlock();
+    }
+}
+
 void xemu_eject_disc(Error **errp)
 {
     Error *error = NULL;
+    const bool locked_here = disc_lock_if_needed();
 
     xbox_smc_eject_button();
     xemu_settings_set_string(&g_config.sys.files.dvd_path, "");
@@ -1480,11 +1504,13 @@ void xemu_eject_disc(Error **errp)
     }
 
     xbox_smc_update_tray_state();
+    disc_unlock_if_taken(locked_here);
 }
 
 void xemu_load_disc(const char *path, Error **errp)
 {
     Error *error = NULL;
+    const bool locked_here = disc_lock_if_needed();
 
     // Ensure an eject sequence is always triggered so Xbox software reloads
     xbox_smc_eject_button();
@@ -1512,4 +1538,5 @@ void xemu_load_disc(const char *path, Error **errp)
     }
 
     xbox_smc_update_tray_state();
+    disc_unlock_if_taken(locked_here);
 }

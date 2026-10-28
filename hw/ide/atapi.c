@@ -24,6 +24,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/xbox/nv2a/pgraph/hitch.h"
 #include "qemu/cutils.h"
 #include "hw/scsi/scsi.h"
 #include "system/block-backend.h"
@@ -97,6 +98,7 @@ cd_read_sector_sync(IDEState *s)
 
     trace_cd_read_sector_sync(s->lba);
 
+    nv2a_hitch_disc_begin();
     switch (s->cd_sector_size) {
     case 2048:
         ret = blk_pread(s->blk, (int64_t)s->lba << ATAPI_SECTOR_BITS,
@@ -110,10 +112,12 @@ cd_read_sector_sync(IDEState *s)
         }
         break;
     default:
+        nv2a_hitch_disc_end();
         block_acct_invalid(blk_get_stats(s->blk), BLOCK_ACCT_READ);
         return -EIO;
     }
 
+    nv2a_hitch_disc_end();
     if (ret < 0) {
         block_acct_failed(blk_get_stats(s->blk), &s->acct);
     } else {
@@ -350,6 +354,8 @@ static void ide_atapi_cmd_read_dma_cb(void *opaque, int ret)
     IDEState *s = opaque;
     int data_offset, n;
 
+    nv2a_hitch_disc_end();
+
     if (ret < 0) {
         if (ide_handle_rw_error(s, -ret, ide_dma_cmd_to_retry(s->dma_cmd))) {
             if (s->bus->error_status) {
@@ -405,6 +411,7 @@ static void ide_atapi_cmd_read_dma_cb(void *opaque, int ret)
     qemu_iovec_init_buf(&s->bus->dma->qiov, s->io_buffer + data_offset,
                         n * ATAPI_SECTOR_SIZE);
 
+    nv2a_hitch_disc_begin();
     s->bus->dma->aiocb = ide_buffered_readv(s, (int64_t)s->lba << 2,
                                             &s->bus->dma->qiov, n * 4,
                                             ide_atapi_cmd_read_dma_cb, s);

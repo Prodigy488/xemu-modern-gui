@@ -26,6 +26,14 @@ extern "C" {
 int64_t nv2a_hitch_begin(void);
 void nv2a_hitch_end_build(int64_t t0);
 
+/* Around a wait for the GPU to finish (reason: a short static name) */
+void nv2a_hitch_end_wait(int64_t t0, const char *reason);
+
+/* Around a read from the disc image: begin when the request is issued, end
+ * when it completes (one request at a time). Any thread. */
+void nv2a_hitch_disc_begin(void);
+void nv2a_hitch_disc_end(void);
+
 /* Once per frame the game flips, from the GPU thread */
 void nv2a_hitch_frame(void);
 

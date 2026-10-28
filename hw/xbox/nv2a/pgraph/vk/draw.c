@@ -1430,8 +1430,22 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
             check_budget = true;
         }
 
+        static const char *const finish_names[] = {
+            [VK_FINISH_REASON_VERTEX_BUFFER_DIRTY] = "vertex buffer",
+            [VK_FINISH_REASON_SURFACE_CREATE] = "surface upload",
+            [VK_FINISH_REASON_SURFACE_DOWN] = "surface download",
+            [VK_FINISH_REASON_NEED_BUFFER_SPACE] = "buffer space",
+            [VK_FINISH_REASON_FRAMEBUFFER_DIRTY] = "framebuffer",
+            [VK_FINISH_REASON_PRESENTING] = "presenting",
+            [VK_FINISH_REASON_FLIP_STALL] = "frame end",
+            [VK_FINISH_REASON_FLUSH] = "flush",
+            [VK_FINISH_REASON_STALLED] = "stalled",
+        };
+        const int64_t wait_t0 = nv2a_hitch_begin();
         VK_CHECK(vkWaitForFences(r->device, 1, &r->command_buffer_fence,
                                  VK_TRUE, UINT64_MAX));
+        nv2a_hitch_end_wait(wait_t0, finish_reason < ARRAY_SIZE(finish_names) ?
+                                         finish_names[finish_reason] : "?");
 
         r->descriptor_set_index = 0;
         r->in_command_buffer = false;

@@ -253,6 +253,9 @@ void Slider(const char *str_id, float *v, const char *description)
     ImGui::SetCursorPos(ImVec2(wpos.x + size.x - slider_size.x - style.FramePadding.x,
                                wpos.y));
 
+    // Each slider needs its own ID, or the sliders on one page clash
+    ImGui::PushID(str_id);
+    const ImGuiID slider_id = window->GetID("###slider");
     ImGui::InvisibleButton("###slider", slider_size, 0);
 
 
@@ -293,7 +296,8 @@ void Slider(const char *str_id, float *v, const char *description)
                slider_size);
 
     ImVec2 slider_max = ImVec2(slider_pos.x + slider_size.x, slider_pos.y + slider_size.y);
-    ImGui::RenderNavHighlight(ImRect(slider_pos, slider_max), window->GetID("###slider"));
+    ImGui::RenderNavHighlight(ImRect(slider_pos, slider_max), slider_id);
+    ImGui::PopID();
 
     ImGui::PopStyleColor();
 }

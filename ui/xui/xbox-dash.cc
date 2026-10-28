@@ -334,7 +334,7 @@ void DrawFin(ImDrawList *dl, ImVec2 c, float r, float thick, float ang0, float s
     for (int i = 0; i <= n; i++) {
         float u = (float)i / n;
         float ang = ang0 + u * span;
-        float th = thick * powf(sinf(u * kPi), 0.8f);
+        float th = thick * powf(std::max(0.0f, sinf(u * kPi)), 0.8f);
         float ro = r + th * 0.35f, ri = r - th * 0.65f;
         outer[i] = ImVec2(c.x + cosf(ang) * ro * squash, c.y + sinf(ang) * ro);
         inner[i] = ImVec2(c.x + cosf(ang) * ri * squash, c.y + sinf(ang) * ri);

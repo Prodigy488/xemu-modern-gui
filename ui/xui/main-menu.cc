@@ -104,8 +104,8 @@ void MainMenuGeneralView::Draw()
     Toggle(tr("Discord status"), &g_config.general.discord_presence,
            tr("Show the game you're playing on your Discord profile"));
     ChevronCombo(tr("Library style"), &g_config.general.library.style,
-                 tr_items("Dashboard\0Classic\0Blades\0Metro\0Original Xbox\0Original Blades\0"),
-                 tr("Tabbed dashboard, classic window, sliding blades, live tiles, or the Original Xbox or Original Blades look"));
+                 tr_items("Dashboard\0Classic\0Blades\0Metro\0Original Xbox\0Original Blades\0Glossy Blades\0Modern\0"),
+                 tr("Tabbed dashboard, classic window, sliding blades, live tiles, the Original Xbox or Original Blades look, glossy silver blades, or a modern side menu"));
     ChevronCombo(tr("Dashboard theme"), &g_config.general.library.theme,
                  tr_items("Neon\0Green\0"),
                  tr("Dark with cyan and magenta, or xemu green"));

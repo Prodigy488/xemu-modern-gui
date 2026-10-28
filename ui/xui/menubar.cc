@@ -177,6 +177,16 @@ void ShowMainMenu()
                     style = CONFIG_GENERAL_LIBRARY_STYLE_XBLADES;
                     game_library_window.Open();
                 }
+                if (ImGui::MenuItem(tr("Glossy Blades"), NULL,
+                                    style == CONFIG_GENERAL_LIBRARY_STYLE_GLOSSY)) {
+                    style = CONFIG_GENERAL_LIBRARY_STYLE_GLOSSY;
+                    game_library_window.Open();
+                }
+                if (ImGui::MenuItem(tr("Modern"), NULL,
+                                    style == CONFIG_GENERAL_LIBRARY_STYLE_MODERN)) {
+                    style = CONFIG_GENERAL_LIBRARY_STYLE_MODERN;
+                    game_library_window.Open();
+                }
                 ImGui::Separator();
                 ImGui::TextDisabled(tr("Dashboard theme"));
                 int &theme = g_config.general.library.theme;

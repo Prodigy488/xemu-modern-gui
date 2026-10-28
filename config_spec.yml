@@ -28,7 +28,7 @@ general:
       default: false
     style:
       type: enum
-      values: [dashboard, classic, blades, metro, xbox, xblades]
+      values: [dashboard, classic, blades, metro, xbox, xblades, glossy, modern]
       default: dashboard
     theme:
       type: enum

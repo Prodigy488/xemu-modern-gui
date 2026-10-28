@@ -9984,7 +9984,8 @@ void DrawDashSettingsTab()
         ImGui::Combo("##style", &g_config.general.library.style,
                      tr_items("Dashboard (tabs)\0Classic (library window)\0"
                      "Blades (sliding panels)\0Metro (live tiles)\0"
-                     "Original Xbox (menu and globe)\0Original Blades (sphere and fins)\0"));
+                     "Original Xbox (menu and globe)\0Original Blades (sphere and fins)\0"
+                     "Glossy Blades (silver and green)\0Modern (side menu)\0"));
         label(tr("Dashboard theme"));
         ImGui::Combo("##theme", &g_config.general.library.theme,
                      tr_items("Neon (dark, cyan and magenta)\0Green (xemu)\0"));
@@ -10592,6 +10593,16 @@ bool XBladesStyle()
     return g_config.general.library.style == CONFIG_GENERAL_LIBRARY_STYLE_XBLADES;
 }
 
+bool GlossyStyle()
+{
+    return g_config.general.library.style == CONFIG_GENERAL_LIBRARY_STYLE_GLOSSY;
+}
+
+bool ModernStyle()
+{
+    return g_config.general.library.style == CONFIG_GENERAL_LIBRARY_STYLE_MODERN;
+}
+
 void DrawTabContent(int tab, int &tex_budget)
 {
     switch (tab) {
@@ -10959,6 +10970,345 @@ void DrawXboxFrame(int &tex_budget, bool sphere)
 
     ImGui::SetCursorScreenPos(ImVec2(wp.x + 28 * s, wb.y - hints_h + 4 * s));
     DrawDashHints(ImGui::GetCursorScreenPos(), ws.x - 56 * s);
+}
+
+constexpr float kPiF = 3.14159265f;
+
+// ---- Glossy Blades ----
+
+// A quad with a colour at each corner
+void GradQuad(ImDrawList *dl, ImVec2 a, ImVec2 b, ImVec2 c, ImVec2 d, ImU32 ca, ImU32 cb,
+              ImU32 cc, ImU32 cd)
+{
+    ImVec2 uv = ImGui::GetDrawListSharedData()->TexUvWhitePixel;
+    dl->PrimReserve(6, 4);
+    ImDrawIdx i0 = (ImDrawIdx)dl->_VtxCurrentIdx;
+    dl->PrimWriteVtx(a, uv, ca);
+    dl->PrimWriteVtx(b, uv, cb);
+    dl->PrimWriteVtx(c, uv, cc);
+    dl->PrimWriteVtx(d, uv, cd);
+    dl->PrimWriteIdx(i0);
+    dl->PrimWriteIdx((ImDrawIdx)(i0 + 1));
+    dl->PrimWriteIdx((ImDrawIdx)(i0 + 2));
+    dl->PrimWriteIdx(i0);
+    dl->PrimWriteIdx((ImDrawIdx)(i0 + 2));
+    dl->PrimWriteIdx((ImDrawIdx)(i0 + 3));
+}
+
+// Text turned a quarter turn the other way, reading from top to bottom
+void AddTextVerticalDown(ImDrawList *dl, ImFont *font, float size, ImVec2 pos, ImU32 col,
+                         const char *text)
+{
+    // Laid out from the left edge of the screen, where all of it is on screen
+    // to be drawn, then turned about pos
+    const float ox = 8.0f;
+    dl->PushClipRectFullScreen();
+    int start = dl->VtxBuffer.Size;
+    dl->AddText(font, size, ImVec2(ox, pos.y), col, text);
+    for (int i = start; i < dl->VtxBuffer.Size; i++) {
+        ImVec2 &p = dl->VtxBuffer[i].pos;
+        float dx = p.x - ox, dy = p.y - pos.y;
+        p = ImVec2(pos.x - dy, pos.y + dx);
+    }
+    dl->PopClipRect();
+}
+
+// The look of the Xbox 360's first dashboard, drawn from scratch: glossy
+// green, with the sections as curved silver blades stacked at the two edges.
+// The blade you are on is green, with its title and window in the middle;
+// the others stay in view at the sides and slide across as you flip through
+// them (LB / RB, or click one).
+void DrawGlossyFrame(int &tex_budget)
+{
+    const float s = g_viewport_mgr.m_scale;
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+    ImVec2 wb(wp.x + ws.x, wp.y + ws.y);
+    const bool anim = Animations();
+    const float tt = anim ? (float)ImGui::GetTime() : 0.0f;
+    const float hints_h = ImGui::GetFontSize() * 2.2f;
+    const float bar_h = hints_h + 12 * s;
+    ImFont *big = FontOr(g_font_mgr.m_menu_font);
+    ImFont *label_font = FontOr(g_font_mgr.m_menu_font_small);
+
+    // Backdrop: bright green, with soft light drifting across it
+    dl->AddRectFilledMultiColor(wp, wb, IM_COL32(120, 204, 66, 255), IM_COL32(120, 204, 66, 255),
+                                IM_COL32(40, 128, 26, 255), IM_COL32(40, 128, 26, 255));
+    for (int k = 0; k < 6; k++) {
+        ImVec2 c(wp.x + ws.x * (0.5f + 0.42f * sinf(tt * 0.06f + k * 1.9f)),
+                 wp.y + ws.y * (0.45f + 0.3f * cosf(tt * 0.045f + k * 1.3f)));
+        for (int j = 0; j < 6; j++) {
+            dl->AddCircleFilled(c, ws.y * (0.10f + 0.06f * j), IM_COL32(225, 255, 190, 6), 48);
+        }
+    }
+    // Bottom bar, between the blades
+    float by0 = wb.y - bar_h;
+    dl->AddRectFilledMultiColor(ImVec2(wp.x, by0), wb, IM_COL32(24, 92, 18, 240),
+                                IM_COL32(24, 92, 18, 240), IM_COL32(8, 52, 10, 248),
+                                IM_COL32(8, 52, 10, 248));
+    dl->AddLine(ImVec2(wp.x, by0), ImVec2(wb.x, by0), IM_COL32(220, 255, 190, 90), 1.5f * s);
+
+    // The blades
+    const int n = kTabCount;
+    const float sw = std::min(36.0f * s, ws.x * 0.022f), bow = 15 * s;
+    static float cx[kTabCount];
+    static bool init = false;
+    for (int i = 0; i < n; i++) {
+        float target = i <= g_dash_tab ? wp.x + i * sw : wb.x - (n - i) * sw;
+        cx[i] = init ? Approach(cx[i], target, 13.0f) : target;
+    }
+    init = true;
+    const int act = g_dash_tab;
+    const int N = 40;
+    auto draw_blade = [&](int i, bool left) {
+        const bool on = i == act;
+        float x = cx[i];
+        ImGui::SetCursorScreenPos(ImVec2(left ? x : x, wp.y));
+        ImGui::PushID(i);
+        bool clicked = false, hov = false;
+        if (!on) {
+            clicked = ImGui::InvisibleButton("##gblade", ImVec2(sw, ws.y));
+            hov = ImGui::IsItemHovered();
+        }
+        ImGui::PopID();
+        ImU32 c_edge = on ? IM_COL32(168, 236, 110, 255) : IM_COL32(250, 251, 250, 255);
+        ImU32 c_body = on ? IM_COL32(58, 150, 32, 255) : IM_COL32(168, 175, 170, 255);
+        if (hov) {
+            c_body = IM_COL32(196, 204, 198, 255);
+        }
+        ImVec2 curve[N + 1];
+        for (int k = 0; k <= N; k++) {
+            float u = (float)k / N;
+            float bw = bow * powf(std::max(0.0f, sinf(u * kPiF)), 0.8f);
+            float y = wp.y + ws.y * u;
+            curve[k] = left ? ImVec2(x + sw + bw, y) : ImVec2(x - bw, y);
+        }
+        for (int k = 0; k < N; k++) {
+            ImVec2 a0 = curve[k], a1 = curve[k + 1];
+            if (left) {
+                GradQuad(dl, ImVec2(x, a0.y), a0, a1, ImVec2(x, a1.y), c_edge, c_body, c_body,
+                         c_edge);
+            } else {
+                GradQuad(dl, a0, ImVec2(x + sw, a0.y), ImVec2(x + sw, a1.y), a1, c_body, c_edge,
+                         c_edge, c_body);
+            }
+        }
+        dl->AddPolyline(curve, N + 1, on ? IM_COL32(30, 100, 20, 200) : IM_COL32(110, 118, 112, 190),
+                        0, 1.3f * s);
+        // Label, turned to read along the blade
+        std::string name = XuiLower(tr(kTabNames[i]));
+        float fs = label_font->FontSize;
+        float len = label_font->CalcTextSizeA(fs, FLT_MAX, 0, name.c_str()).x;
+        ImU32 tc = on ? IM_COL32(255, 255, 255, 255) : IM_COL32(86, 94, 90, 255);
+        if (left) {
+            AddTextVertical(dl, label_font, fs, ImVec2(x + (sw - fs) / 2, wp.y + 100 * s + len),
+                            tc, name.c_str());
+        } else {
+            AddTextVerticalDown(dl, label_font, fs,
+                                ImVec2(x + (sw + fs) / 2, wp.y + 100 * s), tc, name.c_str());
+        }
+        if (clicked) {
+            SwitchTab(i);
+        }
+    };
+    for (int i = 0; i <= act; i++) {
+        draw_blade(i, true);
+    }
+    for (int i = n - 1; i > act; i--) {
+        draw_blade(i, false);
+    }
+
+    // The open blade: title and window between the stacks
+    float x0 = cx[act] + sw + bow + 18 * s;
+    float x1 = (act + 1 < n ? cx[act + 1] - bow : wb.x) - 22 * s;
+    x1 = std::max(x1, x0 + 80 * s);
+    std::string title = XuiLower(tr(kTabNames[act]));
+    float ty = wp.y + 16 * s;
+    dl->AddText(big, big->FontSize, ImVec2(x0 + 1.5f * s, ty + 1.5f * s), IM_COL32(10, 70, 10, 140),
+                title.c_str());
+    dl->AddText(big, big->FontSize, ImVec2(x0, ty), IM_COL32(255, 255, 255, 255), title.c_str());
+    float ly = ty + big->FontSize + 8 * s;
+    dl->AddLine(ImVec2(x0, ly), ImVec2(x1, ly), IM_COL32(235, 255, 215, 120), 1.2f * s);
+    DrawStyleStatus(x1, wp.y + 12 * s);
+
+    float cy0 = ly + 14 * s, cy1 = by0 - 14 * s;
+    dl->AddRectFilled(ImVec2(x0 - 8 * s, cy0 - 8 * s), ImVec2(x1 + 8 * s, cy1 + 8 * s),
+                      IM_COL32(6, 44, 8, 150), 12 * s);
+    dl->AddRect(ImVec2(x0 - 8 * s, cy0 - 8 * s), ImVec2(x1 + 8 * s, cy1 + 8 * s),
+                IM_COL32(220, 255, 200, 44), 12 * s, 0, 1.2f * s);
+    float slide = (1.0f - EaseSince(g_anim.tab_t, 0.30f)) * 30 * s;
+    ImGui::SetCursorScreenPos(ImVec2(x0 + slide, cy0));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::BeginChild("##glossycontent", ImVec2(std::max(10.0f, x1 - x0), std::max(10.0f, cy1 - cy0)),
+                      ImGuiChildFlags_NavFlattened,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleColor();
+    DrawTabContent(g_dash_tab, tex_budget);
+    ImGui::EndChild();
+
+    ImGui::SetCursorScreenPos(ImVec2(x0, by0 + 8 * s));
+    DrawDashHints(ImGui::GetCursorScreenPos(), x1 - x0);
+}
+
+// ---- Modern ----
+
+// A clean, familiar layout for a games launcher: a rail on the left with an
+// icon and a name for every section (always visible, big targets, works with
+// mouse, keyboard and controller), a title bar, and the section in one calm
+// card. The colour follows the section you are in.
+const char *SectionIcon(int tab)
+{
+    switch (tab) {
+    case kTabHome:         return ICON_FA_CIRCLE_PLAY;
+    case kTabLibrary:      return ICON_FA_GAMEPAD;
+    case kTabInsignia:     return ICON_FA_NETWORK_WIRED;
+    case kTabMedia:        return ICON_FA_IMAGE;
+    case kTabDrive:        return ICON_FA_HARD_DRIVE;
+    case kTabStore:        return ICON_FA_DOWNLOAD;
+    case kTabPatches:      return ICON_FA_WAND_MAGIC_SPARKLES;
+    case kTabAchievements: return ICON_FA_TROPHY;
+    default:               return ICON_FA_GEAR;
+    }
+}
+
+void DrawModernFrame(int &tex_budget)
+{
+    const float s = g_viewport_mgr.m_scale;
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+    ImVec2 wb(wp.x + ws.x, wp.y + ws.y);
+    const bool anim = Animations();
+    const float tt = anim ? (float)ImGui::GetTime() : 0.0f;
+    const float hints_h = ImGui::GetFontSize() * 2.2f;
+    ImFont *big = FontOr(g_font_mgr.m_menu_font);
+    ImFont *label_font = FontOr(g_font_mgr.m_menu_font_small);
+
+    // The accent glides to the colour of the section you are in
+    static float acc[3] = { -1, 0, 0 };
+    ImU32 target = SectionColor(g_dash_tab);
+    float tr3[3] = { (float)(target & 0xFF), (float)((target >> 8) & 0xFF),
+                     (float)((target >> 16) & 0xFF) };
+    for (int k = 0; k < 3; k++) {
+        acc[k] = acc[0] < 0 ? tr3[k] : (anim ? acc[k] + (tr3[k] - acc[k]) * (1.0f - expf(-6.0f * ImGui::GetIO().DeltaTime)) : tr3[k]);
+    }
+    const ImU32 accent = IM_COL32((int)acc[0], (int)acc[1], (int)acc[2], 255);
+
+    // Backdrop: near-black with two slow pools of the accent colour
+    dl->AddRectFilled(wp, wb, IM_COL32(11, 13, 18, 250));
+    for (int k = 0; k < 2; k++) {
+        ImVec2 c(wp.x + ws.x * (k ? 0.82f + 0.04f * sinf(tt * 0.1f) : 0.30f + 0.05f * cosf(tt * 0.08f)),
+                 wp.y + ws.y * (k ? 0.20f : 0.95f + 0.03f * sinf(tt * 0.07f)));
+        for (int j = 0; j < 8; j++) {
+            dl->AddCircleFilled(c, ws.y * (0.12f + 0.08f * j), Alpha(accent, 6), 64);
+        }
+    }
+
+    const float pad = 16 * s;
+    const bool compact = ws.x < 920 * s;
+    const float rail_w = compact ? 72 * s : 236 * s;
+    ImVec2 rp(wp.x + pad, wp.y + pad), rq(rp.x + rail_w, wb.y - hints_h - pad * 0.5f);
+    dl->AddRectFilled(rp, rq, IM_COL32(19, 22, 30, 238), 18 * s);
+    dl->AddRect(rp, rq, IM_COL32(255, 255, 255, 18), 18 * s, 0, 1.0f * s);
+
+    // Brand
+    ImVec2 bc(rp.x + 36 * s, rp.y + 36 * s);
+    dl->AddCircleFilled(bc, 20 * s, Alpha(accent, 40), 32);
+    dl->AddCircleFilled(bc, 11 * s, accent, 32);
+    dl->AddCircleFilled(ImVec2(bc.x - 3 * s, bc.y - 3 * s), 5 * s, IM_COL32(255, 255, 255, 120), 16);
+    if (!compact) {
+        dl->AddText(label_font, label_font->FontSize, ImVec2(bc.x + 28 * s, bc.y - label_font->FontSize / 2),
+                    IM_COL32(240, 243, 248, 255), "xemu");
+    }
+
+    // The rail: sections, then Settings by itself at the foot
+    const float row_h = 50 * s, gap = 4 * s;
+    const float top0 = rp.y + 84 * s;
+    auto row_y = [&](int i) {
+        return i == kTabSettings ? rq.y - row_h - 14 * s : top0 + i * (row_h + gap);
+    };
+    static float pill_y = -1;
+    float want_y = row_y(g_dash_tab);
+    pill_y = pill_y < 0 ? want_y : (anim ? pill_y + (want_y - pill_y) * (1.0f - expf(-16.0f * ImGui::GetIO().DeltaTime)) : want_y);
+    ImVec2 pa(rp.x + 10 * s, pill_y), pb(rq.x - 10 * s, pill_y + row_h);
+    dl->AddRectFilled(pa, pb, Alpha(accent, 40), 12 * s);
+    dl->AddRectFilled(ImVec2(pa.x, pa.y + 10 * s), ImVec2(pa.x + 4 * s, pb.y - 10 * s), accent, 2 * s);
+    dl->AddLine(ImVec2(rp.x + 20 * s, row_y(kTabSettings) - 8 * s),
+                ImVec2(rq.x - 20 * s, row_y(kTabSettings) - 8 * s), IM_COL32(255, 255, 255, 22), 1.0f * s);
+
+    static int focus_prev = -1;
+    int focused = -1;
+    ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(1, 1, 1, 0.55f));
+    for (int i = 0; i < kTabCount; i++) {
+        float y = row_y(i);
+        ImVec2 a(rp.x + 10 * s, y);
+        ImGui::SetCursorScreenPos(a);
+        ImGui::PushID(i);
+        bool clicked = ImGui::InvisibleButton("##rail", ImVec2(rail_w - 20 * s, row_h),
+                                              ImGuiButtonFlags_EnableNav);
+        bool hov = ImGui::IsItemHovered();
+        bool focus = ImGui::IsItemFocused() && ImGui::GetIO().NavVisible;
+        ImGui::PopID();
+        if (focus) {
+            focused = i;
+            // Moving the focus from one row to another changes section
+            if (i != g_dash_tab && focus_prev >= 0 && focus_prev != i) {
+                SwitchTab(i);
+            }
+        }
+        if (clicked) {
+            SwitchTab(i);
+        }
+        bool on = i == g_dash_tab;
+        if (hov && !on) {
+            dl->AddRectFilled(a, ImVec2(a.x + rail_w - 20 * s, y + row_h), IM_COL32(255, 255, 255, 12), 12 * s);
+        }
+        ImU32 col = on ? IM_COL32(255, 255, 255, 255)
+                       : IM_COL32(176, 184, 198, hov ? 255 : 220);
+        ImFont *icon_font = FontOr(g_font_mgr.m_default_font);
+        float isz = icon_font->FontSize * 1.35f;
+        const char *ic = SectionIcon(i);
+        ImVec2 isize = icon_font->CalcTextSizeA(isz, FLT_MAX, 0, ic);
+        float icx = compact ? rp.x + rail_w / 2 : a.x + 30 * s;
+        dl->AddText(icon_font, isz, ImVec2(icx - isize.x / 2, y + (row_h - isize.y) / 2),
+                    on ? accent : col, ic);
+        if (!compact) {
+            std::string name = tr(kTabNames[i]);
+            dl->AddText(label_font, label_font->FontSize,
+                        ImVec2(a.x + 58 * s, y + (row_h - label_font->FontSize) / 2), col, name.c_str());
+        }
+    }
+    ImGui::PopStyleColor();
+    focus_prev = focused;
+
+    // Title bar and the card
+    float cx0 = rq.x + pad, cx1 = wb.x - pad;
+    std::string title = tr(kTabNames[g_dash_tab]);
+    dl->AddText(big, big->FontSize, ImVec2(cx0 + 6 * s, wp.y + pad + 4 * s),
+                IM_COL32(246, 248, 252, 255), title.c_str());
+    DrawStyleStatus(cx1, wp.y + pad + 2 * s);
+    float card_y0 = wp.y + pad + big->FontSize + 22 * s, card_y1 = rq.y;
+    ImVec2 ca(cx0, card_y0), cb(cx1, card_y1);
+    dl->AddRectFilled(ca, cb, IM_COL32(19, 22, 30, 240), 18 * s);
+    dl->AddRect(ca, cb, IM_COL32(255, 255, 255, 18), 18 * s, 0, 1.0f * s);
+    dl->AddRectFilledMultiColor(ImVec2(ca.x + 18 * s, ca.y), ImVec2(cb.x - 18 * s, ca.y + 2.5f * s),
+                                Alpha(accent, 0), accent, accent, Alpha(accent, 0));
+
+    float ease = EaseSince(g_anim.tab_t, 0.28f);
+    ImGui::SetCursorScreenPos(ImVec2(ca.x + 20 * s, ca.y + 16 * s + (1.0f - ease) * 14 * s));
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.25f + 0.75f * ease);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::BeginChild("##moderncontent",
+                      ImVec2(std::max(10.0f, cb.x - ca.x - 40 * s),
+                             std::max(10.0f, cb.y - ca.y - 30 * s)),
+                      ImGuiChildFlags_NavFlattened,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleColor();
+    DrawTabContent(g_dash_tab, tex_budget);
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+
+    ImGui::SetCursorScreenPos(ImVec2(wp.x + pad + 8 * s, wb.y - hints_h + 4 * s));
+    DrawDashHints(ImGui::GetCursorScreenPos(), ws.x - 2 * pad);
 }
 
 // ---- Metro ----
@@ -11413,7 +11763,8 @@ void GameLibraryWindow::Draw()
         return;
     }
 
-    const bool own_frame = BladesStyle() || MetroStyle() || XboxStyle() || XBladesStyle();
+    const bool own_frame = BladesStyle() || MetroStyle() || XboxStyle() || XBladesStyle() ||
+                           GlossyStyle() || ModernStyle();
     if (classic) {
         DrawClassicHeader();
     } else if (!own_frame) {
@@ -11478,6 +11829,10 @@ void GameLibraryWindow::Draw()
         DrawXboxFrame(tex_budget, false);
     } else if (XBladesStyle()) {
         DrawXboxFrame(tex_budget, true);
+    } else if (GlossyStyle()) {
+        DrawGlossyFrame(tex_budget);
+    } else if (ModernStyle()) {
+        DrawModernFrame(tex_budget);
     } else {
         const float hints_h = ImGui::GetFontSize() * 2.2f;
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));

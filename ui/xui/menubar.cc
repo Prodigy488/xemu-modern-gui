@@ -33,6 +33,9 @@
 #include "diagnostics.hh"
 #include "update.hh"
 #include "../xemu-os-utils.h"
+#if defined(_WIN32)
+#include "../xemu-profiler.h"
+#endif
 
 extern float g_main_menu_height; // FIXME
 
@@ -388,6 +391,12 @@ void ShowMainMenu()
                                            "It has no file paths or names."));
             }
 #if defined(_WIN32)
+            // A developer tool for finding where the emulation spends its time
+            if (ImGui::MenuItem("Capture a CPU Profile (20 s)", NULL, false,
+                                !xemu_profiler_running())) {
+                xemu_profiler_start(20);
+                xemu_queue_notification("Profiling for 20 seconds. Play normally.");
+            }
             ImGui::MenuItem(tr("Check for Updates..."), NULL, &update_window.is_open);
 #endif
 

@@ -368,6 +368,9 @@ typedef struct PGRAPHVkState {
     PipelineBinding *pipeline_cache_entries;
     PipelineBinding *pipeline_binding;
     bool pipeline_binding_changed;
+    // Dynamic state last sent to the command buffer (see apply_dynamic_state)
+    uint32_t dyn_blend_color;
+    uint32_t dyn_stencil;
 
     VkDescriptorPool descriptor_pool;
     VkDescriptorSetLayout descriptor_set_layout;

@@ -778,10 +778,13 @@ static bool check_pipeline_dirty(PGRAPHState *pg)
         return true;
     }
 
+    // The blend colour and the stencil reference and masks are dynamic state,
+    // and the polygon offset is not used by the pipeline at all, so none of
+    // them can change the pipeline (they used to, and a game that changes
+    // them every frame built a new one every time).
     const unsigned int regs[] = {
-        NV_PGRAPH_BLEND,       NV_PGRAPH_BLENDCOLOR,  NV_PGRAPH_CONTROL_0,
-        NV_PGRAPH_CONTROL_1,   NV_PGRAPH_CONTROL_2,   NV_PGRAPH_CONTROL_3,
-        NV_PGRAPH_SETUPRASTER, NV_PGRAPH_ZOFFSETBIAS, NV_PGRAPH_ZOFFSETFACTOR,
+        NV_PGRAPH_BLEND,       NV_PGRAPH_CONTROL_0,   NV_PGRAPH_CONTROL_1,
+        NV_PGRAPH_CONTROL_2,   NV_PGRAPH_CONTROL_3,   NV_PGRAPH_SETUPRASTER,
     };
 
     for (int i = 0; i < ARRAY_SIZE(regs); i++) {
@@ -831,6 +834,22 @@ static void init_pipeline_key(PGRAPHState *pg, PipelineKey *key)
     assert(ARRAY_SIZE(regs) == ARRAY_SIZE(key->regs));
     for (int i = 0; i < ARRAY_SIZE(regs); i++) {
         key->regs[i] = pgraph_reg_r(pg, regs[i]);
+    }
+    // Left out of the key (see check_pipeline_dirty): they are set when the
+    // draw begins instead, or unused
+    for (int i = 0; i < ARRAY_SIZE(regs); i++) {
+        switch (regs[i]) {
+        case NV_PGRAPH_BLENDCOLOR:
+        case NV_PGRAPH_ZOFFSETBIAS:
+        case NV_PGRAPH_ZOFFSETFACTOR:
+            key->regs[i] = 0;
+            break;
+        case NV_PGRAPH_CONTROL_1:
+            key->regs[i] &= ~(NV_PGRAPH_CONTROL_1_STENCIL_REF |
+                              NV_PGRAPH_CONTROL_1_STENCIL_MASK_READ |
+                              NV_PGRAPH_CONTROL_1_STENCIL_MASK_WRITE);
+            break;
+        }
     }
 }
 
@@ -1003,9 +1022,10 @@ static void create_pipeline(PGRAPHState *pg)
         depth_stencil.front.depthFailOp = pgraph_stencil_op_vk_map[op_zfail];
         depth_stencil.front.compareOp =
             pgraph_stencil_func_vk_map[stencil_func];
-        depth_stencil.front.compareMask = mask_read;
-        depth_stencil.front.writeMask = mask_write;
-        depth_stencil.front.reference = stencil_ref;
+        // Mask, write mask and reference are dynamic (apply_dynamic_state)
+        (void)mask_read;
+        (void)mask_write;
+        (void)stencil_ref;
         depth_stencil.back = depth_stencil.front;
     }
 
@@ -1052,8 +1072,7 @@ static void create_pipeline(PGRAPHState *pg)
         color_blend_attachment.alphaBlendOp =
             pgraph_blend_equation_vk_map[equation];
 
-        uint32_t blend_color = pgraph_reg_r(pg, NV_PGRAPH_BLENDCOLOR);
-        pgraph_argb_pack32_to_rgba_float(blend_color, blend_constant);
+        // The blend colour is dynamic (apply_dynamic_state)
     }
 
     VkPipelineColorBlendStateCreateInfo color_blending = {
@@ -1068,9 +1087,13 @@ static void create_pipeline(PGRAPHState *pg)
         .blendConstants[3] = blend_constant[3],
     };
 
-    VkDynamicState dynamic_states[3] = { VK_DYNAMIC_STATE_VIEWPORT,
-                                         VK_DYNAMIC_STATE_SCISSOR };
-    int num_dynamic_states = 2;
+    VkDynamicState dynamic_states[8] = { VK_DYNAMIC_STATE_VIEWPORT,
+                                         VK_DYNAMIC_STATE_SCISSOR,
+                                         VK_DYNAMIC_STATE_BLEND_CONSTANTS,
+                                         VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
+                                         VK_DYNAMIC_STATE_STENCIL_WRITE_MASK,
+                                         VK_DYNAMIC_STATE_STENCIL_REFERENCE };
+    int num_dynamic_states = 6;
 
     snode->has_dynamic_line_width =
         (r->enabled_physical_device_features.wideLines == VK_TRUE) &&
@@ -1570,6 +1593,43 @@ static float clamp_line_width_to_device_limits(PGRAPHState *pg, float width)
     return fminf(fmaxf(min_width, width), max_width);
 }
 
+/*
+ * The blend colour and the stencil reference and masks change as often as
+ * every draw in some games, and used to be baked into the pipeline (a new
+ * pipeline for each value). They are dynamic state now; send them to the
+ * command buffer when they differ from what it was last given, or when the
+ * pipeline was just bound.
+ */
+static void apply_dynamic_state(PGRAPHState *pg, bool force)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+
+    const uint32_t blend_color = pgraph_reg_r(pg, NV_PGRAPH_BLENDCOLOR);
+    if (force || blend_color != r->dyn_blend_color) {
+        float constants[4];
+        pgraph_argb_pack32_to_rgba_float(blend_color, constants);
+        vkCmdSetBlendConstants(r->command_buffer, constants);
+        r->dyn_blend_color = blend_color;
+    }
+
+    const uint32_t control_1 = pgraph_reg_r(pg, NV_PGRAPH_CONTROL_1);
+    const uint32_t stencil = control_1 & (NV_PGRAPH_CONTROL_1_STENCIL_REF |
+                                          NV_PGRAPH_CONTROL_1_STENCIL_MASK_READ |
+                                          NV_PGRAPH_CONTROL_1_STENCIL_MASK_WRITE);
+    if (force || stencil != r->dyn_stencil) {
+        vkCmdSetStencilCompareMask(r->command_buffer,
+                                   VK_STENCIL_FACE_FRONT_AND_BACK,
+                                   GET_MASK(control_1, NV_PGRAPH_CONTROL_1_STENCIL_MASK_READ));
+        vkCmdSetStencilWriteMask(r->command_buffer,
+                                 VK_STENCIL_FACE_FRONT_AND_BACK,
+                                 GET_MASK(control_1, NV_PGRAPH_CONTROL_1_STENCIL_MASK_WRITE));
+        vkCmdSetStencilReference(r->command_buffer,
+                                 VK_STENCIL_FACE_FRONT_AND_BACK,
+                                 GET_MASK(control_1, NV_PGRAPH_CONTROL_1_STENCIL_REF));
+        r->dyn_stencil = stencil;
+    }
+}
+
 static void begin_draw(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
@@ -1650,6 +1710,7 @@ static void begin_draw(PGRAPHState *pg)
     }
 
     if (!pg->clearing) {
+        apply_dynamic_state(pg, must_bind_pipeline);
         bind_descriptor_sets(pg);
         push_vertex_attr_values(pg);
     }

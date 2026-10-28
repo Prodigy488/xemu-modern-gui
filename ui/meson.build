@@ -55,7 +55,7 @@ endif
 if host_os == 'linux'
   xemu_ss.add([gtk, files('xemu-os-utils-linux.c')])
 elif host_os == 'windows'
-  xemu_ss.add(files('xemu-os-utils-windows.c'))
+  xemu_ss.add(files('xemu-os-utils-windows.c', 'xemu-profiler-windows.c'))
 elif host_os == 'darwin'
   xemu_ss.add(files('xemu-os-utils-macos.m'))
 endif

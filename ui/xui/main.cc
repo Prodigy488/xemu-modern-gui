@@ -33,6 +33,9 @@
 
 #include "actions.hh"
 #include "ui-prof.hh"
+#if defined(_WIN32)
+#include "../xemu-profiler.h"
+#endif
 #include "common.hh"
 #include "achievements.hh"
 #include "ach-finder.hh"
@@ -208,6 +211,16 @@ void xemu_hud_update(void)
     uint32_t now = SDL_GetTicks();
 
     UiProfBegin();
+#if defined(_WIN32)
+    {
+        char path[512];
+        if (xemu_profiler_take_result(path, sizeof(path))) {
+            char msg[600];
+            snprintf(msg, sizeof(msg), "Profile written to %s", path);
+            xemu_queue_notification(msg);
+        }
+    }
+#endif
     g_viewport_mgr.Update();
     g_font_mgr.Update();
     UiProfMark("fonts and viewport");

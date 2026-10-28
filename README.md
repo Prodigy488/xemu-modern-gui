@@ -283,9 +283,12 @@ see the [Releases](../../releases) page.
   while holding that button: LB/RB, the triggers, stick clicks or D-pad
   left/right. The hints show the right button names for your controller.
 - **Rumble strength** for every controller, from full to off.
-- **Stick dead zone:** if a stick drifts, ignore small movements around the
-  centre (0 to 40%). It applies to physical controllers only, and is off by
-  default.
+- **Stick dead zone and drift test:** each stick has its own dead zone (0 to
+  40%) that ignores small movements around the centre, for sticks that
+  drift. **Check for stick drift** (the dashboard's Settings tab, under the
+  controller test, or Settings > Input) watches both sticks for 3 seconds
+  while you leave them alone, says how far each rests from the centre and
+  can set a dead zone for each. Physical controllers only; off by default.
 - **Pause when the window loses focus (optional):** pauses the game when you
   switch to another window and carries on when you come back. A pause you
   made yourself stays. Off by default.

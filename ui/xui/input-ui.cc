@@ -77,9 +77,13 @@ static bool g_test_on = false;
 static int g_test_drawn_frame = -1000;
 static double g_test_hold_start = -1;
 
+static bool g_drift_running = false;
+static int g_drift_drawn_frame = -1000;
+
 bool InputTestCapturing(void)
 {
-    return g_test_on && g_test_drawn_frame >= ImGui::GetFrameCount() - 1;
+    return (g_test_on && g_test_drawn_frame >= ImGui::GetFrameCount() - 1) ||
+           (g_drift_running && g_drift_drawn_frame >= ImGui::GetFrameCount() - 1);
 }
 
 // Draws one controller's live state
@@ -199,11 +203,20 @@ void InputTestWidget(const char *id)
         dl->AddRect(P(x0, y0), P(x0 + w, y0 + h), line, 3 * k);
         label(x0 + w / 2, y0 + h + 9, t, line);
     };
-    auto stick = [&](float cx, float cy, int ax, int ay, bool pressed) {
+    auto stick = [&](float cx, float cy, int ax, int ay, bool pressed, int raw, float dz) {
         const float r = 34;
         dl->AddCircleFilled(P(cx, cy), r * k, dim, 32);
         dl->AddCircle(P(cx, cy), r * k, line, 32, 1.5f);
+        if (dz > 0.0f) {
+            dl->AddCircle(P(cx, cy), r * k * 0.7f * std::min(dz, 1.0f), IM_COL32(245, 205, 90, 220), 24, 1.2f);
+        }
+        // The stick as it reports itself, so drift shows up (the dead zone
+        // is the ring)
         float x = st.axis[ax] / 32767.0f, y = st.axis[ay] / 32767.0f;
+        if (st.type == INPUT_DEVICE_SDL_GAMEPAD) {
+            x = st.stick_raw[raw] / 32767.0f;
+            y = st.stick_raw[raw + 1] / 32767.0f;
+        }
         float m = std::sqrt(x * x + y * y);
         if (m > 1.0f) {
             x /= m;
@@ -219,8 +232,10 @@ void InputTestWidget(const char *id)
     dot(160, 16, 11, lit(CONTROLLER_BUTTON_WHITE), IM_COL32(235, 235, 235, 255), "W");
     dot(260, 16, 11, lit(CONTROLLER_BUTTON_BLACK), IM_COL32(150, 150, 150, 255), "B");
     // Sticks, D-pad
-    stick(70, 78, CONTROLLER_AXIS_LSTICK_X, CONTROLLER_AXIS_LSTICK_Y, lit(CONTROLLER_BUTTON_LSTICK));
-    stick(285, 142, CONTROLLER_AXIS_RSTICK_X, CONTROLLER_AXIS_RSTICK_Y, lit(CONTROLLER_BUTTON_RSTICK));
+    stick(70, 78, CONTROLLER_AXIS_LSTICK_X, CONTROLLER_AXIS_LSTICK_Y, lit(CONTROLLER_BUTTON_LSTICK), 0,
+          g_config.input.stick_deadzone_left);
+    stick(285, 142, CONTROLLER_AXIS_RSTICK_X, CONTROLLER_AXIS_RSTICK_Y, lit(CONTROLLER_BUTTON_RSTICK), 2,
+          g_config.input.stick_deadzone_right);
     dot(135, 128, 10, lit(CONTROLLER_BUTTON_DPAD_UP) , on_col, nullptr);
     dot(135, 168, 10, lit(CONTROLLER_BUTTON_DPAD_DOWN), on_col, nullptr);
     dot(115, 148, 10, lit(CONTROLLER_BUTTON_DPAD_LEFT), on_col, nullptr);
@@ -249,6 +264,194 @@ void InputTestWidget(const char *id)
         ImGui::TextDisabled("%s", tr("Press Start test, then press buttons and move the sticks: "
                                      "they light up here. If nothing happens, the controller "
                                      "isn't reaching xemu."));
+    }
+    ImGui::PopID();
+}
+
+// Stick drift test: watch both sticks for a few seconds while they are left
+// alone, and say how far each one rests from the centre.
+namespace {
+struct DriftStick {
+    float max_mag = 0;               // furthest from the centre (0..1)
+    float min_x = 9, max_x = -9;     // how much it moved, to spot a touched stick
+    float min_y = 9, max_y = -9;
+    void Reset() { *this = DriftStick(); }
+    void Add(float x, float y)
+    {
+        max_mag = std::max(max_mag, std::sqrt(x * x + y * y));
+        min_x = std::min(min_x, x);
+        max_x = std::max(max_x, x);
+        min_y = std::min(min_y, y);
+        max_y = std::max(max_y, y);
+    }
+    float Range() const { return std::max(max_x - min_x, max_y - min_y); }
+    // Dead zone that would cover it, in whole percent (0 if it's fine)
+    int Suggested() const
+    {
+        int pct = (int)std::ceil(max_mag * 100.0f) + 2;
+        return max_mag < 0.02f ? 0 : std::min(pct, 40);
+    }
+};
+} // namespace
+
+void InputDriftTest(const char *id)
+{
+    constexpr double kSeconds = 3.0;
+    static int phase = 0; // 0 not run yet, 1 running, 2 done
+    static double started = 0;
+    static DriftStick res[2];
+    static ControllerState *sel = nullptr;
+
+    // Coming back to the page later: nothing is running
+    if (g_drift_drawn_frame < ImGui::GetFrameCount() - 2 && phase == 1) {
+        phase = 0;
+        g_drift_running = false;
+    }
+    g_drift_drawn_frame = ImGui::GetFrameCount();
+
+    ControllerState *iter, *first = nullptr;
+    bool found = false;
+    int pads = 0;
+    QTAILQ_FOREACH(iter, &available_controllers, entry) {
+        if (iter->type == INPUT_DEVICE_SDL_GAMEPAD) {
+            first = first ? first : iter;
+            found |= iter == sel;
+            pads++;
+        }
+    }
+    if (!found) {
+        sel = first;
+    }
+    if (!sel) {
+        ImGui::TextDisabled("%s", tr("No controller connected."));
+        g_drift_running = false;
+        return;
+    }
+    ImGui::PushID(id);
+
+    if (pads > 1) {
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (ImGui::BeginCombo("##driftdev", sel->name)) {
+            QTAILQ_FOREACH(iter, &available_controllers, entry) {
+                if (iter->type != INPUT_DEVICE_SDL_GAMEPAD) {
+                    continue;
+                }
+                ImGui::PushID(iter);
+                if (ImGui::Selectable(iter->name, iter == sel)) {
+                    sel = iter;
+                    phase = 0;
+                    g_drift_running = false;
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndCombo();
+        }
+    }
+
+    const float fs = ImGui::GetFontSize();
+    const double now = ImGui::GetTime();
+    float raw[4];
+    for (int i = 0; i < 4; i++) {
+        raw[i] = sel->stick_raw[i] / 32767.0f;
+    }
+    if (phase == 1) {
+        res[0].Add(raw[0], raw[1]);
+        res[1].Add(raw[2], raw[3]);
+        if (now - started >= kSeconds) {
+            phase = 2;
+            g_drift_running = false;
+        }
+    }
+
+    // Both sticks, drawn as live as the controller test draws them: the dot is
+    // the stick, the yellow ring the dead zone now, the red ring how far it
+    // wandered during the check
+    const float r = fs * 3.0f;
+    const float gap = fs * 1.5f;
+    const float W = std::min(ImGui::GetContentRegionAvail().x, 4 * r + gap);
+    ImVec2 o = ImGui::GetCursorScreenPos();
+    ImGui::Dummy(ImVec2(W, 2 * r + fs * 0.5f));
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    const float dz[2] = { g_config.input.stick_deadzone_left, g_config.input.stick_deadzone_right };
+    const float x0 = o.x + (W - (4 * r + gap)) / 2;
+    for (int i = 0; i < 2; i++) {
+        const ImVec2 c(x0 + r + i * (2 * r + gap), o.y + r);
+        dl->AddCircleFilled(c, r, IM_COL32(60, 66, 80, 160), 40);
+        dl->AddCircle(c, r, IM_COL32(150, 160, 180, 200), 40, 1.5f);
+        dl->AddLine(ImVec2(c.x - r, c.y), ImVec2(c.x + r, c.y), IM_COL32(150, 160, 180, 70));
+        dl->AddLine(ImVec2(c.x, c.y - r), ImVec2(c.x, c.y + r), IM_COL32(150, 160, 180, 70));
+        if (phase != 0 && res[i].max_mag > 0.0f) {
+            dl->AddCircle(c, r * std::min(res[i].max_mag, 1.0f), IM_COL32(235, 100, 100, 230), 32, 1.5f);
+        }
+        if (dz[i] > 0.0f) {
+            dl->AddCircle(c, r * std::min(dz[i], 1.0f), IM_COL32(245, 205, 90, 230), 32, 1.5f);
+        }
+        float x = raw[i * 2], y = raw[i * 2 + 1];
+        const float m = std::sqrt(x * x + y * y);
+        if (m > 1.0f) {
+            x /= m;
+            y /= m;
+        }
+        dl->AddCircleFilled(ImVec2(c.x + x * r, c.y - y * r), fs * 0.45f,
+                            IM_COL32(120, 230, 255, 255), 16);
+    }
+
+    const char *names[2] = { tr("Left stick"), tr("Right stick") };
+    if (phase == 1) {
+        const int left = (int)std::ceil(kSeconds - (now - started));
+        ImGui::TextColored(ImVec4(0.45f, 0.9f, 1.0f, 1.0f), "%s",
+                           string_format(tr("Checking for %d s. Take your thumbs off the sticks."),
+                                         std::max(left, 1)).c_str());
+    } else if (ImGui::Button(phase == 2 ? tr("Check again") : tr("Check for stick drift"),
+                             ImVec2(-FLT_MIN, 0))) {
+        phase = 1;
+        started = now;
+        res[0].Reset();
+        res[1].Reset();
+        g_drift_running = true;
+    }
+
+    if (phase == 2) {
+        int use[2] = { 0, 0 };
+        bool any = false;
+        for (int i = 0; i < 2; i++) {
+            const DriftStick &d = res[i];
+            const int pct = (int)std::ceil(d.max_mag * 100.0f);
+            std::string msg;
+            ImVec4 col(0.55f, 0.95f, 0.6f, 1.0f);
+            if (d.Range() > 0.12f) {
+                msg = string_format(tr("%s: it moved during the check. Leave it alone and check again."),
+                                    names[i]);
+                col = ImVec4(1.0f, 0.8f, 0.4f, 1.0f);
+            } else if (d.Suggested() == 0) {
+                msg = string_format(tr("%s: no drift found."), names[i]);
+            } else if (d.max_mag > 0.38f) {
+                msg = string_format(tr("%s: rests %d%% off centre, too far for a dead zone to fix well."),
+                                    names[i], pct);
+                col = ImVec4(1.0f, 0.55f, 0.5f, 1.0f);
+            } else {
+                msg = string_format(tr("%s: rests up to %d%% off centre. A dead zone of %d%% should fix it."),
+                                    names[i], pct, d.Suggested());
+                col = ImVec4(1.0f, 0.8f, 0.4f, 1.0f);
+                use[i] = d.Suggested();
+                any = true;
+            }
+            ImGui::PushStyleColor(ImGuiCol_Text, col);
+            ImGui::TextWrapped("%s", msg.c_str());
+            ImGui::PopStyleColor();
+        }
+        if (any && ImGui::Button(tr("Use these dead zones"), ImVec2(-FLT_MIN, 0))) {
+            if (use[0]) {
+                g_config.input.stick_deadzone_left = use[0] / 100.0f;
+            }
+            if (use[1]) {
+                g_config.input.stick_deadzone_right = use[1] / 100.0f;
+            }
+            xemu_queue_notification(tr("Stick dead zones set."));
+        }
+    } else if (phase == 0) {
+        ImGui::TextDisabled("%s", tr("Leave both sticks alone while it checks. The dot is where each "
+                                     "stick sits; the yellow ring is your dead zone."));
     }
     ImGui::PopID();
 }

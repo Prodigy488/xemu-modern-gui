@@ -89,6 +89,9 @@ typedef struct ControllerState {
     // Input state
     uint16_t buttons;
     int16_t  axis[CONTROLLER_AXIS__COUNT];
+    // Left X, left Y, right X, right Y as the stick reports them, before the
+    // dead zone (for the drift test)
+    int16_t  stick_raw[4];
 
     // Rendering state hacked on here for convenience but needs to be moved (FIXME)
     uint32_t animate_guide_button_end;

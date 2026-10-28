@@ -9898,15 +9898,26 @@ void DrawDashSettingsTab()
         label(tr("Test your controller"));
         InputTestWidget("##ctest");
         ImGui::Dummy(ImVec2(0, 8 * s));
-        label(tr("Stick dead zone"));
+        label(tr("Left stick dead zone"));
         {
-            int pct = (int)(g_config.input.stick_deadzone * 100 + 0.5f);
-            if (ImGui::SliderInt("##deadzone", &pct, 0, 40, "%d%%")) {
-                g_config.input.stick_deadzone = pct / 100.0f;
+            int pct = (int)(g_config.input.stick_deadzone_left * 100 + 0.5f);
+            if (ImGui::SliderInt("##deadzone_l", &pct, 0, 40, "%d%%")) {
+                g_config.input.stick_deadzone_left = pct / 100.0f;
             }
             ImGui::SetItemTooltip("%s", tr("Ignore small stick movements, if a stick "
                                            "drifts. Leave it off unless it does."));
         }
+        label(tr("Right stick dead zone"));
+        {
+            int pct = (int)(g_config.input.stick_deadzone_right * 100 + 0.5f);
+            if (ImGui::SliderInt("##deadzone_r", &pct, 0, 40, "%d%%")) {
+                g_config.input.stick_deadzone_right = pct / 100.0f;
+            }
+            ImGui::SetItemTooltip("%s", tr("Ignore small stick movements, if a stick "
+                                           "drifts. Leave it off unless it does."));
+        }
+        label(tr("Stick drift test"));
+        InputDriftTest("##drift");
         ImGui::Dummy(ImVec2(0, 8 * s));
         ImGui::Checkbox(tr("Auto-bind controllers"), &g_config.input.auto_bind);
         ImGui::TextDisabled("%s", tr("Pick \"Keyboard, mouse and controller\" to play with the keyboard, "

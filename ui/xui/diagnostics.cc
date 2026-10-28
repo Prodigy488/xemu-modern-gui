@@ -115,8 +115,10 @@ std::string DiagnosticsText()
         Pick(styles, 8, g_config.general.library.style),
         g_config.general.library.theme == 0 ? "neon" : "green", OnOff(g_config.display.ui.use_animations),
         (lang && *lang) ? lang : "auto");
-    add("Input: stick dead zone %d%%, pause on focus loss %s\n",
-        (int)(g_config.input.stick_deadzone * 100 + 0.5), OnOff(g_config.general.pause_on_focus_loss));
+    add("Input: stick dead zone left %d%% right %d%%, pause on focus loss %s\n",
+        (int)(g_config.input.stick_deadzone_left * 100 + 0.5),
+        (int)(g_config.input.stick_deadzone_right * 100 + 0.5),
+        OnOff(g_config.general.pause_on_focus_loss));
 
     struct xbe *xbe = xemu_get_xbe_info();
     if (xbe && xbe->cert && xbe->header) {

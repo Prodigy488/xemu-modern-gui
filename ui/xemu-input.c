@@ -1082,12 +1082,17 @@ void xemu_input_update_sdl_controller_state(ControllerState *state)
 
 #undef INVERT_AXIS
 
-    /* Optional extra dead zone for drifting sticks (0 = off) */
-    float dz = g_config.input.stick_deadzone;
+    /* Optional extra dead zone for drifting sticks, one per stick (0 = off) */
+    state->stick_raw[0] = state->axis[CONTROLLER_AXIS_LSTICK_X];
+    state->stick_raw[1] = state->axis[CONTROLLER_AXIS_LSTICK_Y];
+    state->stick_raw[2] = state->axis[CONTROLLER_AXIS_RSTICK_X];
+    state->stick_raw[3] = state->axis[CONTROLLER_AXIS_RSTICK_Y];
     xemu_apply_stick_deadzone(&state->axis[CONTROLLER_AXIS_LSTICK_X],
-                              &state->axis[CONTROLLER_AXIS_LSTICK_Y], dz);
+                              &state->axis[CONTROLLER_AXIS_LSTICK_Y],
+                              g_config.input.stick_deadzone_left);
     xemu_apply_stick_deadzone(&state->axis[CONTROLLER_AXIS_RSTICK_X],
-                              &state->axis[CONTROLLER_AXIS_RSTICK_Y], dz);
+                              &state->axis[CONTROLLER_AXIS_RSTICK_Y],
+                              g_config.input.stick_deadzone_right);
 
     // xemu_input_print_controller_state(state);
 }

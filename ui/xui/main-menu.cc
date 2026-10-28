@@ -22,6 +22,7 @@
 #include "scene-manager.hh"
 #include "widgets.hh"
 #include "main-menu.hh"
+#include "input-ui.hh"
 #include "font-manager.hh"
 #include "input-manager.hh"
 #include "snapshot-manager.hh"
@@ -691,18 +692,25 @@ void MainMenuInputView::Draw()
     Slider(tr("Rumble strength"), &g_config.input.rumble_strength, rumble);
     {
         // 0 to 40% of the stick's travel, for controllers that drift
-        float t = g_config.input.stick_deadzone / 0.4f;
-        t = t < 0 ? 0 : (t > 1 ? 1 : t);
-        char desc[128];
-        snprintf(desc, sizeof(desc),
-                 tr("Ignore small stick movements, if a stick drifts (%d%%)"),
-                 (int)(g_config.input.stick_deadzone * 100 + 0.5f));
-        float nt = t;
-        Slider(tr("Stick dead zone"), &nt, desc);
-        if (nt != t) {
-            g_config.input.stick_deadzone = nt * 0.4f;
-        }
+        auto dead_zone = [](const char *title, float *dz) {
+            float t = *dz / 0.4f;
+            t = t < 0 ? 0 : (t > 1 ? 1 : t);
+            char desc[128];
+            snprintf(desc, sizeof(desc),
+                     tr("Ignore small stick movements, if a stick drifts (%d%%)"),
+                     (int)(*dz * 100 + 0.5f));
+            float nt = t;
+            Slider(title, &nt, desc);
+            if (nt != t) {
+                *dz = nt * 0.4f;
+            }
+        };
+        dead_zone(tr("Left stick dead zone"), &g_config.input.stick_deadzone_left);
+        dead_zone(tr("Right stick dead zone"), &g_config.input.stick_deadzone_right);
     }
+
+    SectionTitle(tr("Stick drift test"));
+    InputDriftTest("##drift");
 
     SectionTitle(tr("Mouse and keyboard"));
     Toggle(tr("Use the mouse as a stick"), &g_config.input.mouse.enabled,

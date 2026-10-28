@@ -104,7 +104,10 @@ input:
     default: 1
   # Extra dead zone for analog sticks (0-0.4 of the way out); 0 = none.
   # For controllers that drift. Applies to physical controllers only.
-  stick_deadzone:
+  stick_deadzone_left:
+    type: number
+    default: 0
+  stick_deadzone_right:
     type: number
     default: 0
   # Back + LB quick save, Back + RB quick load

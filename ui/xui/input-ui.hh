@@ -17,6 +17,11 @@ void InputPortCombo(const char *id, int port);
 // triggers move as you use them. Has its own device picker.
 void InputTestWidget(const char *id);
 
+// Checks a controller's sticks for drift: with both sticks left alone for a
+// few seconds, says how far each rests from the centre and suggests a dead zone
+// for each. Needs a physical controller.
+void InputDriftTest(const char *id);
+
 // True while the controller test is running: the dashboard should ignore the
 // controller so the buttons can be tried without scrolling, going back or
 // switching tabs.

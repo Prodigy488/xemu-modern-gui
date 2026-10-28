@@ -18,6 +18,7 @@
  */
 
 #include "hw/xbox/nv2a/nv2a_int.h"
+#include "hitch.h"
 
 NV2AStats g_nv2a_stats;
 
@@ -50,6 +51,7 @@ void nv2a_profile_flip_stall(void)
     g_nv2a_stats.frame_ptr =
         (g_nv2a_stats.frame_ptr + 1) % NV2A_PROF_NUM_FRAMES;
     g_nv2a_stats.frame_count++;
+    nv2a_hitch_frame();
     memset(&g_nv2a_stats.frame_working, 0, sizeof(g_nv2a_stats.frame_working));
 }
 

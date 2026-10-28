@@ -362,6 +362,9 @@ typedef struct PGRAPHVkState {
     VkPipelineCache vk_pipeline_cache;
     int pipelines_since_cache_save;
     int64_t pipeline_cache_last_save_ms;
+    QemuThread pipeline_cache_save_thread;
+    bool pipeline_cache_save_started;    // a save thread exists to be joined
+    int pipeline_cache_save_busy;        // atomic: the save thread is running
     PipelineBinding *pipeline_cache_entries;
     PipelineBinding *pipeline_binding;
     bool pipeline_binding_changed;

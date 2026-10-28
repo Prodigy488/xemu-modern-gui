@@ -21,6 +21,7 @@
 #include "qemu/fast-hash.h"
 #include "qemu/mstring.h"
 #include "renderer.h"
+#include "../hitch.h"
 
 #define VSH_UBO_BINDING 0
 #define PSH_UBO_BINDING 1
@@ -347,8 +348,10 @@ static void shader_module_cache_entry_init(Lru *lru, LruNode *node,
         code = NULL;
     }
 
+    const int64_t build_t0 = nv2a_hitch_begin();
     module->module_info = pgraph_vk_create_shader_module_from_glsl(
         r, module->key.kind, mstring_get_str(code));
+    nv2a_hitch_end_build(build_t0);
     pgraph_vk_ref_shader_module(module->module_info);
     mstring_unref(code);
 }

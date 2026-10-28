@@ -319,12 +319,15 @@ see the [Releases](../../releases) page.
 - **Copy diagnostics for a bug report:** Help > Copy Diagnostics for a Bug
   Report puts your xemu version, graphics card, main settings and the game's
   title ID on the clipboard, to paste into an issue. It has no file paths,
-  names or accounts.
+  names or accounts. It also counts **frame hitches** (frames that came late)
+  and how many were spent building shaders or pipelines, so a stutter report
+  says where the stutter came from. Late frames are also noted in `xemu.log`.
 - **Dynamic resolution (experimental):** lowers the internal resolution
   when a game runs slow and raises it again when there's room.
 - **Shader caches:** Vulkan shader and pipeline caches, OpenGL reusing
   saved shaders even after a crash, and **Clear shader cache** per game or
-  for all games.
+  for all games. The Vulkan pipeline cache is now saved on a background
+  thread, so the periodic save no longer freezes the picture.
 - **Prefer the fastest CPU cores (optional):** on CPUs with performance and
   efficiency cores, keeps the emulated CPU, GPU and audio on the fast cores
   (Settings > General > Performance, restart needed). Off by default.

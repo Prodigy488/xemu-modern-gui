@@ -22,7 +22,11 @@
 #include "ui/xemu-settings.h"
 #include "ui/xemu-shader-cache.h"
 #include "renderer.h"
+#include "../hitch.h"
 #include <math.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 void pgraph_vk_draw_begin(NV2AState *d)
 {
@@ -175,15 +179,16 @@ static gchar *load_pipeline_cache_data(PGRAPHVkState *r, gsize *len)
     return data;
 }
 
-static void save_pipeline_cache(PGRAPHVkState *r)
+/*
+ * Getting the cache data out of the driver and writing it to disk can take
+ * tens of milliseconds once the cache is large. Done on the render thread
+ * that froze the picture each time, so during play it runs on a thread of its
+ * own at below normal priority. The driver allows vkGetPipelineCacheData to
+ * run while pipelines are being created. Only one save runs at a time, and the
+ * thread is joined before the cache is destroyed.
+ */
+static void write_pipeline_cache(PGRAPHVkState *r)
 {
-    r->pipelines_since_cache_save = 0;
-    r->pipeline_cache_last_save_ms = g_get_monotonic_time() / 1000;
-    if (!g_config.perf.cache_shaders ||
-        r->vk_pipeline_cache == VK_NULL_HANDLE ||
-        xemu_shader_cache_pipelines_discarded()) {
-        return;
-    }
     size_t size = 0;
     if (vkGetPipelineCacheData(r->device, r->vk_pipeline_cache, &size,
                                NULL) != VK_SUCCESS ||
@@ -192,12 +197,57 @@ static void save_pipeline_cache(PGRAPHVkState *r)
     }
     void *data = g_malloc(size);
     if (vkGetPipelineCacheData(r->device, r->vk_pipeline_cache, &size,
-                               data) == VK_SUCCESS) {
+                               data) == VK_SUCCESS &&
+        !xemu_shader_cache_pipelines_discarded()) {
         char *path = pipeline_cache_path();
         g_file_set_contents(path, data, size, NULL);
         g_free(path);
     }
     g_free(data);
+}
+
+static void join_pipeline_cache_save(PGRAPHVkState *r)
+{
+    if (r->pipeline_cache_save_started) {
+        qemu_thread_join(&r->pipeline_cache_save_thread);
+        r->pipeline_cache_save_started = false;
+    }
+}
+
+static void *pipeline_cache_save_thread_fn(void *opaque)
+{
+    PGRAPHVkState *r = opaque;
+#ifdef _WIN32
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+#endif
+    write_pipeline_cache(r);
+    qatomic_set(&r->pipeline_cache_save_busy, 0);
+    return NULL;
+}
+
+static void save_pipeline_cache(PGRAPHVkState *r, bool in_background)
+{
+    r->pipelines_since_cache_save = 0;
+    r->pipeline_cache_last_save_ms = g_get_monotonic_time() / 1000;
+    if (!g_config.perf.cache_shaders ||
+        r->vk_pipeline_cache == VK_NULL_HANDLE ||
+        xemu_shader_cache_pipelines_discarded()) {
+        return;
+    }
+    if (!in_background) {
+        join_pipeline_cache_save(r);
+        write_pipeline_cache(r);
+        return;
+    }
+    if (qatomic_read(&r->pipeline_cache_save_busy)) {
+        return; // the last save is still running; the next build tries again
+    }
+    join_pipeline_cache_save(r);
+    qatomic_set(&r->pipeline_cache_save_busy, 1);
+    qemu_thread_create(&r->pipeline_cache_save_thread, "nv2a.vk.cachesave",
+                       pipeline_cache_save_thread_fn, r,
+                       QEMU_THREAD_JOINABLE);
+    r->pipeline_cache_save_started = true;
 }
 
 static void init_pipeline_cache(PGRAPHState *pg)
@@ -250,7 +300,8 @@ static void finalize_pipeline_cache(PGRAPHState *pg)
     g_free(r->pipeline_cache_entries);
     r->pipeline_cache_entries = NULL;
 
-    save_pipeline_cache(r);
+    join_pipeline_cache_save(r); // also when saving is off
+    save_pipeline_cache(r, false);
     vkDestroyPipelineCache(r->device, r->vk_pipeline_cache, NULL);
 }
 
@@ -1099,13 +1150,15 @@ static void create_pipeline(PGRAPHState *pg)
         .basePipelineHandle = VK_NULL_HANDLE,
     };
     VkPipeline pipeline;
+    const int64_t build_t0 = nv2a_hitch_begin();
     VK_CHECK(vkCreateGraphicsPipelines(r->device, r->vk_pipeline_cache, 1,
                                        &pipeline_create_info, NULL, &pipeline));
+    nv2a_hitch_end_build(build_t0);
 
     r->pipelines_since_cache_save++;
     if (g_get_monotonic_time() / 1000 - r->pipeline_cache_last_save_ms >=
         PIPELINE_CACHE_SAVE_INTERVAL_MS) {
-        save_pipeline_cache(r);
+        save_pipeline_cache(r, true);
     }
 
     snode->pipeline = pipeline;

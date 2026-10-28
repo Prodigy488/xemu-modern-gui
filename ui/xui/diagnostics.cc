@@ -15,6 +15,7 @@
 #include "i18n.hh"
 #include "modern-version.hh"
 #include "hw/xbox/nv2a/nv2a.h"
+#include "hw/xbox/nv2a/pgraph/hitch.h"
 #include "qemu/units.h"
 #include "ui/xemu-notifications.h"
 #include "ui/xemu-os-utils.h"
@@ -92,6 +93,13 @@ std::string DiagnosticsText()
         OnOff(g_config.perf.hard_fpu), OnOff(g_config.perf.cache_shaders),
         OnOff(g_config.perf.boost_threads), OnOff(g_config.perf.prefer_fast_cores),
         OnOff(g_config.audio.use_dsp));
+    {
+        char hitch[256];
+        nv2a_hitch_summary(hitch, sizeof(hitch));
+        if (hitch[0]) {
+            add("Frame hitches: %s\n", hitch);
+        }
+    }
 
     // Memory and AV pack apply at restart, so read them from the machine
     {

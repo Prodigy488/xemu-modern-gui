@@ -30,6 +30,7 @@
 #include "hw/xbox/nv2a/pgraph/util.h"
 #include "debug.h"
 #include "renderer.h"
+#include "../hitch.h"
 
 static GLenum get_gl_primitive_mode(enum ShaderPolygonMode polygon_mode, enum ShaderPrimitiveMode primitive_mode)
 {
@@ -900,11 +901,13 @@ void pgraph_gl_bind_shaders(PGRAPHState *pg)
 
     if (!binding->initialized && !pgraph_gl_shader_load_from_memory(binding) &&
         !shader_load_binding_from_disk(binding, shader_state_hash)) {
+        const int64_t build_t0 = nv2a_hitch_begin();
         nv2a_profile_inc_counter(NV2A_PROF_SHADER_GEN);
         generate_shaders(r, binding);
         if (g_config.perf.cache_shaders) {
             pgraph_gl_shader_cache_to_disk(binding);
         }
+        nv2a_hitch_end_build(build_t0);
     }
     assert(binding->initialized);
     r->shader_binding = binding;

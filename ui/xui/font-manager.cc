@@ -162,6 +162,22 @@ void FontManager::Rebuild()
         merge_cjk(34.0f);
     }
     {
+        ImFontConfig config;
+        config.FontDataOwnedByAtlas = false;
+        config.RasterizerDensity = pixel_density;
+        config.MergeMode = true;
+        config.GlyphOffset =
+            ImVec2(0, -3 * scale);
+        config.GlyphMinAdvanceX = 32.0f * scale;
+        static const ImWchar icon_ranges[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
+        io.Fonts->AddFontFromMemoryTTF((void *)font_awesome_6_1_1_solid_min_data,
+                                       font_awesome_6_1_1_solid_min_size,
+                                       18.0f * scale,
+                                       &config, icon_ranges);
+    }
+    {
+        // This comes after the icon merge above, which joins the font before it
+        // (the menu font), so the menu keeps its icons
         // Russo One (SIL OFL): squared, blocky letters in the spirit of the
         // original Xbox's menu. Western European text only, so other
         // languages keep the regular fonts there.
@@ -176,20 +192,6 @@ void FontManager::Rebuild()
         m_dash_font_small = io.Fonts->AddFontFromMemoryTTF(
             (void *)RussoOne_Regular_data, RussoOne_Regular_size, 19.0f * scale, &config,
             dash_ranges);
-    }
-    {
-        ImFontConfig config;
-        config.FontDataOwnedByAtlas = false;
-        config.RasterizerDensity = pixel_density;
-        config.MergeMode = true;
-        config.GlyphOffset =
-            ImVec2(0, -3 * scale);
-        config.GlyphMinAdvanceX = 32.0f * scale;
-        static const ImWchar icon_ranges[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
-        io.Fonts->AddFontFromMemoryTTF((void *)font_awesome_6_1_1_solid_min_data,
-                                       font_awesome_6_1_1_solid_min_size,
-                                       18.0f * scale,
-                                       &config, icon_ranges);
     }
     {
         ImFontConfig config = ImFontConfig();

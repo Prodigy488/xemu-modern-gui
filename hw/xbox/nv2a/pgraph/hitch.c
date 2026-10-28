@@ -25,21 +25,26 @@
 static int64_t g_build_us;      /* atomic: since the last frame */
 static int64_t g_wait_us;
 static int64_t g_disc_us;
+static int64_t g_xlat_us;
+static int64_t g_ui_us;
 static int64_t g_disc_t0;       /* atomic: the request in flight, 0 for none */
 static const char *g_wait_reason;
 static int64_t g_wait_worst_us;
 
-enum { BY_BUILD, BY_GPU, BY_DISC, BY_OTHER, BY_N };
+enum { BY_BUILD, BY_GPU, BY_DISC, BY_XLAT, BY_UI, BY_OTHER, BY_N };
 static const char *const by_name[BY_N] = { "building shaders/pipelines",
                                            "waiting for the GPU",
-                                           "reading the disc", "other" };
+                                           "reading the disc",
+                                           "translating guest code",
+                                           "interface holding the lock", "other" };
 
 static struct {
     int64_t last_us;
     double normal_us;           /* running average of ordinary frames */
     uint64_t frames, hitches, by[BY_N];
     int64_t worst_us;
-    int64_t build_total_us, wait_total_us, disc_total_us;
+    int64_t build_total_us, wait_total_us, disc_total_us, xlat_total_us,
+        ui_total_us;
 } g;
 
 int64_t nv2a_hitch_begin(void)
@@ -64,6 +69,22 @@ void nv2a_hitch_end_wait(int64_t t0, const char *reason)
             g_wait_worst_us = d;
             g_wait_reason = reason;
         }
+    }
+}
+
+void nv2a_hitch_end_xlat(int64_t t0)
+{
+    const int64_t d = qemu_clock_get_us(QEMU_CLOCK_REALTIME) - t0;
+    if (d > 0) {
+        qatomic_add(&g_xlat_us, d);
+    }
+}
+
+void nv2a_hitch_end_ui_lock(int64_t t0)
+{
+    const int64_t d = qemu_clock_get_us(QEMU_CLOCK_REALTIME) - t0;
+    if (d > 0) {
+        qatomic_add(&g_ui_us, d);
     }
 }
 
@@ -95,6 +116,8 @@ void nv2a_hitch_frame(void)
         disc += now - t0;
         qatomic_set(&g_disc_t0, now);
     }
+    const int64_t xlat = qatomic_xchg(&g_xlat_us, 0);
+    const int64_t ui = qatomic_xchg(&g_ui_us, 0);
     const char *wait_reason = g_wait_reason ? g_wait_reason : "";
     g_wait_reason = NULL;
     g_wait_worst_us = 0;
@@ -109,12 +132,16 @@ void nv2a_hitch_frame(void)
     g.build_total_us += built;
     g.wait_total_us += waited;
     g.disc_total_us += disc;
+    g.xlat_total_us += xlat;
+    g.ui_total_us += ui;
     if (gap > HITCH_MIN_US && g.normal_us > 0 && gap > g.normal_us * HITCH_FACTOR) {
         int by = BY_OTHER;
         int64_t most = gap / 3;
         if (built > most) { by = BY_BUILD; most = built; }
         if (waited > most) { by = BY_GPU; most = waited; }
-        if (disc > most) { by = BY_DISC; }
+        if (disc > most) { by = BY_DISC; most = disc; }
+        if (xlat > most) { by = BY_XLAT; most = xlat; }
+        if (ui > most) { by = BY_UI; }
         g.hitches++;
         g.by[by]++;
         if (gap > g.worst_us) {
@@ -123,10 +150,11 @@ void nv2a_hitch_frame(void)
         if (g.hitches <= MAX_LOGGED) {
             fprintf(stderr, "nv2a hitch: frame took %.0f ms (normal %.0f ms): "
                     "%.0f ms building shaders/pipelines, %.0f ms waiting for the GPU%s%s%s, "
-                    "%.0f ms reading the disc -> %s%s\n",
+                    "%.0f ms reading the disc, %.0f ms translating guest code, "
+                    "%.0f ms with the interface holding the lock -> %s%s\n",
                     gap / 1000.0, g.normal_us / 1000.0, built / 1000.0, waited / 1000.0,
                     wait_reason[0] ? " (mostly " : "", wait_reason, wait_reason[0] ? ")" : "",
-                    disc / 1000.0, by_name[by],
+                    disc / 1000.0, xlat / 1000.0, ui / 1000.0, by_name[by],
                     g.hitches == MAX_LOGGED ? " (not logging more)" : "");
         }
         return;
@@ -146,9 +174,12 @@ void nv2a_hitch_summary(char *buf, size_t len)
     snprintf(buf, len,
              "%" PRIu64 " frames, %" PRIu64 " hitches over %d ms (%" PRIu64
              " building shaders or pipelines, %" PRIu64 " waiting for the GPU, %"
-             PRIu64 " reading the disc, %" PRIu64 " other), worst %.0f ms; "
-             "totals: %.1f s building, %.1f s GPU waits, %.1f s disc",
+             PRIu64 " reading the disc, %" PRIu64 " translating guest code, %" PRIu64
+             " interface lock, %" PRIu64 " other), worst %.0f ms; "
+             "totals: %.1f s building, %.1f s GPU waits, %.1f s disc, %.1f s translating, "
+             "%.1f s interface lock",
              g.frames, g.hitches, HITCH_MIN_US / 1000, g.by[BY_BUILD], g.by[BY_GPU],
-             g.by[BY_DISC], g.by[BY_OTHER], g.worst_us / 1000.0,
-             g.build_total_us / 1e6, g.wait_total_us / 1e6, g.disc_total_us / 1e6);
+             g.by[BY_DISC], g.by[BY_XLAT], g.by[BY_UI], g.by[BY_OTHER], g.worst_us / 1000.0,
+             g.build_total_us / 1e6, g.wait_total_us / 1e6, g.disc_total_us / 1e6,
+             g.xlat_total_us / 1e6, g.ui_total_us / 1e6);
 }

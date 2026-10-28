@@ -28,6 +28,7 @@
 /* Ported SDL 1.2 code to 2.0 by Dave Airlie. */
 
 #include "qemu/osdep.h"
+#include "hw/xbox/nv2a/pgraph/hitch.h"
 #include "qemu/module.h"
 #include "qemu/thread.h"
 #include "qemu/main-loop.h"
@@ -131,10 +132,13 @@ static uint64_t lock_held_acc;
 static uint64_t lock_start;
 #endif
 
+static __thread int64_t lock_hold_t0;
+
 void xemu_main_loop_lock(void)
 {
     qemu_mutex_lock_main_loop();
     bql_lock();
+    lock_hold_t0 = nv2a_hitch_begin();
 #if DEBUG_XEMU_C
     lock_start = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
 #endif
@@ -142,6 +146,7 @@ void xemu_main_loop_lock(void)
 
 void xemu_main_loop_unlock(void)
 {
+    nv2a_hitch_end_ui_lock(lock_hold_t0);
 #if DEBUG_XEMU_C
     lock_held_acc += qemu_clock_get_ns(QEMU_CLOCK_REALTIME) - lock_start;
 #endif

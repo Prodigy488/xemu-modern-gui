@@ -34,6 +34,13 @@ void nv2a_hitch_end_wait(int64_t t0, const char *reason);
 void nv2a_hitch_disc_begin(void);
 void nv2a_hitch_disc_end(void);
 
+/* Around translating guest code (the emulated CPU's first pass over code) */
+void nv2a_hitch_end_xlat(int64_t t0);
+
+/* Around a stretch where the interface thread held the global lock (the
+ * emulated machine cannot touch hardware meanwhile) */
+void nv2a_hitch_end_ui_lock(int64_t t0);
+
 /* Once per frame the game flips, from the GPU thread */
 void nv2a_hitch_frame(void);
 

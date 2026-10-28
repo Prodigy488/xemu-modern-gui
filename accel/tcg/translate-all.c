@@ -18,6 +18,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/xbox/nv2a/pgraph/hitch.h"
 
 #include "trace.h"
 #include "disas/disas.h"
@@ -263,7 +264,7 @@ static int setjmp_gen_code(CPUArchState *env, TranslationBlock *tb,
 }
 
 /* Called with mmap_lock held for user mode emulation.  */
-TranslationBlock *tb_gen_code(CPUState *cpu, TCGTBCPUState s)
+static TranslationBlock *tb_gen_code_untimed(CPUState *cpu, TCGTBCPUState s)
 {
     CPUArchState *env = cpu_env(cpu);
     TranslationBlock *tb, *existing_tb;
@@ -582,6 +583,16 @@ recycle_tb:
     }
 #endif
 
+    return tb;
+}
+
+/* The time the emulated CPU spends translating code shows in the frame hitch
+ * monitor (hw/xbox/nv2a/pgraph/hitch.h) */
+TranslationBlock *tb_gen_code(CPUState *cpu, TCGTBCPUState s)
+{
+    const int64_t t0 = nv2a_hitch_begin();
+    TranslationBlock *tb = tb_gen_code_untimed(cpu, s);
+    nv2a_hitch_end_xlat(t0);
     return tb;
 }
 

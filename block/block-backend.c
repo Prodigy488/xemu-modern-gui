@@ -739,13 +739,44 @@ const char *blk_name(const BlockBackend *blk)
  * Return the BlockBackend with name @name if it exists, else null.
  * @name must not be null.
  */
+#ifdef _WIN32
+/*
+ * Something in the interface calls this without the global lock, which used to
+ * abort xemu when it closed. Walking the list is harmless for the lookups it
+ * does, so report the caller once or twice (offsets into xemu.exe, to be
+ * resolved against the unstripped build) and carry on.
+ */
+static void report_unlocked_lookup(const char *what)
+{
+    static int reported;
+    if (qatomic_fetch_inc(&reported) >= 3) {
+        return;
+    }
+    void *frames[32];
+    USHORT n = CaptureStackBackTrace(1, 32, frames, NULL);
+    const char *base = (const char *)GetModuleHandleA(NULL);
+    fprintf(stderr, "block: %s without the main lock, thread %lu, stack:", what,
+            (unsigned long)GetCurrentThreadId());
+    for (USHORT i = 0; i < n; i++) {
+        fprintf(stderr, " %llx", (unsigned long long)((const char *)frames[i] - base));
+    }
+    fputc('\n', stderr);
+}
+#endif
+
 BlockBackend *blk_by_name(const char *name)
 {
     BlockBackend *blk = NULL;
 
+#ifdef _WIN32
+    if (!qemu_in_main_thread()) {
+        report_unlocked_lookup("blk_by_name");
+    }
+#else
     GLOBAL_STATE_CODE();
+#endif
     assert(name);
-    while ((blk = blk_next(blk)) != NULL) {
+    QTAILQ_FOREACH(blk, &monitor_block_backends, monitor_link) {
         if (!strcmp(name, blk->name)) {
             return blk;
         }

@@ -39,6 +39,11 @@ general:
       values: [box3d, flat]
       default: box3d
   skip_boot_anim: bool
+  # Pause the game when xemu's window loses focus, and carry on when it
+  # gets focus back
+  pause_on_focus_loss:
+    type: bool
+    default: false
   discord_presence:
     type: bool
     default: true
@@ -97,6 +102,11 @@ input:
   rumble_strength:
     type: number
     default: 1
+  # Extra dead zone for analog sticks (0-0.4 of the way out); 0 = none.
+  # For controllers that drift. Applies to physical controllers only.
+  stick_deadzone:
+    type: number
+    default: 0
   # Back + LB quick save, Back + RB quick load
   quick_save_buttons:
     type: bool

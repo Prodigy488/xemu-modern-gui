@@ -3,6 +3,7 @@ xemu_ss.add(files(
   'animation.cc',
   'compat.cc',
   'debug.cc',
+  'diagnostics.cc',
   'font-manager.cc',
   'i18n.cc',
   'game-library.cc',

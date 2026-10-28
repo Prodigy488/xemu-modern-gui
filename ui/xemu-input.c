@@ -29,6 +29,7 @@
 #include "qemu/config-file.h"
 
 #include "xemu-input.h"
+#include "xemu-deadzone.h"
 #include "xemu-notifications.h"
 #include "xemu-settings.h"
 #include <math.h>
@@ -1080,6 +1081,13 @@ void xemu_input_update_sdl_controller_state(ControllerState *state)
     }
 
 #undef INVERT_AXIS
+
+    /* Optional extra dead zone for drifting sticks (0 = off) */
+    float dz = g_config.input.stick_deadzone;
+    xemu_apply_stick_deadzone(&state->axis[CONTROLLER_AXIS_LSTICK_X],
+                              &state->axis[CONTROLLER_AXIS_LSTICK_Y], dz);
+    xemu_apply_stick_deadzone(&state->axis[CONTROLLER_AXIS_RSTICK_X],
+                              &state->axis[CONTROLLER_AXIS_RSTICK_Y], dz);
 
     // xemu_input_print_controller_state(state);
 }

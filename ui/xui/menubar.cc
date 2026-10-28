@@ -30,6 +30,7 @@
 #include "xbox-drive-explorer.hh"
 #include "game-library.hh"
 #include "github-issue.hh"
+#include "diagnostics.hh"
 #include "update.hh"
 #include "../xemu-os-utils.h"
 
@@ -379,6 +380,13 @@ void ShowMainMenu()
                             &compatibility_reporter_window.is_open);
 
             ShowReportGitHubIssueMenuItem();
+            if (ImGui::MenuItem(tr("Copy Diagnostics for a Bug Report"))) {
+                DiagnosticsCopy();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", tr("Copies your xemu version, graphics card and main settings to the clipboard. "
+                                           "It has no file paths or names."));
+            }
 #if defined(_WIN32)
             ImGui::MenuItem(tr("Check for Updates..."), NULL, &update_window.is_open);
 #endif

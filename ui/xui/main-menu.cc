@@ -101,6 +101,9 @@ void MainMenuGeneralView::Draw()
            tr("Show a keyboard when a text box is selected with a controller"));
     Toggle(tr("Skip startup animation"), &g_config.general.skip_boot_anim,
            tr("Skip the full Xbox boot animation sequence"));
+    Toggle(tr("Pause when the window loses focus"), &g_config.general.pause_on_focus_loss,
+           tr("Pauses the game when you switch to another window and carries on "
+              "when you come back. A pause you made yourself stays."));
     Toggle(tr("Discord status"), &g_config.general.discord_presence,
            tr("Show the game you're playing on your Discord profile"));
     ChevronCombo(tr("Library style"), &g_config.general.library.style,
@@ -686,6 +689,20 @@ void MainMenuInputView::Draw()
     snprintf(rumble, sizeof(rumble), tr("How strong controllers rumble (%d%%)"),
              (int)(g_config.input.rumble_strength * 100 + 0.5f));
     Slider(tr("Rumble strength"), &g_config.input.rumble_strength, rumble);
+    {
+        // 0 to 40% of the stick's travel, for controllers that drift
+        float t = g_config.input.stick_deadzone / 0.4f;
+        t = t < 0 ? 0 : (t > 1 ? 1 : t);
+        char desc[128];
+        snprintf(desc, sizeof(desc),
+                 tr("Ignore small stick movements, if a stick drifts (%d%%)"),
+                 (int)(g_config.input.stick_deadzone * 100 + 0.5f));
+        float nt = t;
+        Slider(tr("Stick dead zone"), &nt, desc);
+        if (nt != t) {
+            g_config.input.stick_deadzone = nt * 0.4f;
+        }
+    }
 
     SectionTitle(tr("Mouse and keyboard"));
     Toggle(tr("Use the mouse as a stick"), &g_config.input.mouse.enabled,

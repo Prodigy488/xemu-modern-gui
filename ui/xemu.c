@@ -511,6 +511,8 @@ static void handle_mousewheel(SDL_Event *ev)
     qemu_input_event_sync();
 }
 
+static bool paused_for_focus; /* we paused because the window lost focus */
+
 static void handle_windowevent(SDL_Event *ev)
 {
     struct xemu_console *scon = get_scon_from_window(ev->window.windowID);
@@ -559,6 +561,13 @@ static void handle_windowevent(SDL_Event *ev)
 
     case SDL_EVENT_WINDOW_FOCUS_GAINED:
     case SDL_EVENT_WINDOW_MOUSE_ENTER:
+        if (ev->type == SDL_EVENT_WINDOW_FOCUS_GAINED && paused_for_focus) {
+            /* Carry on only if it is still the pause we made */
+            paused_for_focus = false;
+            if (runstate_check(RUN_STATE_PAUSED)) {
+                vm_start();
+            }
+        }
         if (!gui_grab && (qemu_input_is_absolute(scon->dcl.con) || absolute_enabled)) {
             absolute_mouse_grab(scon);
         }
@@ -574,6 +583,12 @@ static void handle_windowevent(SDL_Event *ev)
     case SDL_EVENT_WINDOW_FOCUS_LOST:
         if (gui_grab && !gui_fullscreen) {
             grab_end(scon);
+        }
+        /* Optional: pause while another window has the focus. Only a game
+         * that is running is paused, so a pause you made yourself stays. */
+        if (g_config.general.pause_on_focus_loss && runstate_is_running()) {
+            vm_stop(RUN_STATE_PAUSED);
+            paused_for_focus = true;
         }
         break;
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:

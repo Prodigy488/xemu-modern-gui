@@ -9911,6 +9911,15 @@ void DrawDashSettingsTab()
                 g_config.input.rumble_strength = pct / 100.0f;
             }
         }
+        label(tr("Stick dead zone"));
+        {
+            int pct = (int)(g_config.input.stick_deadzone * 100 + 0.5f);
+            if (ImGui::SliderInt("##deadzone", &pct, 0, 40, "%d%%")) {
+                g_config.input.stick_deadzone = pct / 100.0f;
+            }
+            ImGui::SetItemTooltip("%s", tr("Ignore small stick movements, if a stick "
+                                           "drifts. Leave it off unless it does."));
+        }
         ImGui::Checkbox(tr("Quick save buttons"), &g_config.input.quick_save_buttons);
         label(tr("Hold Back, then press"));
         ImGui::Combo("##qscombo", &g_config.input.quick_save_combo,
@@ -9958,6 +9967,11 @@ void DrawDashSettingsTab()
                         &g_config.general.discord_presence);
         ImGui::Checkbox(tr("Animations and moving background"),
                         &g_config.display.ui.use_animations);
+        ImGui::Checkbox(tr("Pause when the window loses focus"),
+                        &g_config.general.pause_on_focus_loss);
+        ImGui::SetItemTooltip("%s", tr("Pauses the game when you switch to another "
+                                       "window and carries on when you come back. "
+                                       "A pause you made yourself stays."));
         ImGui::Checkbox(tr("On-screen keyboard for controllers"),
                         &g_config.display.ui.onscreen_keyboard);
         ImGui::SetItemTooltip("%s", tr("Opens when you select a text box with a "

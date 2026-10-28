@@ -29,14 +29,16 @@ Emulation is unchanged except where noted under
 the interface: a dashboard in 11 languages that works fully with a controller,
 one-click 60 FPS patches, upscaling and CRT filters, a homebrew tab and store,
 save backups, tools for finding out why a game is slow, a guided Insignia
-setup, and, new in v2.1, per-game keyboard and mouse setups and an
-experimental achievements tab.
+setup, per-game keyboard and mouse setups and an experimental achievements
+tab (v2.1), and, new in v2.2, four more dashboard styles, achievements that
+can unlock from the game's memory, and stick drift tools.
 
 ## Highlights
 
 - **Console-style dashboard** with Home, Library, Insignia, Media, Drive,
-  Homebrew, Patches and Settings tabs, four styles and two themes. Everything
-  works from a controller.
+  Homebrew, Patches and Settings tabs, eight styles (v2.2 adds Original Xbox,
+  Original Blades, Glossy Blades and Modern) and two themes. Everything works
+  from a controller.
 - **Game library** with cover art, play time, per-game settings, preview
   videos, save states and resume.
 - **One-click 60 FPS, widescreen and HD patches** without touching your disc
@@ -50,7 +52,9 @@ experimental achievements tab.
 - **Guided Insignia setup** for online play.
 - **Performance Capture** to find out why a game slows down.
 - **Achievements (experimental, work in progress):** fan-made packs you tick
-  off yourself (v2.1).
+  off yourself (v2.1) or that unlock from the game's memory (v2.2).
+- **Stick drift test, a dead zone for each stick, pause when the window loses
+  focus and a bug-report diagnostics button** (v2.2).
 
 ![Home tab, Neon theme](docs/screenshots/home.jpg)
 

@@ -32,6 +32,7 @@
 #include <memory>
 
 #include "actions.hh"
+#include "ui-prof.hh"
 #include "common.hh"
 #include "achievements.hh"
 #include "ach-finder.hh"
@@ -206,8 +207,10 @@ void xemu_hud_update(void)
     ImGuiIO& io = ImGui::GetIO();
     uint32_t now = SDL_GetTicks();
 
+    UiProfBegin();
     g_viewport_mgr.Update();
     g_font_mgr.Update();
+    UiProfMark("fonts and viewport");
     if (g_last_scale != g_viewport_mgr.m_scale) {
         ImGuiStyle &style = ImGui::GetStyle();
         style = g_base_style;
@@ -216,11 +219,17 @@ void xemu_hud_update(void)
     }
 
     DynamicResUpdate(); // before the library applies a new game's settings
+    UiProfMark("dynamic resolution");
     game_library_window.Update();
+    UiProfMark("library update");
     XboxExplorerUpdate();
+    UiProfMark("explorer");
     PerfCaptureUpdate();
+    UiProfMark("perf capture");
     PlayExtrasUpdate();
+    UiProfMark("play extras");
     xemu_net_sync_dns();
+    UiProfMark("dns");
     static bool library_startup_checked = false;
     if (!library_startup_checked) {
         library_startup_checked = true;
@@ -236,6 +245,7 @@ void xemu_hud_update(void)
         SDL_GetWindowSizeInPixels(xemu_get_window(), &ww, &wh);
         RenderFramebuffer(g_tex, ww, wh, g_flip_req);
     }
+    UiProfMark("game picture");
 
     ImGui_ImplOpenGL3_NewFrame();
     io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
@@ -247,6 +257,7 @@ void xemu_hud_update(void)
     ImGui::NewFrame();
     OskBeginFrame(); // before any UI: takes the controller while typing
     ProcessKeyboardShortcuts();
+    UiProfMark("frame setup");
 
 #if defined(CONFIG_RENDERDOC)
     if (g_capture_renderdoc_frame) {
@@ -348,7 +359,9 @@ void xemu_hud_update(void)
     apu_window.Draw();
     video_window.Draw();
     compatibility_reporter_window.Draw();
+    UiProfMark("menus");
     game_library_window.Draw();
+    UiProfMark("library draw");
     XboxExplorerWindowDraw();
     PerfCaptureDraw();
 #if defined(_WIN32)
@@ -366,6 +379,7 @@ void xemu_hud_update(void)
     AchFinderDraw();
     AchievementsDraw();
     OskDraw(); // on top of everything
+    UiProfEnd();
 
     // static bool show_demo = true;
     // if (show_demo) ImGui::ShowDemoWindow(&show_demo);

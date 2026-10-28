@@ -34,6 +34,7 @@
 #include "play-extras.hh"
 #include "achievements.hh"
 #include "game-library.hh"
+#include "ui-prof.hh"
 #include "game-library-scan.hh"
 #include "rtx-video.hh"
 #include "xbox-drive-explorer.hh"
@@ -688,8 +689,16 @@ void LoadLibrary()
     }
 }
 
-void SaveLibrary()
+std::thread g_save_thread;
+std::atomic<bool> g_save_running{ false };
+
+// async: building the data stays here, writing the file moves to a thread (a
+// slow disk or a virus scanner made this hold the emulator up for a while)
+void SaveLibrary(bool async = false)
 {
+    if (g_save_thread.joinable()) {
+        g_save_thread.join(); // one writer at a time, and never past an exit
+    }
     json j;
     j["version"] = 1;
     json games = json::array();
@@ -779,22 +788,34 @@ void SaveLibrary()
 
     std::error_code ec;
     fs::create_directories(BasePath(), ec);
-    fs::path tmp = LibraryFile();
+    const fs::path dest = LibraryFile();
+    fs::path tmp = dest;
     tmp += ".tmp";
-    {
-        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
-        if (!f) {
-            return;
+    auto write = [j = std::move(j), tmp, dest]() {
+        std::error_code ec;
+        {
+            std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+            if (!f) {
+                g_save_running = false;
+                return;
+            }
+            f << j.dump(1, '\t', false, json::error_handler_t::replace);
         }
-        f << j.dump(1, '\t', false, json::error_handler_t::replace);
-    }
-    fs::rename(tmp, LibraryFile(), ec);
-    if (ec) {
-        // Windows can refuse to rename over an existing file
-        fs::remove(LibraryFile(), ec);
-        fs::rename(tmp, LibraryFile(), ec);
-    }
+        fs::rename(tmp, dest, ec);
+        if (ec) {
+            // Windows can refuse to rename over an existing file
+            fs::remove(dest, ec);
+            fs::rename(tmp, dest, ec);
+        }
+        g_save_running = false;
+    };
     g_dirty = false;
+    if (async) {
+        g_save_running = true;
+        g_save_thread = std::thread(std::move(write));
+    } else {
+        write();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -10517,6 +10538,7 @@ static std::vector<RecentGame> GetRecentGamesUncached(int max_count)
 void GameLibraryWindow::Update()
 {
     StorePump();
+    UiProfMark("store");
     {
         // Note shader cache files against the game in the drive
         // (every 2 s: the library may still be loading at first)
@@ -10531,9 +10553,11 @@ void GameLibraryWindow::Update()
             ShaderCacheFlush();
         }
     }
+    UiProfMark("shader cache notes");
     if (g_compat_downloaded.exchange(false)) {
         LoadCompatCache();
     }
+    UiProfMark("compat cache");
     if (!g_loaded) {
         g_loaded = true;
         atexit(GameLibraryShutdown);
@@ -10543,6 +10567,7 @@ void GameLibraryWindow::Update()
         StartCompatRefresh();
         g_last_tick = SDL_GetTicks();
         g_last_save_tick = g_last_tick;
+        UiProfMark("first load");
     }
 
     // Rescan when the set of game folders changes (or on first use)
@@ -10550,13 +10575,18 @@ void GameLibraryWindow::Update()
         StartScan();
     }
     ApplyPreviewRequests();
+    UiProfMark("previews");
     FlushDeletedTextures();
     RunLeaveAction();
+    UiProfMark("leave action");
     MergeScanResults();
     MergeCoverResults();
     MergePatchResults();
+    UiProfMark("merge results");
     UploadDecodedImages(2);
+    UiProfMark("image upload");
     UpdateDiscordPresence();
+    UiProfMark("discord");
 
     // Track disc changes: last played + per-game settings
     const char *dvd = g_config.sys.files.dvd_path;
@@ -10583,12 +10613,15 @@ void GameLibraryWindow::Update()
             g_dirty = true; // persist play time about once a minute
         }
     }
-    if (g_dirty && now - g_last_save_tick > 5000) {
-        SaveLibrary();
+    UiProfMark("disc change");
+    if (g_dirty && now - g_last_save_tick > 5000 && !g_save_running) {
+        SaveLibrary(true); // writes the file on a thread of its own
         g_last_save_tick = now;
     }
+    UiProfMark("library save");
 
     AchievementsUpdate();
+    UiProfMark("achievements");
 }
 
 // ---- Blades and Metro dashboard styles -------------------------------------

@@ -38,7 +38,7 @@ uint64_t pfifo_read(void *opaque, hwaddr addr, unsigned int size)
 {
     NV2AState *d = (NV2AState *)opaque;
 
-    qemu_mutex_lock(&d->pfifo.lock);
+    xemu_tbrate_lock(&d->pfifo.lock);
 
     uint64_t r = 0;
     switch (addr) {
@@ -72,7 +72,7 @@ void pfifo_write(void *opaque, hwaddr addr, uint64_t val, unsigned int size)
 
     nv2a_reg_log_write(NV_PFIFO, addr, size, val);
 
-    qemu_mutex_lock(&d->pfifo.lock);
+    xemu_tbrate_lock(&d->pfifo.lock);
 
     switch (addr) {
     case NV_PFIFO_INTR_0:
@@ -111,6 +111,13 @@ static bool is_flip_stall_complete(NV2AState *d)
 {
     PGRAPHState *pg = &d->pgraph;
 
+    /* The flip may not complete before the modelled render deadline, a
+     * continuous one: the game's own vblank pacing supplies any grid. */
+    if (xemu_flip_ready_ns &&
+        qemu_clock_get_ns(QEMU_CLOCK_REALTIME) < xemu_flip_ready_ns) {
+        return false;
+    }
+
     uint32_t s = pgraph_reg_r(pg, NV_PGRAPH_SURFACE);
 
     NV2A_DPRINTF("flip stall read: %d, write: %d, modulo: %d\n",
@@ -136,6 +143,9 @@ static bool pfifo_stall_for_flip(NV2AState *d)
             should_stall = true;
         } else {
             d->pgraph.waiting_for_flip = false;
+            /* The guest resumes submitting: the modelled GPU queue starts. */
+            xemu_flip_completed_ns =
+                qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
         }
         qemu_mutex_unlock(&d->pgraph.lock);
     }
@@ -145,9 +155,21 @@ static bool pfifo_stall_for_flip(NV2AState *d)
 
 static bool pfifo_puller_should_stall(NV2AState *d)
 {
-    return pfifo_stall_for_flip(d) || qatomic_read(&d->pgraph.waiting_for_nop) ||
+    return pfifo_stall_for_flip(d) ||
+           qatomic_read(&d->pgraph.waiting_for_nop) ||
            qatomic_read(&d->pgraph.waiting_for_context_switch) ||
            !can_fifo_access(d);
+}
+
+/* A pending report is re-checked within a millisecond: the hardware
+ * writes it when the GPU reaches it, not when the guest next pushes. */
+static inline void pfifo_idle_cond_wait(NV2AState *d)
+{
+    if (d->pgraph.reports_pending) {
+        qemu_cond_timedwait(&d->pfifo.fifo_cond, &d->pfifo.lock, 1);
+    } else {
+        qemu_cond_wait(&d->pfifo.fifo_cond, &d->pfifo.lock);
+    }
 }
 
 static ssize_t pfifo_run_puller(NV2AState *d, uint32_t method_entry,
@@ -270,9 +292,6 @@ static void pfifo_run_pusher(NV2AState *d)
         return;
     }
 
-    // TODO: should we become busy here??
-    // NV_PFIFO_CACHE1_DMA_PUSH_STATE _BUSY
-
     unsigned int channel_id = GET_MASK(*push1,
                                        NV_PFIFO_CACHE1_PUSH1_CHID);
 
@@ -294,10 +313,10 @@ static void pfifo_run_pusher(NV2AState *d)
 
     hwaddr dma_len;
     uint8_t *dma = nv_dma_map(d, dma_instance, &dma_len);
-
     while (!pfifo_pusher_should_stall(d)) {
         uint32_t dma_get_v = *dma_get;
         uint32_t dma_put_v = *dma_put;
+
         if (dma_get_v == dma_put_v) break;
         if (dma_get_v >= dma_len) {
             assert(!"Dma value is out of range in PFIFO pusher");
@@ -478,7 +497,7 @@ void *pfifo_thread(void *arg)
             qemu_cond_broadcast(&d->pfifo.fifo_idle_cond);
 
             // Both the pusher and puller are waiting for some action
-            qemu_cond_wait(&d->pfifo.fifo_cond, &d->pfifo.lock);
+            pfifo_idle_cond_wait(d);
         }
 
         if (d->exiting) {

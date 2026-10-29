@@ -79,6 +79,7 @@ static void pgraph_vk_finalize(NV2AState *d)
     pgraph_vk_finalize_surfaces(pg);
     pgraph_vk_finalize_buffers(d);
     pgraph_vk_finalize_command_buffers(pg);
+    pgraph_vk_image_pool_flush(pg->vk_renderer_state);
     pgraph_vk_finalize_instance(pg);
 
     g_free(pg->vk_renderer_state);
@@ -89,12 +90,12 @@ static void pgraph_vk_flush(NV2AState *d)
 {
     PGRAPHState *pg = &d->pgraph;
 
-    pgraph_vk_display_invalidate(pg->vk_renderer_state);
     pgraph_vk_finish(pg, VK_FINISH_REASON_FLUSH);
     pgraph_vk_surface_flush(d);
     pgraph_vk_mark_textures_possibly_dirty(d, 0, memory_region_size(d->vram));
     pgraph_vk_update_vertex_ram_buffer(&d->pgraph, 0, d->vram_ptr,
                                        memory_region_size(d->vram));
+    pgraph_vk_uniform_sources_invalidate(pg->vk_renderer_state);
     for (int i = 0; i < 4; i++) {
         pg->texture_dirty[i] = true;
     }
@@ -121,7 +122,8 @@ static void pgraph_vk_process_pending(NV2AState *d)
     if (qatomic_read(&r->downloads_pending) ||
         qatomic_read(&r->download_dirty_surfaces_pending) ||
         qatomic_read(&d->pgraph.sync_pending) ||
-        qatomic_read(&d->pgraph.flush_pending)
+        qatomic_read(&d->pgraph.flush_pending) ||
+        qatomic_read(&r->seed_writeback_pending)
     ) {
         qemu_mutex_unlock(&d->pfifo.lock);
         qemu_mutex_lock(&d->pgraph.lock);
@@ -129,6 +131,7 @@ static void pgraph_vk_process_pending(NV2AState *d)
             pgraph_vk_process_pending_downloads(d);
         }
         if (qatomic_read(&r->download_dirty_surfaces_pending)) {
+            pgraph_vk_settle_reports(&d->pgraph);
             pgraph_vk_download_dirty_surfaces(d);
         }
         if (qatomic_read(&d->pgraph.sync_pending)) {
@@ -136,6 +139,9 @@ static void pgraph_vk_process_pending(NV2AState *d)
         }
         if (qatomic_read(&d->pgraph.flush_pending)) {
             pgraph_vk_flush(d);
+        }
+        if (qatomic_read(&r->seed_writeback_pending)) {
+            pgraph_vk_shader_seed_writeback(&d->pgraph);
         }
         qemu_mutex_unlock(&d->pgraph.lock);
         qemu_mutex_lock(&d->pfifo.lock);
@@ -145,7 +151,24 @@ static void pgraph_vk_process_pending(NV2AState *d)
 static void pgraph_vk_flip_stall(NV2AState *d)
 {
     pgraph_vk_finish(&d->pgraph, VK_FINISH_REASON_FLIP_STALL);
+    /* Everything has settled: this frame's GPU time is readable, and the
+     * eager submission count for the next frame follows from it. */
+    pgraph_vk_frame_gpu_resolve(&d->pgraph);
+    pgraph_vk_eager_frame_update(&d->pgraph);
+    /* Resolve this frame's fragment-query segments; the finish above has
+     * waited the fence, so the results are available immediately. */
+    xemu_cost_resolve_frame(d, &pgraph_vk_cost_ops,
+                            d->pgraph.surface_scale_factor);
     pgraph_vk_debug_frame_terminator();
+    pgraph_vk_seed_service();
+    pgraph_vk_libpump_step(&d->pgraph);
+
+    /* The pipeline cache reaches disk every 600 flips (about 10 s), on a
+     * thread: the shutdown path does not save it. */
+    static unsigned flips;
+    if (++flips % 600 == 0) {
+        pgraph_vk_save_pipeline_cache(&d->pgraph, false);
+    }
 }
 
 static void pgraph_vk_pre_savevm_trigger(NV2AState *d)
@@ -161,51 +184,20 @@ static void pgraph_vk_pre_savevm_wait(NV2AState *d)
 
 static void pgraph_vk_pre_shutdown_trigger(NV2AState *d)
 {
-    // qatomic_set(&d->pgraph.vk_renderer_state->shader_cache_writeback_pending, true);
-    // qemu_event_reset(&d->pgraph.vk_renderer_state->shader_cache_writeback_complete);
+    PGRAPHVkState *r = d->pgraph.vk_renderer_state;
+    qemu_event_reset(&r->seed_writeback_complete);
+    qatomic_set(&r->seed_writeback_pending, true);
 }
 
 static void pgraph_vk_pre_shutdown_wait(NV2AState *d)
 {
-    // qemu_event_wait(&d->pgraph.vk_renderer_state->shader_cache_writeback_complete);   
+    qemu_event_wait(&d->pgraph.vk_renderer_state->seed_writeback_complete);
 }
 
 static int pgraph_vk_get_framebuffer_surface(NV2AState *d)
 {
     PGRAPHState *pg = &d->pgraph;
     PGRAPHVkState *r = pg->vk_renderer_state;
-
-#if HAVE_EXTERNAL_MEMORY
-    /*
-     * The window asks for the picture on every refresh, which can be hundreds
-     * of times a second, and each time the graphics thread would draw the
-     * display again and wait for the GPU to go idle. When nothing has touched
-     * the front buffer and the display settings are the same, the picture
-     * already in the shared texture is still right. It is still redrawn every
-     * 50 ms so that anything not tracked here shows up within a few frames, and
-     * so that the surface stays marked as in use.
-     */
-    if (qatomic_read(&r->display_clean) && r->display.gl_texture_id &&
-        qemu_clock_get_ms(QEMU_CLOCK_REALTIME) - r->display_render_ms < 50) {
-        VGADisplayParams p;
-        d->vga.get_params(&d->vga, &p);
-        int w = 0, h = 0;
-        d->vga.get_resolution(&d->vga, &w, &h);
-        if (d->vga.cr[NV_PRMCIO_INTERLACE_MODE] != NV_PRMCIO_INTERLACE_MODE_DISABLED) {
-            h *= 2;
-        }
-        unsigned int uw = w, uh = h;
-        pgraph_apply_scaling_factor(pg, &uw, &uh);
-        if (r->display_sig.pcrtc_start == d->pcrtc.start &&
-            r->display_sig.line_offset == p.line_offset &&
-            r->display_sig.width == uw && r->display_sig.height == uh &&
-            r->display_sig.scale == pg->surface_scale_factor &&
-            r->display_sig.interlace == d->vga.cr[NV_PRMCIO_INTERLACE_MODE] &&
-            qatomic_read(&r->display_clean)) {
-            return r->display.gl_texture_id;
-        }
-    }
-#endif
 
     qemu_mutex_lock(&d->pfifo.lock);
 
@@ -229,6 +221,7 @@ static int pgraph_vk_get_framebuffer_surface(NV2AState *d)
     pfifo_kick(d);
     qemu_mutex_unlock(&d->pfifo.lock);
     qemu_event_wait(&d->pgraph.sync_complete);
+    g_nv2a_stats.presented_frame_id = r->display.draw_time;
     return r->display.gl_texture_id;
 #else
     qemu_mutex_unlock(&d->pfifo.lock);
@@ -258,6 +251,7 @@ static PGRAPHRenderer pgraph_vk_renderer = {
         .pre_shutdown_wait = pgraph_vk_pre_shutdown_wait,
         .process_pending = pgraph_vk_process_pending,
         .process_pending_reports = pgraph_vk_process_pending_reports,
+        .prewarm_vertex_program = pgraph_vk_prewarm_shaders,
         .surface_update = pgraph_vk_surface_update,
         .set_surface_scale_factor = pgraph_vk_set_surface_scale_factor,
         .get_surface_scale_factor = pgraph_vk_get_surface_scale_factor,

@@ -103,6 +103,16 @@ void MainMenuGeneralView::Draw()
 
     Toggle(tr("Cache shaders to disk"), &g_config.perf.cache_shaders,
            tr("Reduce stutter in games by caching previously generated shaders"));
+    Toggle(tr("GPU boost"), &g_config.perf.optimizations,
+           tr("Tuned graphics fast paths: two frames in flight, shader pipeline "
+              "libraries compiled on worker threads, framebuffer and uniform "
+              "caching (requires restart). Adapted from Tovarichtch's fork"));
+    Toggle(tr("Shader seeding"), &g_config.perf.shader_seeding,
+           tr("Remember the shaders each game uses and compile them while it "
+              "boots, so the first play stutters less (requires restart)"));
+    Toggle(tr("Real hardware speed"), &g_config.perf.real_hw_speed,
+           tr("Pace the CPU and GPU like the original console instead of running "
+              "uncapped. Games that ran too fast may play at their real speed"));
 #if defined(_WIN32)
     Toggle(tr("High priority emulation"), &g_config.perf.boost_threads,
            tr("Give the emulated CPU, GPU and audio a higher priority than "

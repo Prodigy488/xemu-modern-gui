@@ -26,6 +26,7 @@
 #include "thirdparty/renderdoc_app.h"
 
 #include "hw/xbox/nv2a/debug.h"
+#include "hw/xbox/nv2a/nv2a.h"
 
 #ifdef _WIN32
 #include <libloaderapi.h>
@@ -85,6 +86,7 @@ void *nv2a_dbg_renderdoc_get_api(void)
     return (void*)rdoc_api;
 }
 
+/* The UI's two calls go to the GPU that runs (see nv2a_stock_active). */
 bool nv2a_dbg_renderdoc_available(void)
 {
     return rdoc_api != NULL;

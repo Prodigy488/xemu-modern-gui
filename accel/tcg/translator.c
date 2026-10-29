@@ -2,6 +2,7 @@
  * Generic intermediate code generation.
  *
  * Copyright (C) 2016-2017 Lluís Vilanova <vilanova@ac.upc.edu>
+ * Copyright (c) 2026 Réda Chérif-Touil
  *
  * This work is licensed under the terms of the GNU GPL, version 2 or later.
  * See the COPYING file in the top-level directory.
@@ -26,6 +27,8 @@
 #include "tcg/tcg-temp-internal.h"
 #include "hw/core/cpu.h"
 #include "qemu/cpu-boost.h"
+#include "system/cpus.h"
+#include "qemu/cpu-pace.h"
 
 /*
  * Probe the jump cache from generated code (CPU boost). Adapted from
@@ -101,6 +104,24 @@ void tcg_gen_lookup_and_goto_ptr_fast(TCGv_i64 pc, uint64_t cs_base,
 #endif
 }
 
+XemuTbRate xemu_tbrate;
+
+/* The block's own count, emitted where the caller points emit_before_op. */
+static void gen_tbrate_count(int num_insns)
+{
+    TCGv_ptr p = tcg_temp_ebb_new_ptr();
+    TCGv_i64 t = tcg_temp_ebb_new_i64();
+
+    tcg_gen_movi_ptr(p, (intptr_t)&xemu_tbrate);
+    tcg_gen_ld_i64(t, p, offsetof(XemuTbRate, blocks));
+    tcg_gen_addi_i64(t, t, 1);
+    tcg_gen_st_i64(t, p, offsetof(XemuTbRate, blocks));
+    tcg_gen_ld_i64(t, p, offsetof(XemuTbRate, insns));
+    tcg_gen_addi_i64(t, t, num_insns);
+    tcg_gen_st_i64(t, p, offsetof(XemuTbRate, insns));
+    tcg_temp_free_i64(t);
+    tcg_temp_free_ptr(p);
+}
 
 static void set_can_do_io(DisasContextBase *db, bool val)
 {
@@ -125,6 +146,11 @@ static TCGOp *gen_tb_start(DisasContextBase *db, uint32_t cflags)
 {
     TCGv_i32 count = NULL;
     TCGOp *icount_start_insn = NULL;
+    /* Real hardware speed: the block draws its instructions from the
+     * budget in icount_decr.u16.low, as with icount, and stops below when
+     * the budget is spent. */
+    bool budget = (cflags & CF_USE_ICOUNT) ||
+                  (qatomic_read(&xemu_cpu_pace_on) && !(cflags & CF_NOIRQ));
 
     if ((cflags & CF_USE_ICOUNT) || !(cflags & CF_NOIRQ)) {
         count = tcg_temp_new_i32();
@@ -133,7 +159,7 @@ static TCGOp *gen_tb_start(DisasContextBase *db, uint32_t cflags)
                        sizeof(CPUState));
     }
 
-    if (cflags & CF_USE_ICOUNT) {
+    if (budget) {
         /*
          * We emit a sub with a dummy immediate argument. Keep the insn index
          * of the sub so that we later (when we know the actual insn count)
@@ -157,7 +183,7 @@ static TCGOp *gen_tb_start(DisasContextBase *db, uint32_t cflags)
         tcg_gen_brcondi_i32(TCG_COND_LT, count, 0, tcg_ctx->exitreq_label);
     }
 
-    if (cflags & CF_USE_ICOUNT) {
+    if (budget) {
         tcg_gen_st16_i32(count, tcg_env,
                          offsetof(CPUState, neg.icount_decr.u16.low) -
                          sizeof(CPUState));
@@ -169,7 +195,7 @@ static TCGOp *gen_tb_start(DisasContextBase *db, uint32_t cflags)
 static void gen_tb_end(const TranslationBlock *tb, uint32_t cflags,
                        TCGOp *icount_start_insn, int num_insns)
 {
-    if (cflags & CF_USE_ICOUNT) {
+    if (icount_start_insn) {
         /*
          * Update the num_insn immediate parameter now that we know
          * the actual insn count.
@@ -285,6 +311,14 @@ void translator_loop(CPUState *cpu, TranslationBlock *tb, int *max_insns,
     /* Emit code to exit the TB, as indicated by db->is_jmp.  */
     ops->tb_stop(db, cpu);
     gen_tb_end(tb, cflags, icount_start_insn, db->num_insns);
+
+    /* XEMU_TBRATE: counted before the first instruction, past the exit
+     * check, now that the number of instructions is known. */
+    if (unlikely(xemu_tbrate_enabled())) {
+        tcg_ctx->emit_before_op = first_insn_start;
+        gen_tbrate_count(db->num_insns);
+        tcg_ctx->emit_before_op = NULL;
+    }
 
     /*
      * Manage can_do_io for the translation block: set to false before

@@ -48,6 +48,10 @@ void xemu_settings_set_path(const char *path);
 // Get the path of the base settings dir
 const char *xemu_settings_get_base_path(void);
 
+/* Debug mode (perf.debug_mode; XEMU_DEBUG_MODE=1 or 0 decides for one
+ * session). Read once, after the settings are loaded. */
+bool xemu_debug_mode(void);
+
 // Get path of the config file on disk
 const char *xemu_settings_get_path(void);
 

@@ -4,6 +4,7 @@
  * Copyright (c) 2012 espes
  * Copyright (c) 2015 Jannik Vogel
  * Copyright (c) 2018-2024 Matt Borgerson
+ * Copyright (c) 2026 Réda Chérif-Touil
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -33,6 +34,7 @@
 #include "texture.h"
 #include "util.h"
 #include "vsh_regs.h"
+#include "writeback.h"
 
 typedef struct Nv2aVshProgram_ Nv2aVshProgram;
 
@@ -61,6 +63,42 @@ typedef struct VertexAttribute {
     float *inline_buffer;
     bool inline_buffer_populated;
 } VertexAttribute;
+
+/* The game's name, found by the Chihiro boot (its MAME name, else its
+ * executable's), which keys the shader seeds and the dictionary; the disc
+ * image's name when a boot has not named it after 900 flips; NULL until
+ * then. */
+const char *pgraph_seed_game_tag(void);
+
+/* Real hardware speed model, QEMU_CLOCK_REALTIME ns: the deadline before
+ * which a flip may not complete (pgraph.c), the moment the guest resumed
+ * after the last one (pfifo.c) and the modelled GPU backlog (nv2a.c). */
+extern int64_t xemu_flip_ready_ns;
+extern int64_t xemu_flip_completed_ns;
+extern int64_t xemu_gpu_free_ns;
+
+/* GPU boost (perf.optimizations), read once: its menu toggle takes effect at
+ * the next start. Off, the stock GPU runs instead of this one
+ * (nv2a_stock_active). */
+bool pgraph_gpu_boost(void);
+/* GPU boost with a GL driver that passed the self-test (ui/xemu.c): the gate
+ * of the separable and dynamic shader paths, whose generator the Vulkan
+ * renderer shares. */
+bool pgraph_gpu_boost_gl(void);
+bool pgraph_blit_gpu_fits(NV2AState *d, hwaddr dest_addr,
+                          unsigned int bytes_per_pixel,
+                          unsigned int src_width, unsigned int src_height,
+                          unsigned int src_pitch, unsigned int dst_width,
+                          unsigned int dst_height, unsigned int dst_pitch);
+
+/* Inline-array footprint of one attribute: the NV2A packs every attribute of
+ * an inline vertex into whole dwords (PROVEN: the XDK's CDevice_SetStateUP
+ * pushes (count * size + 3) >> 2 dwords per attribute). DMA arrays keep their
+ * own offsets and strides. */
+static inline unsigned int pgraph_inline_attr_size(const VertexAttribute *attr)
+{
+    return (attr->size * attr->count + 3) & ~3u;
+}
 
 typedef struct Surface {
     bool draw_dirty;
@@ -128,6 +166,8 @@ typedef struct PGRAPHRenderer {
         void (*pre_shutdown_wait)(NV2AState *d);
         void (*process_pending)(NV2AState *d);
         void (*process_pending_reports)(NV2AState *d);
+        /* Optional: build a vertex program's shaders at upload time. */
+        void (*prewarm_vertex_program)(NV2AState *d);
         void (*surface_flush)(NV2AState *d);
         void (*surface_update)(NV2AState *d, bool upload, bool color_write, bool zeta_write);
         void (*set_surface_scale_factor)(NV2AState *d, unsigned int scale);
@@ -146,6 +186,9 @@ typedef struct PGRAPHState {
 
     int frame_time;
     int draw_time;
+    /* Subchannel the CTX_SWITCH registers currently reflect (-1 = must
+     * refresh); avoids rewriting them on every method dispatch. */
+    int ctx_switch_subchannel;
 
     /* subchannels state we're not sure the location of... */
     ContextSurfaces2DState context_surfaces_2d;
@@ -180,6 +223,16 @@ typedef struct PGRAPHState {
     hwaddr dma_report;
     hwaddr report_offset;
     bool zpass_pixel_count_enable;
+    /* NV097_SET_TWO_SIDE_LIGHT_EN (0x17C4): hardware register mapping
+     * unknown, tracked as state like texture_matrix_enable. */
+    bool two_side_light_en;
+    /* NV097_SET_LINE_WIDTH (0x0380): hardware register mapping unknown,
+     * tracked as state. Units are 1/8 pixel:
+     * D3DDevice_SetRenderState_LineWidth emits
+     * clamp(ftol(width * msaa_scale * 8.0f + 0.5f), <= 0x1FF), so the
+     * guest's multisample scale is already folded in. Reset value 8 (1.0
+     * pixel) matches the width used before any SetRenderState. */
+    uint32_t line_width;
 
     hwaddr dma_vertex_a, dma_vertex_b;
 
@@ -207,6 +260,10 @@ typedef struct PGRAPHState {
 
     float material_alpha;
 
+    /* NV097_SET_BACK_MATERIAL_ALPHA (0x17AC): stored, not read yet (the FF
+     * shader gives back faces the front alpha). */
+    float back_material_alpha;
+
     // should figure out where these are in lighting context
     float light_infinite_half_vector[NV2A_MAX_LIGHTS][3];
     float light_infinite_direction[NV2A_MAX_LIGHTS][3];
@@ -214,9 +271,19 @@ typedef struct PGRAPHState {
     float light_local_attenuation[NV2A_MAX_LIGHTS][3];
 
     float specular_params[6];
+    float specular_power;
     float specular_params_back[6];
+    float specular_power_back;
 
     float point_params[8];
+
+    /* Write markers for the uniform source arrays that lack per-entry
+     * dirty flags; read and cleared by the GL and Vulkan uniform paths. */
+    bool light_dirty;
+    bool point_params_dirty;
+    /* Set by NV097_SET_FOG_PARAMS, which writes NV_PGRAPH_FOGPARAM0/1, the
+     * only registers fogParam derives from. */
+    bool fog_params_dirty;
 
     VertexAttribute vertex_attributes[NV2A_VERTEXSHADER_ATTRIBUTES];
     uint16_t compressed_attrs;
@@ -242,10 +309,16 @@ typedef struct PGRAPHState {
 
     uint32_t regs_[0x2000];
     DECLARE_BITMAP(regs_dirty, 0x2000 / sizeof(uint32_t));
+    /* The shader-relevant fields of the registers the dirty map can only
+     * flag whole, as they stood when the current shader state was built. */
+    uint32_t shader_reg_snap[9];
 
     bool clearing; // FIXME: Internal
     bool waiting_for_nop;
     bool waiting_for_flip;
+    /* A queued GET_REPORT awaits its GPU result: the pfifo idle wait is
+     * bounded, so the report lands without waiting for a guest push. */
+    bool reports_pending;
     bool waiting_for_context_switch;
 
     bool flush_pending;
@@ -253,6 +326,9 @@ typedef struct PGRAPHState {
 
     bool sync_pending;
     QemuEvent sync_complete;
+    /* PCRTC_START was written: the CRTC scans another buffer. The
+     * renderer resolves it for the display thread (GL). */
+    bool scanout_changed;
 
     bool framebuffer_in_use;
     QemuCond framebuffer_released;
@@ -266,6 +342,8 @@ typedef struct PGRAPHState {
 
     unsigned int surface_scale_factor;
     uint8_t *scale_buf;
+
+    PGRAPHWritebackState writeback;
 
     const PGRAPHRenderer *renderer;
     union {
@@ -303,6 +381,36 @@ extern NV2AState *g_nv2a;
 
 // FIXME: Add new function pgraph_is_texture_sampler_active()
 
+/* The bound target's dimensions, as the draw path reads them. */
+static inline void pgraph_set_surface_binding_dim(PGRAPHState *pg,
+                                                  unsigned int width,
+                                                  unsigned int height,
+                                                  const SurfaceShape *shape)
+{
+    pg->surface_binding_dim.width = width;
+    pg->surface_binding_dim.clip_x = shape->clip_x;
+    pg->surface_binding_dim.clip_width = shape->clip_width;
+    pg->surface_binding_dim.height = height;
+    pg->surface_binding_dim.clip_y = shape->clip_y;
+    pg->surface_binding_dim.clip_height = shape->clip_height;
+}
+
+/* A surface is never larger than the size its format declares, when it
+ * declares one (the width and height fields are left at zero for the
+ * non-power-of-two linear targets). A linear surface is otherwise sized by
+ * the clip rectangle, which a game may leave at the previous target's size
+ * while it draws into a smaller one (Silent Scope's 256x256 scope with a
+ * 640x480 clip would span its neighbouring surfaces and evict them). */
+static inline void pgraph_bound_surface_to_format(PGRAPHState *pg,
+                                                  unsigned int *width,
+                                                  unsigned int *height)
+{
+    if (pg->surface_shape.log_width && pg->surface_shape.log_height) {
+        *width = MIN(*width, 1u << pg->surface_shape.log_width);
+        *height = MIN(*height, 1u << pg->surface_shape.log_height);
+    }
+}
+
 static inline uint32_t pgraph_reg_r(PGRAPHState *pg, unsigned int r)
 {
     assert(r % 4 == 0);
@@ -318,11 +426,27 @@ static inline void pgraph_reg_w(PGRAPHState *pg, unsigned int r, uint32_t v)
     pg->regs_[r] = v;
 }
 
+void pgraph_glsl_snapshot_shader_regs(PGRAPHState *pg);
 void pgraph_clear_dirty_reg_map(PGRAPHState *pg);
 
 static inline bool pgraph_is_reg_dirty(PGRAPHState *pg, unsigned int reg)
 {
     return test_bit(reg / sizeof(uint32_t), pg->regs_dirty);
+}
+
+/* The texgen mode of texture unit `unit`'s component `comp` (S, T, R, Q):
+ * units 0-1 in CSV1_A, 2-3 in CSV1_B. */
+static inline unsigned int pgraph_texgen_mode(PGRAPHState *pg, int unit,
+                                              int comp)
+{
+    static const unsigned int masks[2][4] = {
+        { NV_PGRAPH_CSV1_A_T0_S, NV_PGRAPH_CSV1_A_T0_T,
+          NV_PGRAPH_CSV1_A_T0_R, NV_PGRAPH_CSV1_A_T0_Q },
+        { NV_PGRAPH_CSV1_A_T1_S, NV_PGRAPH_CSV1_A_T1_T,
+          NV_PGRAPH_CSV1_A_T1_R, NV_PGRAPH_CSV1_A_T1_Q },
+    };
+    unsigned int reg = unit < 2 ? NV_PGRAPH_CSV1_A : NV_PGRAPH_CSV1_B;
+    return GET_MASK(pgraph_reg_r(pg, reg), masks[unit % 2][comp]);
 }
 
 static inline bool pgraph_is_texture_stage_active(PGRAPHState *pg, unsigned int stage)

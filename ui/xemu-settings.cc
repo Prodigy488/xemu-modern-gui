@@ -346,3 +346,13 @@ void xemu_settings_reset_keyboard_mapping(void)
   cnode->reset_to_defaults();
   cnode->store_to_struct(&g_config);
 }
+
+bool xemu_debug_mode(void)
+{
+    static int mode = -1;
+    if (mode < 0) {
+        const char *e = getenv("XEMU_DEBUG_MODE");
+        mode = e && e[0] ? e[0] != '0' : g_config.perf.debug_mode;
+    }
+    return mode;
+}

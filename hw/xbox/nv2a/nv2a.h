@@ -24,10 +24,19 @@
 void nv2a_init(PCIBus *bus, int devfn, MemoryRegion *ram);
 void nv2a_context_init(void);
 int nv2a_get_framebuffer_surface(void);
+void nv2a_profile_present(void);
 void nv2a_release_framebuffer_surface(void);
 void nv2a_set_surface_scale_factor(unsigned int scale);
 unsigned int nv2a_get_surface_scale_factor(void);
 const uint8_t *nv2a_get_dac_palette(void);
 int nv2a_get_screen_off(void);
+
+/* The tuned GPU's own, of no use to the stock one. */
+/* Driver self-test for the GL optimization pack; why = short reason. */
+bool nv2a_gl_probe_optimizations(char *why, size_t why_len);
+/* GL 4.1 and a passing self-test, set at GL context creation (ui/xemu.c). */
+extern int xemu_gl_opt_capable;
+void nv2a_fifo_kick_safety(void);
+void nv2a_set_game_name(const char *name, const char *before);
 
 #endif

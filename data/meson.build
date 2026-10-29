@@ -8,6 +8,7 @@ pfiles = [
   'Roboto-Medium.ttf',
   'RobotoCondensed-Regular.ttf',
   'RussoOne-Regular.ttf',  # SIL OFL, see RussoOne-OFL.txt; the Original Xbox dashboard styles
+  'shader_seeds.bin',  # empty dictionary: Xbox seeds are recorded per game on this machine
   'font_awesome_6_1_1_solid.min.otf',  # Update glyphs with scripts/gen-min-fa-font.sh
 ]
 

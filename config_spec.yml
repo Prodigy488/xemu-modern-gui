@@ -521,6 +521,23 @@ perf:
   native_sse:
     type: bool
     default: true
+  # Real hardware speed: the GPU work and the CPU are paced as on the real
+  # console; off = uncapped
+  real_hw_speed:
+    type: bool
+    default: false
+  # GPU boost: the tuned NV2A fast paths (adapted from Tovarichtch's fork)
+  optimizations:
+    type: bool
+    default: true
+  # Smooth first play: known shaders are compiled during boot
+  shader_seeding:
+    type: bool
+    default: true
+  # Debug mode: the XEMU_TBRATE report of where the guest's time goes
+  debug_mode:
+    type: bool
+    default: false
   # Run the emulated CPU on the Windows Hypervisor Platform instead of
   # translating its code (experimental; Windows only; applies when xemu starts)
   whpx:

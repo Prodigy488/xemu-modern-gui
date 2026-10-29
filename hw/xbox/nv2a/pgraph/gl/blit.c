@@ -4,6 +4,7 @@
  * Copyright (c) 2012 espes
  * Copyright (c) 2015 Jannik Vogel
  * Copyright (c) 2018-2024 Matt Borgerson
+ * Copyright (c) 2026 Réda Chérif-Touil
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -53,7 +54,7 @@ static void perform_blit(int operation, uint8_t *source, uint8_t *dest,
         }
     } else {
         fprintf(stderr, "Unknown blit operation: 0x%x\n", operation);
-        assert(!"Unknown blit operation");
+        assert(false && "Unknown blit operation");
     }
 }
 
@@ -69,38 +70,39 @@ static void patch_alpha(uint8_t *dest, size_t width_pixels, size_t height,
     }
 }
 
-static bool surface_fully_overwritten(const SurfaceBinding *surface,
-                                      hwaddr dest_addr, size_t dest_pitch,
-                                      size_t row_bytes, size_t num_rows)
+/* A SRCCOPY into a plain texture has no destination surface, and the
+ * guest-RAM path would read the source back first: make one when the copy
+ * writes all of it. */
+static SurfaceBinding *blit_dest_surface(NV2AState *d,
+                                         const SurfaceBinding *surf_src,
+                                         hwaddr dest_addr,
+                                         ContextSurfaces2DState *cs,
+                                         ImageBlitState *ib,
+                                         unsigned int bytes_per_pixel)
 {
-    if (surface->swizzle || !dest_pitch || surface->pitch != dest_pitch ||
-        surface->vram_addr < dest_addr) {
-        return false;
+    SurfaceBinding *found = pgraph_gl_surface_get(d, dest_addr);
+    if (found != NULL) {
+        return found;
     }
-
-    hwaddr offset = surface->vram_addr - dest_addr;
-    hwaddr first_row = offset / dest_pitch;
-    hwaddr first_col = offset % dest_pitch;
-    hwaddr surface_row_bytes = surface->width * surface->fmt.bytes_per_pixel;
-
-    return first_col + surface_row_bytes <= row_bytes &&
-           first_row + surface->height <= num_rows;
-}
-
-static void discard_overwritten_surfaces(PGRAPHState *pg, hwaddr dest_addr,
-                                         size_t dest_pitch, size_t row_bytes,
-                                         size_t num_rows)
-{
-    PGRAPHGLState *r = pg->gl_renderer_state;
-    SurfaceBinding *surface;
-
-    QTAILQ_FOREACH (surface, &r->surfaces, entry) {
-        if (surface_fully_overwritten(surface, dest_addr, dest_pitch, row_bytes,
-                                      num_rows)) {
-            surface->download_pending = false;
-            surface->draw_dirty = false;
-        }
+    if (ib->out_x != 0 || ib->out_y != 0 || ib->width == 0 ||
+        ib->height == 0 || bytes_per_pixel == 0 ||
+        cs->dest_pitch != ib->width * bytes_per_pixel) {
+        return NULL; /* partial or strided copy: the rest would be undefined */
     }
+    if (surf_src->swizzle || !surf_src->color ||
+        bytes_per_pixel != surf_src->fmt.bytes_per_pixel) {
+        return NULL;
+    }
+    /* Making the destination evicts every surface it overlaps: never the
+     * source it is about to be copied from. */
+    hwaddr dest_size = (hwaddr)cs->dest_pitch * ib->height;
+    if (dest_addr < surf_src->vram_addr + surf_src->size &&
+        surf_src->vram_addr < dest_addr + dest_size) {
+        return NULL;
+    }
+    return pgraph_gl_surface_create_blit_dest(d, dest_addr, surf_src,
+                                              cs->dest_pitch, ib->width,
+                                              ib->height);
 }
 
 void pgraph_gl_image_blit(NV2AState *d)
@@ -131,7 +133,7 @@ void pgraph_gl_image_blit(NV2AState *d)
     default:
         fprintf(stderr, "Unknown blit surface format: 0x%x\n",
                 context_surfaces->color_format);
-        assert(!"Unknown blit surface format");
+        assert(false);
         break;
     }
 
@@ -149,13 +151,81 @@ void pgraph_gl_image_blit(NV2AState *d)
     dest += context_surfaces->dest_offset;
     hwaddr dest_addr = dest - d->vram_ptr;
 
+    SurfaceBinding *surf_src = pgraph_gl_surface_get(d, source_addr);
+
+    /* An NV09F SRCCOPY between surfaces is a GPU copy, VRAM to VRAM like the
+     * silicon; whatever the guards refuse takes the RAM path below, which
+     * reads the scaled source back. */
+    {
+        static int blitgpu = -1;
+        if (blitgpu < 0) {
+            blitgpu = (epoxy_gl_version() >= 43 ||
+                       epoxy_has_gl_extension("GL_ARB_copy_image")) ? 1 : 0;
+        }
+        SurfaceBinding *surf_dest;
+        if (blitgpu &&
+            image_blit->operation == NV09F_SET_OPERATION_SRCCOPY &&
+            surf_src != NULL &&
+            (surf_dest = blit_dest_surface(d, surf_src, dest_addr,
+                                           context_surfaces, image_blit,
+                                           bytes_per_pixel)) != NULL &&
+            surf_dest != surf_src && surf_src->color && surf_dest->color &&
+            !surf_src->swizzle && !surf_dest->swizzle &&
+            surf_src->fmt.gl_internal_format ==
+                surf_dest->fmt.gl_internal_format &&
+            bytes_per_pixel == surf_src->fmt.bytes_per_pixel &&
+            bytes_per_pixel == surf_dest->fmt.bytes_per_pixel) {
+            if (pgraph_blit_gpu_fits(d, dest_addr, bytes_per_pixel,
+                                     surf_src->width, surf_src->height,
+                                     surf_src->pitch, surf_dest->width,
+                                     surf_dest->height, surf_dest->pitch)) {
+                bool full_replace = image_blit->out_x == 0 &&
+                                    image_blit->out_y == 0 &&
+                                    image_blit->width == surf_dest->width &&
+                                    image_blit->height == surf_dest->height;
+                if (surf_src->upload_pending) {
+                    pgraph_gl_upload_surface_data(d, surf_src, false);
+                }
+                if (surf_dest->upload_pending) {
+                    if (full_replace) {
+                        surf_dest->upload_pending = false;
+                    } else {
+                        pgraph_gl_upload_surface_data(d, surf_dest, false);
+                    }
+                }
+
+                unsigned int fp_scale = pg->surface_scale_factor;
+                glCopyImageSubData(surf_src->gl_buffer, GL_TEXTURE_2D, 0,
+                                   image_blit->in_x * fp_scale,
+                                   image_blit->in_y * fp_scale, 0,
+                                   surf_dest->gl_buffer, GL_TEXTURE_2D, 0,
+                                   image_blit->out_x * fp_scale,
+                                   image_blit->out_y * fp_scale, 0,
+                                   image_blit->width * fp_scale,
+                                   image_blit->height * fp_scale, 1);
+
+                /* Left as a draw leaves it: RAM is behind, readers go through
+                 * the download path, and a pending download must stay
+                 * pending. RAM was not written: no set_client_dirty. */
+                pg->draw_time++;
+                surf_dest->draw_time = pg->draw_time;
+                surf_dest->frame_time = pg->frame_time;
+                surf_dest->draw_dirty = true;
+                pgraph_gl_surface_mark_ahead(surf_dest);
+                surf_dest->upload_pending = false;
+                return;
+            }
+        }
+    }
+
+    if (surf_src) {
+        pgraph_gl_surface_download_if_dirty(d, surf_src);
+    }
+
     hwaddr source_offset = image_blit->in_y * context_surfaces->source_pitch +
                            image_blit->in_x * bytes_per_pixel;
-    source_addr += source_offset;
-
     hwaddr dest_offset = image_blit->out_y * context_surfaces->dest_pitch +
                          image_blit->out_x * bytes_per_pixel;
-    dest_addr += dest_offset;
 
     size_t max_row_pixels =
         MIN(context_surfaces->source_pitch, context_surfaces->dest_pitch) /
@@ -172,7 +242,8 @@ void pgraph_gl_image_blit(NV2AState *d)
     size_t adjusted_height = image_blit->height;
     size_t leftover_bytes = 0;
 
-    hwaddr clipped_dest_size = nv_clip_gpu_tile_blit(d, dest_addr, dest_size);
+    hwaddr clipped_dest_size =
+        nv_clip_gpu_tile_blit(d, dest_addr + dest_offset, dest_size);
 
     if (clipped_dest_size < dest_size) {
         adjusted_height = clipped_dest_size / context_surfaces->dest_pitch;
@@ -181,20 +252,20 @@ void pgraph_gl_image_blit(NV2AState *d)
         leftover_bytes = clipped_dest_size - consumed_bytes;
     }
 
-    size_t total_rows = adjusted_height + (leftover_bytes > 0 ? 1 : 0);
-    hwaddr source_size = total_rows ? (total_rows - 1) * context_surfaces->source_pitch +
-                                       (leftover_bytes ? leftover_bytes : row_pixels * bytes_per_pixel) : 0;
-    pgraph_gl_download_surfaces_in_range_if_dirty(pg, source_addr, source_size);
-
-    // Must happen after the source download so that surfaces overlapping both
-    // regions are synchronized before being discarded.
-    if (image_blit->operation == NV09F_SET_OPERATION_SRCCOPY) {
-        discard_overwritten_surfaces(pg, dest_addr,
-                                     context_surfaces->dest_pitch, row_bytes,
-                                     adjusted_height);
+    SurfaceBinding *surf_dest = pgraph_gl_surface_get(d, dest_addr);
+    if (surf_dest) {
+        if (adjusted_height < surf_dest->height ||
+            row_pixels < surf_dest->width) {
+            pgraph_gl_surface_download_if_dirty(d, surf_dest);
+        } else {
+            // The blit will completely replace the surface so any pending
+            // download should be discarded.
+            surf_dest->download_pending = false;
+            surf_dest->draw_dirty = false;
+        }
+        surf_dest->upload_pending = true;
+        pg->draw_time++;
     }
-    pgraph_gl_download_surfaces_in_range_if_dirty(pg, dest_addr,
-                                                  clipped_dest_size);
 
     NV2A_DPRINTF("  blit 0x%tx -> 0x%tx (Size: %llu, Clipped Height: %zu)\n",
                  source_addr, dest_addr, dest_size, adjusted_height);
@@ -246,13 +317,9 @@ void pgraph_gl_image_blit(NV2AState *d)
         }
     }
 
+    dest_addr += dest_offset;
     memory_region_set_client_dirty(d->vram, dest_addr, clipped_dest_size,
                                    DIRTY_MEMORY_VGA);
     memory_region_set_client_dirty(d->vram, dest_addr, clipped_dest_size,
                                    DIRTY_MEMORY_NV2A_TEX);
-
-    if (pgraph_gl_mark_surfaces_in_range_for_upload(d, dest_addr,
-                                                    clipped_dest_size)) {
-        ++pg->draw_time;
-    }
 }

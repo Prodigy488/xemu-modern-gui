@@ -20,8 +20,6 @@
 #include "renderer.h"
 #include <math.h>
 
-#include "hw/xbox/nv2a/debug_gl.h"
-
 static uint8_t *convert_texture_data__CR8YB8CB8YA8(uint8_t *data_out,
                                                    const uint8_t *data_in,
                                                    unsigned int width,
@@ -145,6 +143,7 @@ static void upload_pvideo_image(PGRAPHState *pg, PvideoState state)
     // Copy texture data to mapped device buffer
     uint8_t *mapped_memory_ptr;
 
+    pgraph_vk_wait_for_aux(pg);
     VK_CHECK(vmaMapMemory(r->allocator,
                           r->storage_buffers[BUFFER_STAGING_SRC].allocation,
                           (void *)&mapped_memory_ptr));
@@ -537,8 +536,6 @@ static void destroy_current_display_image(PGRAPHState *pg)
     PGRAPHVkState *r = pg->vk_renderer_state;
     PGRAPHVkDisplayState *d = &r->display;
 
-    pgraph_vk_display_invalidate(r);
-
     if (d->image == VK_NULL_HANDLE) {
         return;
     }
@@ -575,7 +572,6 @@ static void destroy_current_display_image(PGRAPHState *pg)
 
 static void create_display_image(PGRAPHState *pg, int width, int height)
 {
-    pgraph_vk_display_invalidate(pg->vk_renderer_state);
     PGRAPHVkState *r = pg->vk_renderer_state;
     PGRAPHVkDisplayState *d = &r->display;
 
@@ -687,7 +683,7 @@ static void create_display_image(PGRAPHState *pg, int width, int height)
 
     glCreateMemoryObjectsEXT(1, &d->gl_memory_obj);
     glImportMemoryWin32HandleEXT(d->gl_memory_obj, memory_requirements.size, GL_HANDLE_TYPE_OPAQUE_WIN32_EXT, d->handle);
-    ASSERT_NO_GL_ERROR();
+    assert(glGetError() == GL_NO_ERROR);
 
 #else
 
@@ -702,7 +698,7 @@ static void create_display_image(PGRAPHState *pg, int width, int height)
     glImportMemoryFdEXT(d->gl_memory_obj, memory_requirements.size,
                         GL_HANDLE_TYPE_OPAQUE_FD_EXT, d->fd);
     assert(glIsMemoryObjectEXT(d->gl_memory_obj));
-    ASSERT_NO_GL_ERROR();
+    assert(glGetError() == GL_NO_ERROR);
 
 #endif // WIN32
 
@@ -716,7 +712,7 @@ static void create_display_image(PGRAPHState *pg, int width, int height)
     glTexStorageMem2DEXT(GL_TEXTURE_2D, 1, gl_internal_format,
                          image_create_info.extent.width,
                          image_create_info.extent.height, d->gl_memory_obj, 0);
-    ASSERT_NO_GL_ERROR();
+    assert(glGetError() == GL_NO_ERROR);
 
 #endif // HAVE_EXTERNAL_MEMORY
 
@@ -907,7 +903,8 @@ static void render_display(PGRAPHState *pg, SurfaceBinding *surface)
     PGRAPHVkDisplayState *disp = &r->display;
 
     if (r->in_command_buffer &&
-        surface->draw_time >= r->command_buffer_start_time) {
+        (surface->draw_time >= r->command_buffer_start_time ||
+         pgraph_vk_surface_borrow_pending(r, surface))) {
         pgraph_vk_finish(pg, VK_FINISH_REASON_PRESENTING);
     }
 
@@ -925,10 +922,15 @@ static void render_display(PGRAPHState *pg, SurfaceBinding *surface)
     pgraph_vk_begin_debug_marker(r, cmd, RGBA_YELLOW,
         "Display Surface %08"HWADDR_PRIx, surface->vram_addr);
 
-    pgraph_vk_transition_image_layout(pg, cmd, surface->image,
-                                      surface->host_fmt.vk_format,
-                                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    /* In-place sampling: a surface sampled in place is read and left in
+     * SHADER_READ, the layout its recorded draws expect. */
+    bool sampled_in_place = surface->in_shader_read;
+    if (!sampled_in_place) {
+        pgraph_vk_transition_image_layout(
+            pg, cmd, surface->image, surface->host_fmt.vk_format,
+            pgraph_vk_surface_base_layout(surface),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
     pgraph_vk_transition_image_layout(
         pg, cmd, disp->image, VK_FORMAT_R8G8B8A8_UNORM,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -989,10 +991,12 @@ static void render_display(PGRAPHState *pg, SurfaceBinding *surface)
                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 #endif
 
-    pgraph_vk_transition_image_layout(pg, cmd, surface->image,
-                                      surface->host_fmt.vk_format,
-                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    if (!sampled_in_place) {
+        pgraph_vk_transition_image_layout(
+            pg, cmd, surface->image, surface->host_fmt.vk_format,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            pgraph_vk_surface_base_layout(surface));
+    }
 
     pgraph_vk_transition_image_layout(pg, cmd, disp->image,
                                       VK_FORMAT_R8G8B8_UNORM,
@@ -1087,6 +1091,13 @@ void pgraph_vk_render_display(PGRAPHState *pg)
         height *= 2;
     }
 
+    /* Clamp display to surface dimensions when CRTC area exceeds the
+     * framebuffer (e.g. PAL 720x576 CRTC with 640x480 render target).
+     * On real hardware the TV encoder fills the overscan with black;
+     * xemu has no TV encoder so we just match the surface size. */
+    if (width > surface->width)   width  = surface->width;
+    if (height > surface->height) height = surface->height;
+
     pgraph_apply_scaling_factor(pg, &width, &height);
 
     PGRAPHVkDisplayState *disp = &r->display;
@@ -1095,16 +1106,4 @@ void pgraph_vk_render_display(PGRAPHState *pg)
     }
 
     render_display(pg, surface);
-
-    /* Remember what this picture was made from (see pgraph_vk_get_framebuffer_surface) */
-    r->display_start = surface->vram_addr;
-    r->display_end = surface->vram_addr + surface->size;
-    r->display_render_ms = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
-    r->display_sig.pcrtc_start = d->pcrtc.start;
-    r->display_sig.line_offset = vga_display_params.line_offset;
-    r->display_sig.width = width;
-    r->display_sig.height = height;
-    r->display_sig.scale = pg->surface_scale_factor;
-    r->display_sig.interlace = d->vga.cr[NV_PRMCIO_INTERLACE_MODE];
-    qatomic_set(&r->display_clean, !r->display.pvideo.state.enabled);
 }

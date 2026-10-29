@@ -200,16 +200,48 @@ int nv2a_get_screen_off(void)
     return g_nv2a->vga.sr[VGA_SEQ_CLOCK_MODE] & VGA_SR01_SCREEN_OFF;
 }
 
+/* Modelled-GPU backlog deadline (see xemu_cost_flip_deadline). */
+int64_t xemu_gpu_free_ns;
+
+/* PCRTC VBlank driven by REALTIME wall clock at ~60Hz.
+ * Decoupled from guest CPU speed — fires regardless of TCG load. */
+static void nv2a_realtime_vblank_cb(void *opaque)
+{
+    NV2AState *d = opaque;
+
+    /* PCRTC_INTR_0 has one vblank bit: a vblank raised while the previous
+     * one is unacknowledged merges into it, as on hardware. */
+    d->pcrtc.pending_interrupts |= NV_PCRTC_INTR_0_VBLANK;
+
+    nv2a_update_irq(d);
+
+    /* Absolute deadline: a late callback must not push the next vblank back,
+     * or the guest, which counts time in vblanks, runs slow. */
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+
+    d->vblank_deadline += NV2A_VBLANK_INTERVAL_NS;
+    if (d->vblank_deadline < now) {
+        d->vblank_deadline = now + NV2A_VBLANK_INTERVAL_NS;
+    }
+    timer_mod_ns(d->vblank_timer, d->vblank_deadline);
+}
+
+/* Real hardware speed: a flip held for the modelled render deadline completes
+ * at that deadline. Nothing else wakes the pfifo thread then; it would wait
+ * for the next kick, the display's next frame. */
+static void nv2a_flip_deadline_cb(void *opaque)
+{
+    NV2AState *d = opaque;
+
+    qemu_mutex_lock(&d->pfifo.lock);
+    pfifo_kick(d);
+    qemu_mutex_unlock(&d->pfifo.lock);
+}
+
 static void nv2a_vga_gfx_update(void *opaque)
 {
     VGACommonState *vga = opaque;
     vga->hw_ops->gfx_update(vga);
-
-    NV2AState *d = container_of(vga, NV2AState, vga);
-    d->pcrtc.pending_interrupts |= NV_PCRTC_INTR_0_VBLANK;
-    d->pcrtc.raster = 0;
-
-    nv2a_update_irq(d);
 }
 
 static void nv2a_init_memory(NV2AState *d, MemoryRegion *ram)
@@ -259,6 +291,15 @@ static void nv2a_init_vga(NV2AState *d)
     d->hw_ops = *vga->hw_ops;
     d->hw_ops.gfx_update = nv2a_vga_gfx_update;
     vga->con = graphic_console_init(DEVICE(d), 0, &d->hw_ops, vga);
+
+    /* PCRTC VBlank: REALTIME wall-clock timer at ~60Hz */
+    d->vblank_timer = timer_new_ns(QEMU_CLOCK_REALTIME,
+                                    nv2a_realtime_vblank_cb, d);
+    d->vblank_deadline = qemu_clock_get_ns(QEMU_CLOCK_REALTIME) +
+                         NV2A_VBLANK_INTERVAL_NS;
+    timer_mod_ns(d->vblank_timer, d->vblank_deadline);
+    d->flip_timer = timer_new_ns(QEMU_CLOCK_REALTIME,
+                                 nv2a_flip_deadline_cb, d);
 
     /* hacky. swap out vga's vram */
     memory_region_destroy(&vga->vram);
@@ -447,7 +488,12 @@ static int nv2a_post_load(void *opaque, int version_id)
         d->pgraph.vsh_carry_fog[3] = 1.0f;
     }
     d->pgraph.vsh_carry_cache_dirty = true;
+    /* The switch registers come back with the snapshot; the subchannel they
+     * were loaded for does not. */
+    d->pgraph.ctx_switch_subchannel = -1;
     qatomic_set(&d->pgraph.flush_pending, true);
+    /* The compression flag follows the restored PFB registers. */
+    pfb_update_zcomp(d);
     nv2a_unlock_fifo(d);
     return 0;
 }

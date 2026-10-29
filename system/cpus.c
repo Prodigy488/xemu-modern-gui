@@ -2,6 +2,7 @@
  * QEMU System Emulator
  *
  * Copyright (c) 2003-2008 Fabrice Bellard
+ * Copyright (c) 2026 Réda Chérif-Touil
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -36,6 +37,7 @@
 #include "exec/cpu-common.h"
 #include "qemu/thread.h"
 #include "qemu/main-loop.h"
+#include "qemu/timer.h"
 #include "qemu/plugin.h"
 #include "system/cpus.h"
 #include "qemu/guest-random.h"
@@ -46,6 +48,7 @@
 #include "system/whpx.h"
 #include "hw/boards.h"
 #include "hw/hw.h"
+#include "ui/xemu-settings.h"
 #include "trace.h"
 
 #ifdef CONFIG_LINUX
@@ -469,7 +472,13 @@ void qemu_process_cpu_events(CPUState *cpu)
             slept = true;
             qemu_plugin_vcpu_idle_cb(cpu);
         }
-        qemu_cond_wait(cpu->halt_cond, &bql);
+        if (unlikely(xemu_tbrate_enabled())) {
+            int64_t t0 = get_clock();
+            qemu_cond_wait(cpu->halt_cond, &bql);
+            xemu_vcpu_waits.halt_ns += get_clock() - t0;
+        } else {
+            qemu_cond_wait(cpu->halt_cond, &bql);
+        }
     }
     if (slept) {
         qemu_plugin_vcpu_resume_cb(cpu);
@@ -520,6 +529,32 @@ bool qemu_cpu_is_self(CPUState *cpu)
 bool qemu_in_vcpu_thread(void)
 {
     return current_cpu && qemu_cpu_is_self(current_cpu);
+}
+
+XemuVcpuWaits xemu_vcpu_waits;
+int xemu_tbrate_state = -1;
+int64_t xemu_tbrate_flipsvc_ns, xemu_tbrate_fence_ns;
+
+void xemu_tbrate_lock_slow(QemuMutex *m)
+{
+    if (qemu_mutex_trylock(m) != 0) {
+        int64_t t0 = get_clock();
+        qemu_mutex_lock(m);
+        t0 = get_clock() - t0;
+        xemu_vcpu_waits.gpu_ns += t0;
+        xemu_vcpu_waits.gpu_waits++;
+        if (current_cpu) {
+            xemu_cpu_pace_stall_ns += t0;
+        }
+    }
+}
+
+bool xemu_tbrate_init(void)
+{
+    const char *e = getenv("XEMU_TBRATE");
+
+    xemu_tbrate_state = e && e[0] ? e[0] != '0' : xemu_debug_mode();
+    return xemu_tbrate_state;
 }
 
 QEMU_DEFINE_STATIC_CO_TLS(bool, bql_locked)
@@ -575,6 +610,20 @@ void bql_lock_impl(const char *file, int line)
     QemuMutexLockFunc bql_lock_fn = qatomic_read(&bql_mutex_lock_func);
 
     g_assert(!bql_locked());
+    if (unlikely(xemu_tbrate_enabled() || qatomic_read(&xemu_cpu_pace_on)) &&
+        current_cpu) {
+        /* XEMU_TBRATE, and Real hardware speed's stall account: only a lock
+         * someone else holds costs a wait, so that is the only case timed. */
+        if (qemu_mutex_trylock_impl(&bql, file, line) != 0) {
+            int64_t t0 = get_clock();
+            bql_lock_fn(&bql, file, line);
+            t0 = get_clock() - t0;
+            xemu_vcpu_waits.bql_ns += t0;
+            xemu_vcpu_waits.bql_waits++;
+            xemu_cpu_pace_stall_ns += t0;
+        }
+        return;
+    }
     bql_lock_fn(&bql, file, line);
 }
 

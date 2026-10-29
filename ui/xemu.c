@@ -54,6 +54,7 @@
 
 #include "hw/xbox/smbus.h" // For eject, drive tray
 #include "hw/xbox/nv2a/nv2a.h"
+#include "qemu/cpu-pace.h"
 #include "hw/xbox/nv2a/debug_gl.h"
 #include "ui/xemu-notifications.h"
 
@@ -910,6 +911,8 @@ static void gl_render_frame(struct xemu_console *scon)
      * possible lengthy blocking (for vsync).
      */
     LOCK_FOR("interface update");
+    /* Real hardware speed paces the CPU as well as the GPU's cost model. */
+    xemu_cpu_pace_sync(g_config.perf.real_hw_speed);
     xemu_hud_update();
     xemu_main_loop_unlock();
 
@@ -939,6 +942,7 @@ static void gl_render_frame(struct xemu_console *scon)
     SDL_GL_SwapWindow(scon->real_window);
 #endif
     ASSERT_NO_GL_ERROR();
+    nv2a_profile_present();
 
     qatomic_set(&rendering, false);
 
@@ -1490,6 +1494,8 @@ int main(int argc, char **argv)
             last_frame_ns = SDL_GetTicksNS();
         }
         poll_events(scon);
+        /* The real hardware speed flip deadline has no other wakeup. */
+        nv2a_fifo_kick_safety();
         gl_render_frame(scon);
     }
     qemu_sem_post(&display_shutdown_sem);

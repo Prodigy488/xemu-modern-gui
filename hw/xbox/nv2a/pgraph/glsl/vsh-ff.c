@@ -256,6 +256,13 @@ GLSL_DEFINE(eyePosition, GLSL_C(NV_IGRAPH_XF_XFCTX_EYEP))
 "#define lightSpecularColor(i) "
     "ltctxb[" stringify(NV_IGRAPH_XF_LTCTXB_L0_SPC) " + (i)*6].xyz\n"
 "\n"
+"#define lightBackAmbientColor(i) "
+    "ltctxb[" stringify(NV_IGRAPH_XF_LTCTXB_L0_BAMB) " + (i)*6].xyz\n"
+"#define lightBackDiffuseColor(i) "
+    "ltctxb[" stringify(NV_IGRAPH_XF_LTCTXB_L0_BDIF) " + (i)*6].xyz\n"
+"#define lightBackSpecularColor(i) "
+    "ltctxb[" stringify(NV_IGRAPH_XF_LTCTXB_L0_BSPC) " + (i)*6].xyz\n"
+"\n"
 "#define lightSpotFalloff(i) "
     "ltctxa[" stringify(NV_IGRAPH_XF_LTCTXA_L0_K) " + (i)*2].xyz\n"
 "#define lightSpotDirection(i) "
@@ -265,6 +272,7 @@ GLSL_DEFINE(eyePosition, GLSL_C(NV_IGRAPH_XF_XFCTX_EYEP))
     "ltc1[" stringify(NV_IGRAPH_XF_LTC1_r0) " + (i)].x\n"
 "\n"
 GLSL_DEFINE(sceneAmbientColor, GLSL_LTCTXA(NV_IGRAPH_XF_LTCTXA_FR_AMB) ".xyz")
+GLSL_DEFINE(sceneBackAmbientColor, GLSL_LTCTXA(NV_IGRAPH_XF_LTCTXA_BR_AMB) ".xyz")
 GLSL_DEFINE(materialEmissionColor, GLSL_LTCTXA(NV_IGRAPH_XF_LTCTXA_CM_COL) ".xyz")
 "\n"
 );

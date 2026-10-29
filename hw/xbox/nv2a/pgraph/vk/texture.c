@@ -594,6 +594,37 @@ static void upload_texture_image(PGRAPHState *pg, int texture_idx,
     }
 }
 
+static void log_copy_storm(PGRAPHState *pg, SurfaceBinding *surface,
+                           TextureShape *state)
+{
+    /* Diagnostic: once a second, say what is being copied when there are a
+     * lot of copies, so storms can be understood from the log. */
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    static int64_t win_start;
+    static unsigned win_total, win_feedback;
+    int64_t now_ms = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
+    win_total++;
+    if (surface == r->color_binding || surface == r->zeta_binding) {
+        win_feedback++;
+    }
+    if (now_ms - win_start >= 1000) {
+        if (win_total >= 500) {
+            fprintf(stderr,
+                    "nv2a: %u surface->texture copies in the last second "
+                    "(%u from the bound render target); last: vram 0x%llx "
+                    "%ux%u pitch %u fmt %u scale %u zeta=%d stages=0x%x\n",
+                    win_total, win_feedback,
+                    (unsigned long long)surface->vram_addr,
+                    surface->width, surface->height, surface->pitch,
+                    (unsigned)state->color_format,
+                    (unsigned)pg->surface_scale_factor, !surface->color,
+                    (unsigned)pgraph_reg_r(pg, NV_PGRAPH_SHADERPROG));
+        }
+        win_start = now_ms;
+        win_total = win_feedback = 0;
+    }
+}
+
 static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surface,
                                          TextureBinding *texture)
 {
@@ -615,33 +646,7 @@ static void copy_zeta_surface_to_texture(PGRAPHState *pg, SurfaceBinding *surfac
 
     nv2a_profile_inc_counter(NV2A_PROF_SURF_TO_TEX);
 
-    {
-        /* Diagnostic: once a second, say what is being copied when there
-         * are a lot of copies, so storms can be understood from the log. */
-        static int64_t win_start;
-        static unsigned win_total, win_feedback;
-        int64_t now_ms = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
-        win_total++;
-        if (surface == r->color_binding) {
-            win_feedback++;
-        }
-        if (now_ms - win_start >= 1000) {
-            if (win_total >= 500) {
-                fprintf(stderr,
-                        "nv2a: %u surface->texture copies in the last second "
-                        "(%u from the bound render target); last: vram 0x%llx "
-                        "%ux%u pitch %u fmt %u scale %u zeta=%d\n",
-                        win_total, win_feedback,
-                        (unsigned long long)surface->vram_addr,
-                        surface->width, surface->height, surface->pitch,
-                        (unsigned)state->color_format,
-                        (unsigned)pg->surface_scale_factor,
-                        !surface->color);
-            }
-            win_start = now_ms;
-            win_total = win_feedback = 0;
-        }
-    }
+    log_copy_storm(pg, surface, state);
 
     trace_nv2a_pgraph_surface_render_to_texture(
         surface->vram_addr, surface->width, surface->height);
@@ -1476,8 +1481,14 @@ void pgraph_vk_bind_textures(NV2AState *d)
     }
 
     for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
-        if (!pgraph_is_texture_enabled(pg, i)) {
+        /* A texture that is enabled but whose pixel-shader stage does no
+         * lookup (stage mode NONE) is never sampled.  Games leave such
+         * textures bound, and when one is a render target it triggers a
+         * full surface copy on every draw.  Bind the dummy instead. */
+        if (!pgraph_is_texture_enabled(pg, i) ||
+            ((pgraph_reg_r(pg, NV_PGRAPH_SHADERPROG) >> (i * 5)) & 0x1F) == 0) {
             r->texture_bindings[i] = &r->dummy_texture;
+            pg->texture_dirty[i] = false;
             continue;
         }
 

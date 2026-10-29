@@ -4070,6 +4070,8 @@ void qemu_init(int argc, char **argv)
      * after qemu_apply_machine_options.
      */
     configure_accelerators(argv[0]);
+    fprintf(stderr, "accel: the emulated CPU is running on %s\n",
+            current_accel_name());
     phase_advance(PHASE_ACCEL_CREATED);
 
     /*

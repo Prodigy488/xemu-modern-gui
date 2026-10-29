@@ -356,12 +356,12 @@ int qemu_poll_ns(GPollFD *fds, guint nfds, int64_t timeout)
      * for the last stretch.
      */
     #define XBOX_BUSYWAIT_THRESHOLD_NS 1250000
-    #define XBOX_SPIN_TAIL_NS 500000
+    #define XBOX_SPIN_TAIL_NS 250000
     if ((0 < timeout) && (timeout < XBOX_BUSYWAIT_THRESHOLD_NS)) {
         int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
         int64_t end = now + timeout;
 #ifdef _WIN32
-        if (timeout > 2 * XBOX_SPIN_TAIL_NS) {
+        if (timeout > XBOX_SPIN_TAIL_NS + 100000) {
             static __thread HANDLE hires_timer;
             static __thread bool hires_tried;
             if (!hires_tried) {

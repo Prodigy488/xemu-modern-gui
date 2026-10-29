@@ -201,6 +201,8 @@ int nv2a_get_screen_off(void)
     return g_nv2a->vga.sr[VGA_SEQ_CLOCK_MODE] & VGA_SR01_SCREEN_OFF;
 }
 
+int64_t xemu_vblank_interval_ns = 16666666LL;
+
 /* Modelled-GPU backlog deadline (see xemu_cost_flip_deadline). */
 int64_t xemu_gpu_free_ns;
 
@@ -325,6 +327,21 @@ static void nv2a_init_vga(NV2AState *d)
     d->hw_ops = *vga->hw_ops;
     d->hw_ops.gfx_update = nv2a_vga_gfx_update;
     vga->con = graphic_console_init(DEVICE(d), 0, &d->hw_ops, vga);
+
+    {
+        int hz = g_config.perf.vblank_hz;
+        const char *e = getenv("XEMU_VBLANK_HZ");
+        if (e && e[0]) {
+            hz = atoi(e);
+        }
+        if (hz < 50 || hz > 240) {
+            hz = 60;
+        }
+        if (hz != 60) {
+            fprintf(stderr, "nv2a: EXPERIMENT: display refresh %d Hz\n", hz);
+            xemu_vblank_interval_ns = 1000000000LL / hz;
+        }
+    }
 
     /* PCRTC VBlank: REALTIME wall-clock timer at ~60Hz */
     d->vblank_timer = timer_new_ns(QEMU_CLOCK_REALTIME,

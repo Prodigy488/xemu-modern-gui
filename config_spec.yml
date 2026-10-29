@@ -534,6 +534,14 @@ perf:
   shader_seeding:
     type: bool
     default: true
+  # EXPERIMENT. Rate of the console's display refresh, in Hz (50 to 240;
+  # XEMU_VBLANK_HZ overrides). A game that gives each frame two refreshes
+  # but needs slightly more than 33 ms drops to three (20 fps); a higher rate
+  # keeps it at two, at the price of the game running faster than real time
+  # when it counts refreshes. Applies when xemu starts.
+  vblank_hz:
+    type: integer
+    default: 60
   # Debug mode: the XEMU_TBRATE report of where the guest's time goes
   debug_mode:
     type: bool

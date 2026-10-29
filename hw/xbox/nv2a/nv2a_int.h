@@ -54,7 +54,9 @@
 #include "debug.h"
 #include "nv2a_regs.h"
 
-#define NV2A_VBLANK_INTERVAL_NS 16666666LL
+/* The console's refresh period (perf.vblank_hz, 60 Hz by default). */
+extern int64_t xemu_vblank_interval_ns;
+#define NV2A_VBLANK_INTERVAL_NS xemu_vblank_interval_ns
 
 #define NV2A_DEVICE(obj) OBJECT_CHECK(NV2AState, (obj), "nv2a")
 

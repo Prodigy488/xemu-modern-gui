@@ -384,6 +384,71 @@ static void *profiler_thread(void *opaque)
     return NULL;
 }
 
+/*
+ * Crash reporter: when the process dies on an unhandled exception, say where
+ * (as offsets into xemu.exe, resolvable against the matching unstripped
+ * build) in the log, which otherwise just stops without a word.
+ */
+static volatile LONG g_crash_reporting;
+
+static LONG WINAPI crash_filter(EXCEPTION_POINTERS *ep)
+{
+    if (InterlockedExchange(&g_crash_reporting, 1)) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    const char *base = g_image_base;
+    uint64_t rip = ep->ContextRecord->Rip;
+    uint64_t rsp = ep->ContextRecord->Rsp;
+    bool in_exe = rip >= (uint64_t)(uintptr_t)base &&
+                  rip < (uint64_t)(uintptr_t)base + g_image_size;
+
+    fprintf(stderr, "crash: exception 0x%08lx at %s+0x%llx (thread %lu)\n",
+            (unsigned long)ep->ExceptionRecord->ExceptionCode,
+            in_exe ? "xemu.exe" : "other code",
+            (unsigned long long)(in_exe ? rip - (uint64_t)(uintptr_t)base : rip),
+            (unsigned long)GetCurrentThreadId());
+    if (ep->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
+        ep->ExceptionRecord->NumberParameters >= 2) {
+        fprintf(stderr, "crash: %s address 0x%llx\n",
+                ep->ExceptionRecord->ExceptionInformation[0] == 0 ? "read of" :
+                ep->ExceptionRecord->ExceptionInformation[0] == 1 ? "write to" :
+                                                                     "execute of",
+                (unsigned long long)ep->ExceptionRecord->ExceptionInformation[1]);
+    }
+
+    uint64_t buf[256];
+    SIZE_T got = 0;
+    if (ReadProcessMemory(GetCurrentProcess(), (const void *)(uintptr_t)rsp,
+                          buf, sizeof(buf), &got) && got >= 16) {
+        int shown = 0;
+        for (size_t i = 0; i < got / 8 && shown < 24; i++) {
+            uint64_t v = buf[i];
+            if (v > (uint64_t)(uintptr_t)base + 16 &&
+                v < (uint64_t)(uintptr_t)base + g_image_size &&
+                after_call((const uint8_t *)(uintptr_t)v)) {
+                fprintf(stderr, "crash:   called from xemu.exe+0x%llx\n",
+                        (unsigned long long)(v - (uint64_t)(uintptr_t)base));
+                shown++;
+            }
+        }
+    }
+    fflush(stderr);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+void xemu_crash_reporter_install(void)
+{
+    g_image_base = (const char *)GetModuleHandleA(NULL);
+    if (g_image_base) {
+        const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)g_image_base;
+        const IMAGE_NT_HEADERS *nt =
+            (const IMAGE_NT_HEADERS *)(g_image_base + dos->e_lfanew);
+        g_image_size = nt->OptionalHeader.SizeOfImage;
+    }
+    SetUnhandledExceptionFilter(crash_filter);
+}
+
 bool xemu_profiler_start(int seconds)
 {
     if (qatomic_cmpxchg(&g_running, 0, 1) != 0) {

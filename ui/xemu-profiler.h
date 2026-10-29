@@ -20,6 +20,9 @@
 extern "C" {
 #endif
 
+/* Log where the process died when it hits an unhandled exception */
+void xemu_crash_reporter_install(void);
+
 /* Start a capture of the given length; false when one is already running */
 bool xemu_profiler_start(int seconds);
 

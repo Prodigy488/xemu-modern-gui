@@ -147,6 +147,9 @@
 #include "ui/xemu-notifications.h"
 #include "ui/xemu-net.h"
 #include "ui/xemu-input.h"
+#ifdef _WIN32
+#include "ui/xemu-profiler.h"
+#endif
 #include "hw/xbox/eeprom_generation.h"
 
 #define MAX_VIRTIO_CONSOLES 1
@@ -4070,6 +4073,9 @@ void qemu_init(int argc, char **argv)
      * after qemu_apply_machine_options.
      */
     configure_accelerators(argv[0]);
+#ifdef _WIN32
+    xemu_crash_reporter_install();
+#endif
     fprintf(stderr, "accel: the emulated CPU is running on %s\n",
             current_accel_name());
     phase_advance(PHASE_ACCEL_CREATED);

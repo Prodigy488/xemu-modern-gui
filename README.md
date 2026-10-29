@@ -87,15 +87,19 @@ mode, plus a fix that lets NFL Fever 2004 run.
 ## Download
 
 Windows builds are on the [Releases](../../releases) page. Unzip and run
-`xemu.exe`. A Linux x86_64 build is also provided for testing. It uses the same settings folder as official xemu, so existing
+`xemu.exe`. It uses the same settings folder as official xemu, so existing
 settings, EEPROM and hard disk images carry over.
+
+A Linux x86_64 AppImage (and a tarball) is also on the Releases page, for
+testing: make the AppImage executable and run it. It has had very little
+testing and needs a recent distribution (glibc 2.39 or newer).
 
 You still need your **own** MCPX boot ROM, BIOS (flash ROM) and hard disk
 image, the same as with official xemu. They are not included and must not be
 shared.
 
-Windows is the only platform with prebuilt downloads. Linux and macOS
-builds from source are untested.
+Windows is the main platform. The Linux AppImage is new in v2.3 and lightly
+tested; macOS builds from source are untested.
 
 **Updating:** from v1.4 on, **Help > Check for Updates** finds new releases
 of this fork (not official xemu) and installs them in place; it also checks

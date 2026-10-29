@@ -33,6 +33,8 @@
 #include "../xemu-notifications.h"
 
 extern "C" void nv2a_set_vblank_hz(int hz);
+extern "C" int xemu_x87_exact;
+extern "C" int xemu_x87_title_exact;
 extern "C" char xemu_vk_bench_msg[240];
 
 namespace
@@ -179,6 +181,13 @@ bool TitleOf(const std::string &path, uint32_t &id, std::string &name)
     return true;
 }
 
+// Games that need the x87 unit to keep full precision on loads (it costs
+// speed in others, so it is not the default)
+bool WantsExactX87(uint32_t id)
+{
+    return id == 0x4D53004D; // NFL Fever 2004
+}
+
 const char *OnOff(bool b)
 {
     return b ? "on" : "off";
@@ -222,6 +231,7 @@ void xemu_game_perf_startup(const char *dvd_path)
         g_cur_id = id;
         g_cur_name = name;
         g_cur_ok = true;
+        xemu_x87_title_exact = WantsExactX87(id) ? 1 : 0;
         auto it = g_profiles.find(id);
         Eff e = Resolve(it != g_profiles.end() ? &it->second : nullptr);
         SetStartup(e);
@@ -272,6 +282,13 @@ void xemu_game_perf_disc_changed(const char *path)
     Eff e = Resolve(it != g_profiles.end() ? &it->second : nullptr);
     SetLive(e);
     WriteMarker(id);
+    if (!getenv("XEMU_X87") && (WantsExactX87(id) ? 1 : 0) != xemu_x87_exact) {
+        fprintf(stderr, "game perf: %08X wants x87 %s; this run has %s\n", id,
+                WantsExactX87(id) ? "exact loads" : "the fast path",
+                xemu_x87_exact ? "exact loads" : "the fast path");
+        g_notice = "This game needs a different floating-point mode: "
+                   "restart xemu to use it";
+    }
     if (e.cpu != g_run_cpu || e.gpu != g_run_gpu) {
         fprintf(stderr, "game perf: %08X wants CPU boost %s, GPU boost %s; "
                         "this run has %s and %s\n",

@@ -7,3 +7,4 @@
 
 int xemu_cpu_boost;
 int xemu_x87_exact = 1;
+int xemu_x87_title_exact;

@@ -14,6 +14,7 @@
 #define QEMU_CPU_BOOST_H
 
 extern int xemu_cpu_boost;
-extern int xemu_x87_exact;
+extern int xemu_x87_exact;       /* the mode in use */
+extern int xemu_x87_title_exact; /* the game asks for exact loads */
 
 #endif

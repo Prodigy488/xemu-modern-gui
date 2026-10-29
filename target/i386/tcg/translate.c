@@ -4370,11 +4370,26 @@ void tcg_x86_init(void)
 #endif
     xemu_cpu_boost = g_config.perf.native_sse;
     {
+        /*
+         * Exact x87 loads cost speed in games that do a lot of single-
+         * precision math (Project Gotham Racing 2), so only games known to
+         * need them get them (NFL Fever 2004). XEMU_X87=exact or =fast
+         * overrides that for testing.
+         */
         const char *x87 = getenv("XEMU_X87");
-        xemu_x87_exact = !(x87 && !strcmp(x87, "fast"));
-        fprintf(stderr, "x87: %s\n", xemu_x87_exact
-                ? "exact loads (single-precision results are rounded after each operation)"
-                : "fast (register width follows the precision control; FLD m64 may lose bits)");
+        const char *why = "this game";
+        if (x87 && !strcmp(x87, "exact")) {
+            xemu_x87_exact = 1;
+            why = "XEMU_X87";
+        } else if (x87 && !strcmp(x87, "fast")) {
+            xemu_x87_exact = 0;
+            why = "XEMU_X87";
+        } else {
+            xemu_x87_exact = xemu_x87_title_exact;
+        }
+        fprintf(stderr, "x87: %s (%s)\n", xemu_x87_exact
+                ? "exact loads, single-precision results rounded after each operation"
+                : "fast (register width follows the precision control)", why);
     }
 }
 

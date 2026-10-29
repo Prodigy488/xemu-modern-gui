@@ -21,6 +21,7 @@
 
 #include "hw/xbox/nv2a/nv2a_int.h"
 #include "qemu/main-loop.h"
+#include "ui/xemu-settings.h"
 
 void nv2a_update_irq(NV2AState *d)
 {
@@ -208,6 +209,39 @@ int64_t xemu_gpu_free_ns;
 static void nv2a_realtime_vblank_cb(void *opaque)
 {
     NV2AState *d = opaque;
+
+    /* Pacing diagnostic, once a second in debug mode: how late the vblanks
+     * arrive and how long the guest's flips wait (a flip waits for the
+     * guest's own vblank handler, so a game that misses a vblank boundary
+     * drops from 30 to 20 fps). */
+    {
+        static uint64_t n, last_flips;
+        static int64_t late_sum, late_max, last_stall_sum;
+        int64_t late = qemu_clock_get_ns(QEMU_CLOCK_REALTIME) -
+                       d->vblank_deadline;
+        late_sum += late;
+        if (late > late_max) {
+            late_max = late;
+        }
+        if (++n >= 60) {
+            if (xemu_debug_mode()) {
+                uint64_t flips = xemu_diag_flips - last_flips;
+                int64_t stall = xemu_diag_stall_sum_ns - last_stall_sum;
+                fprintf(stderr, "nv2a: pacing: %llu flips/s, flip waits "
+                        "averaging %.1f ms (worst %.1f ms), vblank late "
+                        "%.2f ms on average (worst %.2f ms)\n",
+                        (unsigned long long)flips,
+                        flips ? stall / 1e6 / flips : 0.0,
+                        xemu_diag_stall_max_ns / 1e6, late_sum / 1e6 / n,
+                        late_max / 1e6);
+            }
+            last_flips = xemu_diag_flips;
+            last_stall_sum = xemu_diag_stall_sum_ns;
+            xemu_diag_stall_max_ns = 0;
+            late_sum = late_max = 0;
+            n = 0;
+        }
+    }
 
     /* PCRTC_INTR_0 has one vblank bit: a vblank raised while the previous
      * one is unacknowledged merges into it, as on hardware. */

@@ -1073,9 +1073,14 @@ DEF_METHOD(NV097, FLIP_STALL)
     xemu_cost_flip_deadline(d);
 
     nv2a_profile_flip_stall();
+    xemu_diag_flip_stall_begin_ns = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
     pg->waiting_for_flip = true;
 }
 
+int64_t xemu_diag_flip_stall_begin_ns;
+uint64_t xemu_diag_flips;
+int64_t xemu_diag_stall_sum_ns;
+int64_t xemu_diag_stall_max_ns;
 int64_t xemu_flip_ready_ns;
 int64_t xemu_flip_completed_ns;
 

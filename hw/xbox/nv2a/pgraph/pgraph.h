@@ -77,6 +77,14 @@ extern int64_t xemu_flip_ready_ns;
 extern int64_t xemu_flip_completed_ns;
 extern int64_t xemu_gpu_free_ns;
 
+/* Pacing diagnostic (debug mode): flips completed, the time the puller sat
+ * in flip stalls (ns, summed and worst) and when the current stall began.
+ * Printed once a second by the vblank timer (nv2a.c). */
+extern int64_t xemu_diag_flip_stall_begin_ns;
+extern uint64_t xemu_diag_flips;
+extern int64_t xemu_diag_stall_sum_ns;
+extern int64_t xemu_diag_stall_max_ns;
+
 /* GPU boost (perf.optimizations), read once: its menu toggle takes effect at
  * the next start. Off, the stock GPU runs instead of this one
  * (nv2a_stock_active). */

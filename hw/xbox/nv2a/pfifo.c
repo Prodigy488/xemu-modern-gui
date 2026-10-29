@@ -146,6 +146,13 @@ static bool pfifo_stall_for_flip(NV2AState *d)
             /* The guest resumes submitting: the modelled GPU queue starts. */
             xemu_flip_completed_ns =
                 qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+            int64_t waited = xemu_flip_completed_ns -
+                             xemu_diag_flip_stall_begin_ns;
+            xemu_diag_flips++;
+            xemu_diag_stall_sum_ns += waited;
+            if (waited > xemu_diag_stall_max_ns) {
+                xemu_diag_stall_max_ns = waited;
+            }
         }
         qemu_mutex_unlock(&d->pgraph.lock);
     }

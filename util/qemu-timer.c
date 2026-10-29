@@ -30,6 +30,7 @@
 #include "exec/icount.h"
 #include "system/replay.h"
 #include "system/cpus.h"
+#include "qemu/processor.h"
 
 #ifdef CONFIG_POSIX
 #include <pthread.h>
@@ -344,14 +345,43 @@ int qemu_poll_ns(GPollFD *fds, guint nfds, int64_t timeout)
 #else
 
 #ifdef XBOX
-    /* Timers are facilitated by this function. Busy-wait if the deadline is
+    /* Timers are facilitated by this function. Spin if the deadline is
      * near, to avoid missing deadlines due to costly sleeps.
+     *
+     * The original loop spun flat out for up to 1.25 ms every time through
+     * the main loop, which kept a whole core (and its SMT sibling) busy even
+     * when idle.  Sleep through the bulk of the interval on a high
+     * resolution timer where we can, and only spin (with a pause hint, which
+     * is much kinder to the sibling hyper-thread running the emulated CPU)
+     * for the last stretch.
      */
     #define XBOX_BUSYWAIT_THRESHOLD_NS 1250000
+    #define XBOX_SPIN_TAIL_NS 500000
     if ((0 < timeout) && (timeout < XBOX_BUSYWAIT_THRESHOLD_NS)) {
         int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
         int64_t end = now + timeout;
+#ifdef _WIN32
+        if (timeout > 2 * XBOX_SPIN_TAIL_NS) {
+            static __thread HANDLE hires_timer;
+            static __thread bool hires_tried;
+            if (!hires_tried) {
+                hires_tried = true;
+                hires_timer = CreateWaitableTimerExW(NULL, NULL,
+                                  0x2 /* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION */,
+                                  TIMER_ALL_ACCESS);
+            }
+            if (hires_timer) {
+                LARGE_INTEGER due;
+                /* relative due time, in 100 ns units, negative */
+                due.QuadPart = -((timeout - XBOX_SPIN_TAIL_NS) / 100);
+                if (SetWaitableTimer(hires_timer, &due, 0, NULL, NULL, FALSE)) {
+                    WaitForSingleObject(hires_timer, INFINITE);
+                }
+            }
+        }
+#endif
         while (now < end) {
+            cpu_relax();
             now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
         }
         timeout = 0;

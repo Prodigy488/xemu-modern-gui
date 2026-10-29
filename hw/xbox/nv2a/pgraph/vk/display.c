@@ -537,6 +537,8 @@ static void destroy_current_display_image(PGRAPHState *pg)
     PGRAPHVkState *r = pg->vk_renderer_state;
     PGRAPHVkDisplayState *d = &r->display;
 
+    pgraph_vk_display_invalidate(r);
+
     if (d->image == VK_NULL_HANDLE) {
         return;
     }
@@ -573,6 +575,7 @@ static void destroy_current_display_image(PGRAPHState *pg)
 
 static void create_display_image(PGRAPHState *pg, int width, int height)
 {
+    pgraph_vk_display_invalidate(pg->vk_renderer_state);
     PGRAPHVkState *r = pg->vk_renderer_state;
     PGRAPHVkDisplayState *d = &r->display;
 
@@ -1092,4 +1095,16 @@ void pgraph_vk_render_display(PGRAPHState *pg)
     }
 
     render_display(pg, surface);
+
+    /* Remember what this picture was made from (see pgraph_vk_get_framebuffer_surface) */
+    r->display_start = surface->vram_addr;
+    r->display_end = surface->vram_addr + surface->size;
+    r->display_render_ms = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
+    r->display_sig.pcrtc_start = d->pcrtc.start;
+    r->display_sig.line_offset = vga_display_params.line_offset;
+    r->display_sig.width = width;
+    r->display_sig.height = height;
+    r->display_sig.scale = pg->surface_scale_factor;
+    r->display_sig.interlace = d->vga.cr[NV_PRMCIO_INTERLACE_MODE];
+    qatomic_set(&r->display_clean, !r->display.pvideo.state.enabled);
 }

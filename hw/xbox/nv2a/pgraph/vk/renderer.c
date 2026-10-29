@@ -89,6 +89,7 @@ static void pgraph_vk_flush(NV2AState *d)
 {
     PGRAPHState *pg = &d->pgraph;
 
+    pgraph_vk_display_invalidate(pg->vk_renderer_state);
     pgraph_vk_finish(pg, VK_FINISH_REASON_FLUSH);
     pgraph_vk_surface_flush(d);
     pgraph_vk_mark_textures_possibly_dirty(d, 0, memory_region_size(d->vram));
@@ -173,6 +174,38 @@ static int pgraph_vk_get_framebuffer_surface(NV2AState *d)
 {
     PGRAPHState *pg = &d->pgraph;
     PGRAPHVkState *r = pg->vk_renderer_state;
+
+#if HAVE_EXTERNAL_MEMORY
+    /*
+     * The window asks for the picture on every refresh, which can be hundreds
+     * of times a second, and each time the graphics thread would draw the
+     * display again and wait for the GPU to go idle. When nothing has touched
+     * the front buffer and the display settings are the same, the picture
+     * already in the shared texture is still right. It is still redrawn every
+     * 50 ms so that anything not tracked here shows up within a few frames, and
+     * so that the surface stays marked as in use.
+     */
+    if (qatomic_read(&r->display_clean) && r->display.gl_texture_id &&
+        qemu_clock_get_ms(QEMU_CLOCK_REALTIME) - r->display_render_ms < 50) {
+        VGADisplayParams p;
+        d->vga.get_params(&d->vga, &p);
+        int w = 0, h = 0;
+        d->vga.get_resolution(&d->vga, &w, &h);
+        if (d->vga.cr[NV_PRMCIO_INTERLACE_MODE] != NV_PRMCIO_INTERLACE_MODE_DISABLED) {
+            h *= 2;
+        }
+        unsigned int uw = w, uh = h;
+        pgraph_apply_scaling_factor(pg, &uw, &uh);
+        if (r->display_sig.pcrtc_start == d->pcrtc.start &&
+            r->display_sig.line_offset == p.line_offset &&
+            r->display_sig.width == uw && r->display_sig.height == uh &&
+            r->display_sig.scale == pg->surface_scale_factor &&
+            r->display_sig.interlace == d->vga.cr[NV_PRMCIO_INTERLACE_MODE] &&
+            qatomic_read(&r->display_clean)) {
+            return r->display.gl_texture_id;
+        }
+    }
+#endif
 
     qemu_mutex_lock(&d->pfifo.lock);
 

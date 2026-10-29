@@ -36,6 +36,7 @@ void pgraph_vk_set_surface_scale_factor(NV2AState *d, unsigned int scale)
 {
     g_config.display.quality.surface_scale = scale < 1 ? 1 : scale;
 
+    pgraph_vk_display_invalidate(d->pgraph.vk_renderer_state);
     qemu_mutex_lock(&d->pfifo.lock);
     qatomic_set(&d->pfifo.halt, true);
     qemu_mutex_unlock(&d->pfifo.lock);
@@ -973,6 +974,7 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
     }
 
     nv2a_profile_inc_counter(NV2A_PROF_SURF_UPLOAD);
+    pgraph_vk_display_touch_binding(r, surface);
 
     pgraph_vk_finish(pg, VK_FINISH_REASON_SURFACE_CREATE); // FIXME: SURFACE_UP
 
@@ -1675,6 +1677,9 @@ void pgraph_vk_surface_update(NV2AState *d, bool upload, bool color_write,
 
     expire_old_surfaces(d);
     prune_invalid_surfaces(r, num_invalid_surfaces_to_keep);
+
+    /* Surfaces may have been replaced, uploaded or dropped */
+    pgraph_vk_display_touch_binding(r, r->color_binding);
 }
 
 bool pgraph_vk_is_image_format_supported(VkPhysicalDevice device,

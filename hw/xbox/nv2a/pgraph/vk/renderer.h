@@ -435,8 +435,47 @@ typedef struct PGRAPHVkState {
     uint32_t clear_parameter;
 
     PGRAPHVkDisplayState display;
+
+    /*
+     * The picture handed to the window is the same until the guest changes the
+     * front buffer. The window asks for it on every refresh, which can be
+     * hundreds of times a second, so remember what the last one was made from.
+     * Everything here is written by the graphics thread; the window thread only
+     * reads display_clean and the signature.
+     */
+    int display_clean;                  /* atomic */
+    hwaddr display_start, display_end;  /* guest memory the picture came from */
+    int64_t display_render_ms;
+    struct {
+        uint32_t pcrtc_start, line_offset, width, height, scale, interlace;
+    } display_sig;
     PGRAPHVkComputeState compute;
 } PGRAPHVkState;
+
+/* Something that may change the displayed picture happened */
+static inline void pgraph_vk_display_invalidate(PGRAPHVkState *r)
+{
+    qatomic_set(&r->display_clean, 0);
+}
+
+/* A draw, clear, blit or upload touched [addr, addr + size) of guest memory */
+static inline void pgraph_vk_display_touch(PGRAPHVkState *r, hwaddr addr,
+                                           size_t size)
+{
+    if (qatomic_read(&r->display_clean) && addr < r->display_end &&
+        addr + size > r->display_start) {
+        qatomic_set(&r->display_clean, 0);
+    }
+}
+
+static inline void pgraph_vk_display_touch_binding(PGRAPHVkState *r,
+                                                   const SurfaceBinding *s)
+{
+    if (s) {
+        pgraph_vk_display_touch(r, s->vram_addr, s->size);
+    }
+}
+
 
 // renderer.c
 void pgraph_vk_check_memory_budget(PGRAPHState *pg);

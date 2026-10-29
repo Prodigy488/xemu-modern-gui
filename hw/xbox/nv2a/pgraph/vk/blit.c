@@ -259,4 +259,6 @@ void pgraph_vk_image_blit(NV2AState *d)
                                                     clipped_dest_size)) {
         ++pg->draw_time;
     }
+    pgraph_vk_display_touch(pg->vk_renderer_state, dest_addr,
+                            clipped_dest_size);
 }

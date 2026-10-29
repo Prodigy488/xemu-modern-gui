@@ -1737,6 +1737,8 @@ void pgraph_vk_draw_end(NV2AState *d)
     PGRAPHState *pg = &d->pgraph;
     PGRAPHVkState *r = pg->vk_renderer_state;
 
+    pgraph_vk_display_touch_binding(r, r->color_binding);
+
     uint32_t control_0 = pgraph_reg_r(pg, NV_PGRAPH_CONTROL_0);
     bool mask_alpha = control_0 & NV_PGRAPH_CONTROL_0_ALPHA_WRITE_ENABLE;
     bool mask_red = control_0 & NV_PGRAPH_CONTROL_0_RED_WRITE_ENABLE;
@@ -1874,6 +1876,8 @@ void pgraph_vk_clear_surface(NV2AState *d, uint32_t parameter)
     PGRAPHVkState *r = pg->vk_renderer_state;
 
     nv2a_profile_inc_counter(NV2A_PROF_CLEAR);
+    pgraph_vk_display_touch_binding(pg->vk_renderer_state,
+                                    pg->vk_renderer_state->color_binding);
 
     bool write_color = (parameter & NV097_CLEAR_SURFACE_COLOR);
     bool write_zeta =
@@ -2251,6 +2255,8 @@ void pgraph_vk_flush_draw(NV2AState *d)
 {
     PGRAPHState *pg = &d->pgraph;
     PGRAPHVkState *r = pg->vk_renderer_state;
+
+    pgraph_vk_display_touch_binding(r, r->color_binding);
 
     if (!(r->color_binding || r->zeta_binding)) {
         NV2A_VK_DPRINTF("No binding present!!!\n");

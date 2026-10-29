@@ -393,6 +393,10 @@ static inline bool check_for_breakpoints(CPUState *cpu, vaddr pc,
  * If found, return the code pointer.  If not found, return
  * the tcg epilogue so that we return into cpu_tb_exec.
  */
+extern uint64_t tcg_stat[8];
+enum { TS_LOOP, TS_GEN, TS_CHAIN_EXIT, TS_REQ_EXIT, TS_HELPER_MISS,
+       TS_TLB_FLUSH, TS_JC_FLUSH, TS_SMC_INVAL };
+
 const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
 {
     CPUState *cpu = env_cpu(env);
@@ -416,6 +420,7 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
 
     tb = tb_lookup(cpu, s);
     if (tb == NULL) {
+        tcg_stat[TS_HELPER_MISS]++;
         return tcg_code_gen_epilogue;
     }
 
@@ -475,6 +480,7 @@ cpu_tb_exec(CPUState *cpu, TranslationBlock *itb, int *tb_exit)
     trace_exec_tb_exit(last_tb, *tb_exit);
 
     if (*tb_exit > TB_EXIT_IDX1) {
+        tcg_stat[TS_REQ_EXIT]++;
         /* We didn't start executing this TB (eg because the instruction
          * counter hit zero); we must restore the guest PC to the address
          * of the start of the TB.
@@ -961,6 +967,43 @@ static inline void cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
 #endif
 }
 
+/*
+ * Lightweight activity counters for the translator, reported in the log every
+ * few seconds so slowdowns in the emulated CPU can be attributed.  Plain
+ * increments: they only need to be roughly right.
+ */
+uint64_t tcg_stat[8];
+
+static void tcg_stat_report(void)
+{
+    static int64_t last_ms;
+    static uint64_t last[8];
+    int64_t now = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
+    if (last_ms == 0) {
+        last_ms = now;
+        return;
+    }
+    if (now - last_ms < 5000) {
+        return;
+    }
+    double secs = (now - last_ms) / 1000.0;
+    uint64_t d[8];
+    for (int i = 0; i < 8; i++) {
+        d[i] = tcg_stat[i] - last[i];
+        last[i] = tcg_stat[i];
+    }
+    fprintf(stderr,
+            "tcg: per second: %.0f trips round the main loop, %.0f new blocks "
+            "translated, %.0f unchained block exits, %.0f forced exits, "
+            "%.0f failed fast lookups, %.0f TLB flushes, %.0f jump-cache "
+            "flushes, %.0f code-page writes\n",
+            d[TS_LOOP] / secs, d[TS_GEN] / secs, d[TS_CHAIN_EXIT] / secs,
+            d[TS_REQ_EXIT] / secs, d[TS_HELPER_MISS] / secs,
+            d[TS_TLB_FLUSH] / secs, d[TS_JC_FLUSH] / secs,
+            d[TS_SMC_INVAL] / secs);
+    last_ms = now;
+}
+
 /* main execution loop */
 
 static int __attribute__((noinline))
@@ -995,11 +1038,16 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
                 break;
             }
 
+            tcg_stat[TS_LOOP]++;
+            if (unlikely((tcg_stat[TS_LOOP] & 0xFFFF) == 0)) {
+                tcg_stat_report();
+            }
             tb = tb_lookup(cpu, s);
             if (tb == NULL) {
                 CPUJumpCache *jc;
                 uint32_t h;
 
+                tcg_stat[TS_GEN]++;
                 mmap_lock();
                 tb = tb_gen_code(cpu, s);
                 mmap_unlock();
@@ -1027,6 +1075,7 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
 #endif
             /* See if we can patch the calling TB. */
             if (last_tb) {
+                tcg_stat[TS_CHAIN_EXIT]++;
                 tb_add_jump(last_tb, tb_exit, tb);
             }
 

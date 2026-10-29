@@ -1230,8 +1230,10 @@ void tb_invalidate_phys_range(CPUState *cpu, tb_page_addr_t start,
 void tb_invalidate_phys_range_fast(CPUState *cpu, ram_addr_t start,
                                    unsigned len, uintptr_t ra)
 {
+    extern uint64_t tcg_stat[8];
     PageDesc *p = page_find(start >> TARGET_PAGE_BITS);
 
+    tcg_stat[7]++;
     if (p) {
         ram_addr_t last = start + len - 1;
         struct page_collection *pages = page_collection_lock(start, last);

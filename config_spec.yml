@@ -547,6 +547,12 @@ perf:
   vk_eager_draws:
     type: integer
     default: 128
+  # Vulkan benchmark: while a game runs, tries several early-submission
+  # intervals for ten seconds each, twice, and reports the frame rate of each
+  # (XEMU_VK_BENCH=1 does the same). Applies when xemu starts.
+  vk_bench:
+    type: bool
+    default: false
   # Debug mode: the XEMU_TBRATE report of where the guest's time goes
   debug_mode:
     type: bool

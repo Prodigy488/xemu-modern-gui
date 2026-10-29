@@ -84,6 +84,11 @@ extern int64_t xemu_diag_flip_stall_begin_ns;
 extern uint64_t xemu_diag_flips;
 extern int64_t xemu_diag_stall_sum_ns;
 extern int64_t xemu_diag_stall_max_ns;
+/* Vulkan early-submission interval set while the benchmark runs; -1 = use
+ * the setting. */
+extern volatile int xemu_vk_eager_live;
+/* Text for a notification when the benchmark ends (UI thread shows it). */
+extern char xemu_vk_bench_msg[240];
 
 /* GPU boost (perf.optimizations), read once: its menu toggle takes effect at
  * the next start. Off, the stock GPU runs instead of this one

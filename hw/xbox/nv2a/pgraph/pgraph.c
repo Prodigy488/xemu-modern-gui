@@ -1081,6 +1081,8 @@ int64_t xemu_diag_flip_stall_begin_ns;
 uint64_t xemu_diag_flips;
 int64_t xemu_diag_stall_sum_ns;
 int64_t xemu_diag_stall_max_ns;
+volatile int xemu_vk_eager_live = -1;
+char xemu_vk_bench_msg[240];
 int64_t xemu_flip_ready_ns;
 int64_t xemu_flip_completed_ns;
 

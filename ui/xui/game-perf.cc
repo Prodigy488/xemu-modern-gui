@@ -33,6 +33,7 @@
 #include "../xemu-notifications.h"
 
 extern "C" void nv2a_set_vblank_hz(int hz);
+extern "C" char xemu_vk_bench_msg[240];
 
 namespace
 {
@@ -286,6 +287,10 @@ void xemu_game_perf_disc_changed(const char *path)
 
 void xemu_game_perf_tick(void)
 {
+    if (xemu_vk_bench_msg[0]) {
+        xemu_queue_notification(xemu_vk_bench_msg);
+        xemu_vk_bench_msg[0] = 0;
+    }
     if (!g_notice.empty()) {
         xemu_queue_notification(g_notice.c_str());
         g_notice.clear();

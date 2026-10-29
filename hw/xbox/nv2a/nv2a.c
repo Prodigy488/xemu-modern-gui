@@ -214,6 +214,108 @@ void nv2a_set_vblank_hz(int hz)
 /* Modelled-GPU backlog deadline (see xemu_cost_flip_deadline). */
 int64_t xemu_gpu_free_ns;
 
+
+/* Vulkan early-submission benchmark (perf.vk_bench / XEMU_VK_BENCH): once a
+ * second, with the flips completed in it. Twelve phases of 10 s (2 s to
+ * settle, 8 s measured): 0, 64, 128, 256, 512, 1024 draws between
+ * submissions, then the same in reverse so a scene that drifts hits every
+ * setting alike. Stay in one scene (a replay, or standing in the fight). */
+static void nv2a_vk_bench_second(uint64_t flips)
+{
+    static const int values[] = { 0, 64, 128, 256, 512, 1024,
+                                  1024, 512, 256, 128, 64, 0 };
+    enum { NPH = 12, SETTLE = 2, MEASURE = 8 };
+    static int state = -1; /* -1 unknown, 0 off, 1 waiting, 2 running, 3 done */
+    static int phase, sec, warm;
+    static uint64_t sum[NPH], mn[NPH];
+    static int cnt[NPH];
+
+    if (state == -1) {
+        const char *e = getenv("XEMU_VK_BENCH");
+        bool on = (e && e[0] && e[0] != '0') || g_config.perf.vk_bench;
+        state = on && g_config.display.renderer ==
+                          CONFIG_DISPLAY_RENDERER_VULKAN ? 1 : 0;
+        if (state) {
+            fprintf(stderr, "nv2a: vk bench: waiting for the game to render\n");
+        }
+    }
+    if (state == 0 || state == 3) {
+        return;
+    }
+    if (state == 1) {
+        warm = flips >= 5 ? warm + 1 : 0;
+        if (warm >= 3) {
+            state = 2;
+            phase = 0;
+            sec = 0;
+            xemu_vk_eager_live = values[0];
+            fprintf(stderr, "nv2a: vk bench: started, phase 1/%d: submit every "
+                    "%d draws\n", NPH, values[0]);
+        }
+        return;
+    }
+    if (sec >= SETTLE) {
+        sum[phase] += flips;
+        cnt[phase]++;
+        if (!cnt[phase] || flips < mn[phase] || cnt[phase] == 1) {
+            mn[phase] = flips;
+        }
+    }
+    fprintf(stderr, "nv2a: vk bench: %d draws, second %d: %llu fps%s\n",
+            values[phase], sec + 1, (unsigned long long)flips,
+            sec < SETTLE ? " (settling)" : "");
+    if (++sec >= SETTLE + MEASURE) {
+        sec = 0;
+        if (++phase >= NPH) {
+            /* Two phases per value: report each value's average and worst */
+            int best = -1;
+            double best_avg = -1;
+            char line[1024];
+            size_t len = 0;
+            line[0] = 0;
+            fprintf(stderr, "nv2a: vk bench: results (fps, average and "
+                    "slowest second, both passes)\n");
+            for (int k = 0; k < 6; k++) {
+                int v = values[k];
+                uint64_t s = 0;
+                int c = 0;
+                uint64_t m = (uint64_t)-1;
+                for (int i = 0; i < NPH; i++) {
+                    if (values[i] == v) {
+                        s += sum[i];
+                        c += cnt[i];
+                        if (mn[i] < m) {
+                            m = mn[i];
+                        }
+                    }
+                }
+                double avg = c ? (double)s / c : 0;
+                fprintf(stderr, "nv2a: vk bench:   every %4d draws: %.1f fps "
+                        "(slowest second %llu)\n", v, avg,
+                        (unsigned long long)(m == (uint64_t)-1 ? 0 : m));
+                len += snprintf(line + len, sizeof(line) - len,
+                                "%s%d:%.1f", len ? "  " : "", v, avg);
+                if (avg > best_avg + 0.25) {
+                    best_avg = avg;
+                    best = v;
+                }
+            }
+            xemu_vk_eager_live = best;
+            fprintf(stderr, "nv2a: vk bench: best is %d draws (%.1f fps); "
+                    "set vk_eager_draws = %d under [perf] in xemu.toml to "
+                    "keep it\n", best, best_avg, best);
+            snprintf(xemu_vk_bench_msg, sizeof(xemu_vk_bench_msg),
+                     "Vulkan benchmark done. Best: %d draws (%.1f fps). %s",
+                     best, best_avg, line);
+            state = 3;
+            return;
+        }
+        xemu_vk_eager_live = values[phase];
+        fprintf(stderr, "nv2a: vk bench: phase %d/%d: submit every %d draws\n",
+                phase + 1, NPH, values[phase]);
+    }
+}
+
 /* PCRTC VBlank driven by REALTIME wall clock at ~60Hz.
  * Decoupled from guest CPU speed — fires regardless of TCG load. */
 static void nv2a_realtime_vblank_cb(void *opaque)
@@ -234,6 +336,7 @@ static void nv2a_realtime_vblank_cb(void *opaque)
             late_max = late;
         }
         if (++n >= 60) {
+            nv2a_vk_bench_second(xemu_diag_flips - last_flips);
             if (xemu_debug_mode()) {
                 uint64_t flips = xemu_diag_flips - last_flips;
                 int64_t stall = xemu_diag_stall_sum_ns - last_stall_sum;

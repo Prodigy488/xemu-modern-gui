@@ -3386,7 +3386,8 @@ void pgraph_vk_draw_end(NV2AState *d)
         fprintf(stderr, "nv2a: vk early submission every %u draws%s\n",
                 eager_cfg, eager_cfg ? "" : " (off)");
     }
-    const unsigned eager_draws = eager_cfg;
+    int live = xemu_vk_eager_live;
+    const unsigned eager_draws = live >= 0 ? (unsigned)live : eager_cfg;
     if (eager_draws && r->in_command_buffer &&
         ++r->eager_draw_count >= eager_draws) {
         int next = (r->slot + 1) % PGRAPH_VK_SLOTS;

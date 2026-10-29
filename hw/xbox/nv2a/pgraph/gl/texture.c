@@ -239,7 +239,11 @@ void pgraph_gl_bind_textures(NV2AState *d)
     NV2A_GL_DGROUP_BEGIN("%s", __func__);
 
     for (i=0; i<NV2A_MAX_TEXTURES; i++) {
-        bool enabled = pgraph_is_texture_enabled(pg, i);
+        /* Enabled but never sampled (pixel-shader stage mode NONE): games
+         * leave such textures bound, and a render target among them would be
+         * copied into a texture on every draw. Treat it as off. */
+        bool enabled = pgraph_is_texture_enabled(pg, i) &&
+            ((pgraph_reg_r(pg, NV_PGRAPH_SHADERPROG) >> (i * 5)) & 0x1F) != 0;
         /* FIXME: What happens if texture is disabled but stage is active? */
 
         if (!enabled) {

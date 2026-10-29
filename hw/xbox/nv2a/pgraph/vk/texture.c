@@ -2112,7 +2112,12 @@ void pgraph_vk_bind_textures(NV2AState *d)
     }
 
     for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
-        if (!pgraph_is_texture_enabled(pg, i)) {
+        /* A texture that is enabled but whose pixel-shader stage does no
+         * lookup (stage mode NONE) is never sampled. Games leave such
+         * textures bound, and when one is a render target it triggers a
+         * full surface copy on every draw. Bind the dummy instead. */
+        if (!pgraph_is_texture_enabled(pg, i) ||
+            ((pgraph_reg_r(pg, NV_PGRAPH_SHADERPROG) >> (i * 5)) & 0x1F) == 0) {
             r->texture_bindings[i] = &r->dummy_texture;
             r->texture_unit_sampler[i] = r->dummy_texture.sampler;
             /* Cleared so a unit left off does not rerun this loop. */

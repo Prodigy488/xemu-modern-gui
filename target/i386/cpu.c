@@ -9321,8 +9321,16 @@ static void x86_cpu_realizefn(DeviceState *dev, Error **errp)
     unsigned requested_lbr_fmt;
 
 #if defined(CONFIG_TCG) && !defined(CONFIG_USER_ONLY)
-    /* Use pc-relative instructions in system-mode */
-    tcg_cflags_set(cs, CF_PCREL);
+    /*
+     * Upstream uses pc-relative translation blocks in system mode so that
+     * one block can serve several virtual aliases.  The Xbox does not need
+     * that, and it makes every block invalidation flush the entire jump
+     * cache, which hurts badly when a game writes to pages that hold
+     * translated code.  Set XEMU_TCG_PCREL=1 to bring the old behaviour back.
+     */
+    if (getenv("XEMU_TCG_PCREL")) {
+        tcg_cflags_set(cs, CF_PCREL);
+    }
 #endif
 
     /*

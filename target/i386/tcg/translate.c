@@ -3091,8 +3091,29 @@ static void gen_x87(DisasContext *s, X86DecodedInsn *decode)
                                 s->mem_index, MO_LEUW);
             gen_helper_fldcw(tcg_env, s->tmp2_i32);
             update_fip = update_fdp = false;
-            gen_update_eip_next(s);
-            gen_eob(s, DISAS_EOB_ONLY);
+            if (s->jmp_opt) {
+                /*
+                 * Only the precision-control bit is part of the translation
+                 * flags; rounding-mode changes (every float to int
+                 * conversion does two of these) need no new block, so only
+                 * leave the block when that bit actually flips.
+                 */
+                TCGLabel *same = gen_new_label();
+                TCGv_i32 pc_bit = tcg_temp_new_i32();
+                target_ulong saved_pc_save = s->pc_save;
+                /* Flush the flags state on both paths, before branching */
+                gen_update_cc_op(s);
+                tcg_gen_extract_i32(pc_bit, s->tmp2_i32, 9, 1);
+                tcg_gen_brcondi_i32(TCG_COND_EQ, pc_bit,
+                                    (s->flags & HF_FPU_PC_MASK) ? 1 : 0, same);
+                gen_update_eip_next(s);
+                tcg_gen_exit_tb(NULL, 0);
+                s->pc_save = saved_pc_save;
+                gen_set_label(same);
+            } else {
+                gen_update_eip_next(s);
+                gen_eob(s, DISAS_EOB_ONLY);
+            }
             break;
         case 0x0e: /* fnstenv mem */
             gen_helper_fstenv(tcg_env, s->A0,

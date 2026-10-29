@@ -3097,6 +3097,17 @@ void qemu_init(int argc, char **argv)
     fake_argv[fake_argc++] = strdup("-display");
     fake_argv[fake_argc++] = strdup("xemu");
 
+#if defined(_WIN32)
+    // Experimental: run guest code on the Windows Hypervisor Platform. The
+    // second -accel is the fallback if it can not start.
+    if (g_config.perf.whpx) {
+        fake_argv[fake_argc++] = strdup("-accel");
+        fake_argv[fake_argc++] = strdup("whpx");
+        fake_argv[fake_argc++] = strdup("-accel");
+        fake_argv[fake_argc++] = strdup("tcg");
+    }
+#endif
+
     // Create USB Daughterboard for 1.0 Xbox. This is connected to Port 1 of the Root hub.
     fake_argv[fake_argc++] = strdup("-device");
     fake_argv[fake_argc++] = strdup("usb-hub,port=1,ports=4");

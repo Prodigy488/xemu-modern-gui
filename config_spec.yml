@@ -516,6 +516,11 @@ perf:
   hard_fpu:
     type: bool
     default: true
+  # Run the emulated CPU on the Windows Hypervisor Platform instead of
+  # translating its code (experimental; Windows only; applies when xemu starts)
+  whpx:
+    type: bool
+    default: false
   cache_shaders:
     type: bool
     default: true

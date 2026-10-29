@@ -88,6 +88,15 @@ void MainMenuGeneralView::Draw()
            tr("Use hardware-accelerated floating point emulation (requires restart)"));
 #endif
 
+#if defined(_WIN32) && defined(__x86_64__)
+    Toggle("Hardware virtualization (experimental)", &g_config.perf.whpx,
+           "Run the emulated CPU with the Windows Hypervisor Platform instead of "
+           "translating its code. Can be much faster; some games may not work. "
+           "Needs \"Windows Hypervisor Platform\" turned on in Windows Features. "
+           "Falls back to normal emulation if it cannot start. "
+           "(requires restart)");
+#endif
+
     Toggle(tr("Cache shaders to disk"), &g_config.perf.cache_shaders,
            tr("Reduce stutter in games by caching previously generated shaders"));
 #if defined(_WIN32)

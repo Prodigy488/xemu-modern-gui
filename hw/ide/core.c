@@ -2170,6 +2170,21 @@ static bool ide_cmd_permitted(IDEState *s, uint32_t cmd)
         && (ide_cmd_table[cmd].flags & (1u << s->drive_kind));
 }
 
+/* Log each distinct ATA command a drive refuses or aborts, once. */
+static void xemu_ide_note_refused(IDEState *s, uint32_t val, const char *what)
+{
+    static uint32_t seen[2][8];
+    int unit = s->drive_kind == IDE_CD ? 1 : 0;
+
+    val &= 0xff;
+    if (seen[unit][val >> 5] & (1u << (val & 31))) {
+        return;
+    }
+    seen[unit][val >> 5] |= 1u << (val & 31);
+    fprintf(stderr, "ide: the %s %s ATA command 0x%02x\n",
+            unit ? "DVD drive" : "hard disk", what, val);
+}
+
 void ide_bus_exec_cmd(IDEBus *bus, uint32_t val)
 {
     IDEState *s;
@@ -2194,6 +2209,7 @@ void ide_bus_exec_cmd(IDEBus *bus, uint32_t val)
     }
 
     if (!ide_cmd_permitted(s, val)) {
+        xemu_ide_note_refused(s, val, "refused");
         ide_abort_command(s);
         ide_bus_set_irq(s->bus);
         return;
@@ -2205,6 +2221,9 @@ void ide_bus_exec_cmd(IDEBus *bus, uint32_t val)
 
     complete = ide_cmd_table[val].handler(s, val);
     if (complete) {
+        if (s->error & ABRT_ERR) {
+            xemu_ide_note_refused(s, val, "aborted");
+        }
         s->status &= ~BUSY_STAT;
         assert(!!s->error == !!(s->status & ERR_STAT));
 

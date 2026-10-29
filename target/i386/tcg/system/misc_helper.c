@@ -539,6 +539,21 @@ static void xemu_report_dead_halt(CPUX86State *env)
         }
         fprintf(stderr, " %08x", v);
     }
+    if (reports <= 2) {
+        /* The fault that led here left its frames further up this stack. */
+        fprintf(stderr, "\nguest: the stack above that, from %08x:",
+                (uint32_t)env->regs[R_ESP]);
+        for (int i = 0; i < 640; i++) {
+            if (cpu_memory_rw_debug(cs, (uint32_t)env->regs[R_ESP] + 4 * i,
+                                    (uint8_t *)&v, 4, false)) {
+                break;
+            }
+            if (i % 16 == 0) {
+                fprintf(stderr, "\nguest:   +%03x:", 4 * i);
+            }
+            fprintf(stderr, " %08x", v);
+        }
+    }
     fprintf(stderr, "\nguest: code before the halt:");
     for (int i = 0; i < 24; i++) {
         uint8_t b;

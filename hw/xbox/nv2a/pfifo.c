@@ -326,7 +326,19 @@ static void pfifo_run_pusher(NV2AState *d)
 
         if (dma_get_v == dma_put_v) break;
         if (dma_get_v >= dma_len) {
-            assert(!"Dma value is out of range in PFIFO pusher");
+            /*
+             * The pushbuffer pointer is past the end of its DMA object: the
+             * guest's GPU state is stale or half-written (seen right after a
+             * console reset). Real hardware raises a protection error and
+             * suspends the pusher, so do that instead of killing xemu.
+             */
+            static int reported;
+            if (reported++ < 4) {
+                fprintf(stderr, "nv2a: pushbuffer get=0x%x is past the end of "
+                        "its DMA object (length 0x%llx, put=0x%x); suspending "
+                        "the pusher\n", dma_get_v,
+                        (unsigned long long)dma_len, dma_put_v);
+            }
             SET_MASK(*dma_state, NV_PFIFO_CACHE1_DMA_STATE_ERROR,
                      NV_PFIFO_CACHE1_DMA_STATE_ERROR_PROTECTION);
             break;
@@ -481,7 +493,9 @@ static void pfifo_run_pusher(NV2AState *d)
     uint32_t error = GET_MASK(*dma_state, NV_PFIFO_CACHE1_DMA_STATE_ERROR);
     if (error) {
         NV2A_DPRINTF("pb error: %d\n", error);
-        assert(!"Error reported in PFIFO dma state - check logs for more info");
+        if (error != NV_PFIFO_CACHE1_DMA_STATE_ERROR_PROTECTION) {
+            assert(!"Error reported in PFIFO dma state - check logs for more info");
+        }
 
         SET_MASK(*dma_push, NV_PFIFO_CACHE1_DMA_PUSH_STATUS, 1); /* suspended */
 

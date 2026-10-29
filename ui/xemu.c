@@ -133,6 +133,11 @@ static uint64_t lock_start;
 #endif
 
 static __thread int64_t lock_hold_t0;
+static __thread const char *lock_label = "other";
+static int lock_logged;
+
+/* Say what the lock is taken for, so a long hold can be traced to its cause */
+#define LOCK_FOR(what) do { lock_label = (what); xemu_main_loop_lock(); } while (0)
 
 void xemu_main_loop_lock(void)
 {
@@ -146,7 +151,14 @@ void xemu_main_loop_lock(void)
 
 void xemu_main_loop_unlock(void)
 {
+    const int64_t held_us = nv2a_hitch_begin() - lock_hold_t0;
     nv2a_hitch_end_ui_lock(lock_hold_t0);
+    if (held_us > 25000 && lock_logged < 60) {
+        lock_logged++;
+        fprintf(stderr, "ui: global lock held %.0f ms for \"%s\"\n", held_us / 1000.0,
+                lock_label);
+    }
+    lock_label = "other";
 #if DEBUG_XEMU_C
     lock_held_acc += qemu_clock_get_ns(QEMU_CLOCK_REALTIME) - lock_start;
 #endif
@@ -811,7 +823,7 @@ static void *vblank_timer_thread(void *opaque)
         }
 
         if (!qatomic_read(&qemu_exiting)) {
-            xemu_main_loop_lock();
+            LOCK_FOR("vblank");
             process_vblank(scon);
             xemu_main_loop_unlock();
         }
@@ -871,7 +883,7 @@ static void gl_render_frame(struct xemu_console *scon)
     ASSERT_NO_GL_ERROR();
 
     if (tex == 0) {
-        xemu_main_loop_lock();
+        LOCK_FOR("game picture upload");
         // FIXME: Don't upload if notdirty
         xb_surface_gl_create_texture(scon->surface);
         tex = scon->surface->texture;
@@ -897,7 +909,7 @@ static void gl_render_frame(struct xemu_console *scon)
      * lock and perform rendering, but release before swap to avoid
      * possible lengthy blocking (for vsync).
      */
-    xemu_main_loop_lock();
+    LOCK_FOR("interface update");
     xemu_hud_update();
     xemu_main_loop_unlock();
 
@@ -970,7 +982,7 @@ static void poll_events(struct xemu_console *scon)
     xemu_hud_should_capture_kbd_mouse(&kbd, &mouse);
 
     while (SDL_PollEvent(ev)) {
-        xemu_main_loop_lock();
+        LOCK_FOR("input events");
 
         // HUD must process events first so that if a controller is detached,
         // a latent rebind request can cancel before the state is freed
@@ -1020,7 +1032,7 @@ static void poll_events(struct xemu_console *scon)
         xemu_main_loop_unlock();
     }
 
-    xemu_main_loop_lock();
+    LOCK_FOR("controller update");
     xemu_input_update_controllers();
     xemu_main_loop_unlock();
 }

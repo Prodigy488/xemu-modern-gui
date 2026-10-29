@@ -203,6 +203,14 @@ int nv2a_get_screen_off(void)
 
 int64_t xemu_vblank_interval_ns = 16666666LL;
 
+void nv2a_set_vblank_hz(int hz)
+{
+    if (hz < 50 || hz > 240) {
+        hz = 60;
+    }
+    xemu_vblank_interval_ns = 1000000000LL / hz;
+}
+
 /* Modelled-GPU backlog deadline (see xemu_cost_flip_deadline). */
 int64_t xemu_gpu_free_ns;
 

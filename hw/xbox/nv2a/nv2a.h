@@ -37,6 +37,8 @@ bool nv2a_gl_probe_optimizations(char *why, size_t why_len);
 /* GL 4.1 and a passing self-test, set at GL context creation (ui/xemu.c). */
 extern int xemu_gl_opt_capable;
 void nv2a_fifo_kick_safety(void);
+/* The console's display refresh, 50 to 240 Hz (60 for any other value). */
+void nv2a_set_vblank_hz(int hz);
 void nv2a_set_game_name(const char *name, const char *before);
 
 #endif

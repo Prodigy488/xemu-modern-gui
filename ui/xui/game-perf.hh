@@ -1,0 +1,35 @@
+//
+// xemu User Interface - per-game performance settings
+//
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation; either version 2 of the License, or
+// (at your option) any later version.
+//
+#pragma once
+#include <cstdint>
+#include <string>
+#include "../xemu-game-perf.h"
+
+struct GamePerfProfile {
+    int cpu = -1;   // CPU boost: -1 as the global setting, 0 off, 1 on
+    int gpu = -1;   // GPU boost
+    int seed = -1;  // shader seeding
+    int real = -1;  // real hardware speed
+    int hz = 0;     // display refresh in Hz, 0 as the global setting
+    bool safe = false; // started with the boosts off after a crash
+};
+
+// The game in the drive; false when none or its title could not be read
+bool GamePerfCurrent(uint32_t &title_id, std::string &name);
+
+// The game's profile (empty if it has none yet); call GamePerfChanged()
+// after editing it
+GamePerfProfile &GamePerfEdit();
+void GamePerfChanged();
+void GamePerfForget();
+
+// True when the profile asks for a CPU or GPU boost setting other than the
+// one this run started with (those are read once, at start-up)
+bool GamePerfRestartPending();
+void GamePerfRestart();

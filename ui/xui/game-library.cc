@@ -34,6 +34,7 @@
 #include "play-extras.hh"
 #include "achievements.hh"
 #include "game-library.hh"
+#include "../xemu-game-perf.h"
 #include "ui-prof.hh"
 #include "game-library-scan.hh"
 #include "rtx-video.hh"
@@ -10601,6 +10602,7 @@ void GameLibraryWindow::Update()
             g_dirty = true;
         }
         ApplyOverridesFor(cur);
+        xemu_game_perf_disc_changed(cur.c_str());
     }
 
     // Accumulate play time while the machine runs with a disc loaded

@@ -55,6 +55,7 @@
 #include "hw/xbox/smbus.h" // For eject, drive tray
 #include "hw/xbox/nv2a/nv2a.h"
 #include "qemu/cpu-pace.h"
+#include "xemu-game-perf.h"
 #include "hw/xbox/nv2a/debug_gl.h"
 #include "ui/xemu-notifications.h"
 
@@ -912,6 +913,7 @@ static void gl_render_frame(struct xemu_console *scon)
      */
     LOCK_FOR("interface update");
     /* Real hardware speed paces the CPU as well as the GPU's cost model. */
+    xemu_game_perf_tick();
     xemu_cpu_pace_sync(g_config.perf.real_hw_speed);
     xemu_hud_update();
     xemu_main_loop_unlock();
@@ -1471,6 +1473,18 @@ int main(int argc, char **argv)
         exit(1);
     }
     atexit(xemu_settings_save);
+
+    {
+        // The game in the drive at start-up (or on the command line) gets
+        // its own performance settings before the emulator reads them
+        const char *startup_dvd = g_config.sys.files.dvd_path;
+        for (int i = 1; i + 1 < argc; i++) {
+            if (argv[i] && argv[i + 1] && strcmp(argv[i], "-dvd_path") == 0) {
+                startup_dvd = argv[i + 1];
+            }
+        }
+        xemu_game_perf_startup(startup_dvd);
+    }
 
 #ifdef _WIN32
     if (g_config.display.setup_nvidia_profile) {

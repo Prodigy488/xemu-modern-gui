@@ -11,6 +11,7 @@ xemu_ss.add(files(
   'game-library-scan.cc',
   'game-patches.cc',
   'game-compat.cc',
+  'game-perf.cc',
   'game-store.cc',
   'xiso.cc',
   'perf-analysis.cc',

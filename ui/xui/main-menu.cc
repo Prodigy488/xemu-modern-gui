@@ -36,6 +36,7 @@
 
 #include "../xemu-input.h"
 #include "play-extras.hh"
+#include "game-perf.hh"
 #include "../xemu-notifications.h"
 #include "../xemu-settings.h"
 #include "../xemu-monitor.h"
@@ -113,6 +114,75 @@ void MainMenuGeneralView::Draw()
     Toggle(tr("Real hardware speed"), &g_config.perf.real_hw_speed,
            tr("Pace the CPU and GPU like the original console instead of running "
               "uncapped. Games that ran too fast may play at their real speed"));
+    {
+        uint32_t gp_id = 0;
+        std::string gp_name;
+        if (GamePerfCurrent(gp_id, gp_name)) {
+            SectionTitle(tr("This game"));
+            GamePerfProfile &gp = GamePerfEdit();
+            bool changed = false;
+            if (gp.safe) {
+                ImGui::PushTextWrapPos(0);
+                ImGui::TextUnformatted(
+                    tr("Safe mode: this game closed unexpectedly, so it starts "
+                       "with the boosts off and a 60 Hz display. Pick a setting "
+                       "below to try again."));
+                ImGui::PopTextWrapPos();
+                if (ImGui::Button(tr("Leave safe mode"))) {
+                    gp.safe = false;
+                    changed = true;
+                }
+            }
+            const char *tri = tr_items("Global setting\0Off\0On\0");
+            int v;
+            v = gp.cpu + 1;
+            if (ChevronCombo(tr("CPU boost (this game)"), &v, tri,
+                             tr("Applies the next time this game starts"))) {
+                gp.cpu = v - 1; changed = true;
+            }
+            v = gp.gpu + 1;
+            if (ChevronCombo(tr("GPU boost (this game)"), &v, tri,
+                             tr("Applies the next time this game starts"))) {
+                gp.gpu = v - 1; changed = true;
+            }
+            v = gp.seed + 1;
+            if (ChevronCombo(tr("Shader seeding (this game)"), &v, tri)) {
+                gp.seed = v - 1; changed = true;
+            }
+            v = gp.real + 1;
+            if (ChevronCombo(tr("Real hardware speed (this game)"), &v, tri)) {
+                gp.real = v - 1; changed = true;
+            }
+            static const int hz_values[] = { 0, 50, 60, 75, 90, 120 };
+            int hzi = 0;
+            for (int i = 0; i < 6; i++) {
+                if (hz_values[i] == gp.hz) hzi = i;
+            }
+            if (ChevronCombo(tr("Display refresh (this game)"), &hzi,
+                             tr_items("Global setting\0" "50 Hz\0" "60 Hz\0"
+                                      "75 Hz\0" "90 Hz\0" "120 Hz\0"),
+                             tr("Experimental: a different refresh rate changes "
+                                "how often the game finishes a frame"))) {
+                gp.hz = hz_values[hzi]; changed = true;
+            }
+            if (changed) {
+                GamePerfChanged();
+            }
+            if (GamePerfRestartPending()) {
+                ImGui::PushTextWrapPos(0);
+                ImGui::TextUnformatted(
+                    tr("CPU and GPU boost are read when xemu starts. Restart to "
+                       "use this game's setting."));
+                ImGui::PopTextWrapPos();
+                if (ImGui::Button(tr("Restart xemu now"))) {
+                    GamePerfRestart();
+                }
+            }
+            if (ImGui::Button(tr("Forget this game's settings"))) {
+                GamePerfForget();
+            }
+        }
+    }
 #if defined(_WIN32)
     Toggle(tr("High priority emulation"), &g_config.perf.boost_threads,
            tr("Give the emulated CPU, GPU and audio a higher priority than "

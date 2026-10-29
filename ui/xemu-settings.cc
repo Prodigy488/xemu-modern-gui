@@ -34,6 +34,7 @@
 
 #include "xemu-controllers.h"
 #include "xemu-settings.h"
+#include "xemu-game-perf.h"
 
 #define DEFINE_CONFIG_TREE
 #include "xemu-config.h"
@@ -228,11 +229,13 @@ void xemu_settings_save(void)
     // controller, so we can set it to true (default) now to remove it from the user config.
     g_config.input.allow_vibration = true;
 
+    xemu_game_perf_before_save();
     GameLibraryBeforeSettingsSave();
     config_tree.update_from_struct(&g_config);
     fprintf(fd, "%s", config_tree.generate_delta_toml().c_str());
     fclose(fd);
     GameLibraryAfterSettingsSave();
+    xemu_game_perf_after_save();
 
     if (previous_numeric_locale) {
         setlocale(LC_NUMERIC, previous_numeric_locale);

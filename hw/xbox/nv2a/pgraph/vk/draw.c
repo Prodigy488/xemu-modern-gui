@@ -3372,8 +3372,22 @@ void pgraph_vk_draw_end(NV2AState *d)
     /* The NV2A consumes its pushbuffer continuously: every 128 draws
      * [HEURISTIC], submit the recording if the next ring slot has retired
      * (never wait), also in scenes that seldom switch target (surface.c). */
-    const unsigned eager_draws = 128;
-    if (r->in_command_buffer &&
+    static unsigned eager_cfg = (unsigned)-1;
+    if (eager_cfg == (unsigned)-1) {
+        /* GPU boost off, or XEMU_VK_EAGER=0: no early submissions, for
+         * comparing against the one-submission-per-pass behaviour.
+         * XEMU_VK_EAGER=N sets the number of draws between submissions. */
+        const char *e = getenv("XEMU_VK_EAGER");
+        eager_cfg = e && e[0] ? (unsigned)atoi(e) :
+                    (unsigned)MAX(0, g_config.perf.vk_eager_draws);
+        if (!pgraph_gpu_boost()) {
+            eager_cfg = 0;
+        }
+        fprintf(stderr, "nv2a: vk early submission every %u draws%s\n",
+                eager_cfg, eager_cfg ? "" : " (off)");
+    }
+    const unsigned eager_draws = eager_cfg;
+    if (eager_draws && r->in_command_buffer &&
         ++r->eager_draw_count >= eager_draws) {
         int next = (r->slot + 1) % PGRAPH_VK_SLOTS;
         bool slot_free = !r->slot_fence_pending[next] ||

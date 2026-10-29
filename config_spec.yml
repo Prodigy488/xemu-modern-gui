@@ -542,6 +542,11 @@ perf:
   vblank_hz:
     type: integer
     default: 60
+  # Vulkan: submit the recorded work to the GPU every this many draws, without
+  # waiting (GPU boost). 0 = only when a pass ends. Applies when xemu starts.
+  vk_eager_draws:
+    type: integer
+    default: 128
   # Debug mode: the XEMU_TBRATE report of where the guest's time goes
   debug_mode:
     type: bool

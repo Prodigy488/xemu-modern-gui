@@ -86,6 +86,10 @@ void MainMenuGeneralView::Draw()
     SectionTitle(tr("Performance"));
     Toggle(tr("Hard FPU emulation"), &g_config.perf.hard_fpu,
            tr("Use hardware-accelerated floating point emulation (requires restart)"));
+    Toggle(tr("CPU boost"), &g_config.perf.native_sse,
+           tr("Run SSE math on the host CPU, skip re-translating code when a game "
+              "rewrites the same value, and look up the next block inline "
+              "(requires restart). Turn off if a game misbehaves"));
 #endif
 
 #if defined(_WIN32) && defined(__x86_64__)

@@ -516,6 +516,11 @@ perf:
   hard_fpu:
     type: bool
     default: true
+  # CPU boost: SSE math on the host's own SSE unit, unchanged stores to code
+  # pages ignored, inline lookup of the next block (applies when xemu starts)
+  native_sse:
+    type: bool
+    default: true
   # Run the emulated CPU on the Windows Hypervisor Platform instead of
   # translating its code (experimental; Windows only; applies when xemu starts)
   whpx:

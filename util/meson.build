@@ -34,6 +34,7 @@ if glib_has_gslice
   util_ss.add(files('qtree.c'))
 endif
 util_ss.add(files('defer-call.c'))
+util_ss.add(files('cpu-boost.c'))
 util_ss.add(files('envlist.c', 'path.c', 'module.c'))
 util_ss.add(files('event.c'))
 util_ss.add(files('host-utils.c'))

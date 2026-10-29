@@ -974,7 +974,71 @@ static inline void cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
  */
 uint64_t tcg_stat[8];
 
-static void tcg_stat_report(void)
+/*
+ * Where the dispatcher restarts most often after a block that ended with
+ * exit_tb(NULL) (Misra-Gries heavy hitters over every 16th restart).
+ */
+static struct { vaddr pc; uint64_t n; } tcg_hot[16];
+static unsigned tcg_hot_skip;
+
+static void tcg_hot_add(vaddr pc)
+{
+    int free_slot = -1;
+
+    if ((++tcg_hot_skip & 15) != 0) {
+        return;
+    }
+    for (int i = 0; i < 16; i++) {
+        if (tcg_hot[i].n && tcg_hot[i].pc == pc) {
+            tcg_hot[i].n++;
+            return;
+        }
+        if (!tcg_hot[i].n && free_slot < 0) {
+            free_slot = i;
+        }
+    }
+    if (free_slot >= 0) {
+        tcg_hot[free_slot].pc = pc;
+        tcg_hot[free_slot].n = 1;
+        return;
+    }
+    for (int i = 0; i < 16; i++) {
+        tcg_hot[i].n--;
+    }
+}
+
+static void tcg_hot_report(CPUState *cpu, double secs)
+{
+    for (int k = 0; k < 3; k++) {
+        int best = -1;
+        uint8_t code[32];
+
+        for (int i = 0; i < 16; i++) {
+            if (tcg_hot[i].n && (best < 0 || tcg_hot[i].n > tcg_hot[best].n)) {
+                best = i;
+            }
+        }
+        if (best < 0) {
+            break;
+        }
+        fprintf(stderr, "tcg: hot restart after a block end at %08" VADDR_PRIx
+                " (about %.1f M/s), code:", tcg_hot[best].pc,
+                tcg_hot[best].n * 16 / secs / 1e6);
+        if (cpu_memory_rw_debug(cpu, tcg_hot[best].pc, code, sizeof(code),
+                                false) == 0) {
+            for (int i = 0; i < (int)sizeof(code); i++) {
+                fprintf(stderr, " %02x", code[i]);
+            }
+        } else {
+            fprintf(stderr, " (unreadable)");
+        }
+        fprintf(stderr, "\n");
+        tcg_hot[best].n = 0;
+    }
+    memset(tcg_hot, 0, sizeof(tcg_hot));
+}
+
+static void tcg_stat_report(CPUState *cpu)
 {
     static int64_t last_ms;
     static uint64_t last[8];
@@ -1001,6 +1065,7 @@ static void tcg_stat_report(void)
             d[TS_REQ_EXIT] / secs, d[TS_HELPER_MISS] / secs,
             d[TS_TLB_FLUSH] / secs, d[TS_JC_FLUSH] / secs,
             d[TS_SMC_INVAL] / secs);
+    tcg_hot_report(cpu, secs);
     last_ms = now;
 }
 
@@ -1039,8 +1104,11 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
             }
 
             tcg_stat[TS_LOOP]++;
+            if (!last_tb && tb_exit == 0) {
+                tcg_hot_add(s.pc);
+            }
             if (unlikely((tcg_stat[TS_LOOP] & 0xFFFF) == 0)) {
-                tcg_stat_report();
+                tcg_stat_report(cpu);
             }
             tb = tb_lookup(cpu, s);
             if (tb == NULL) {

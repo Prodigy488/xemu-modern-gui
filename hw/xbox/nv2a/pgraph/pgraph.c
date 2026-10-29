@@ -194,6 +194,16 @@ static void pgraph_update_irq_bh(void *opaque)
  * only this thread performs): raise it from a main-loop bottom half. */
 static void pgraph_schedule_irq_update(NV2AState *d)
 {
+    /* A free BQL is taken without waiting and the interrupt is raised at
+     * once; a main-loop bottom half can take up to a millisecond to run, and
+     * a game that switches context 70 times a frame (UFC) loses more than a
+     * frame to that. Only when the BQL is busy is the deadlock-free bottom
+     * half used. */
+    if (xemu_bql_trylock()) {
+        nv2a_update_irq(d);
+        bql_unlock();
+        return;
+    }
     aio_bh_schedule_oneshot(qemu_get_aio_context(), pgraph_update_irq_bh, d);
 }
 

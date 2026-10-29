@@ -383,6 +383,9 @@ void bql_lock_impl(const char *file, int line);
  */
 void bql_unlock(void);
 
+/* Take the BQL if it is free, without waiting. */
+bool xemu_bql_trylock(void);
+
 /**
  * BQL_LOCK_GUARD
  *

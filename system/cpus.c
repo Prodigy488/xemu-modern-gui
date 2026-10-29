@@ -627,6 +627,13 @@ void bql_lock_impl(const char *file, int line)
     bql_lock_fn(&bql, file, line);
 }
 
+/* Take the BQL only if it is free right now (never waits). */
+bool xemu_bql_trylock(void)
+{
+    g_assert(!bql_locked());
+    return qemu_mutex_trylock_impl(&bql, __FILE__, __LINE__) == 0;
+}
+
 void bql_unlock(void)
 {
     g_assert(bql_locked());

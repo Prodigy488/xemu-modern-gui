@@ -40,6 +40,8 @@ static int g_use_hard_fpu;
 #if defined(XBOX) && defined(__x86_64__)
 #include "ui/xemu-settings.h"
 #include "qemu/cpu-boost.h"
+#include "exec/tb-flush.h"
+#include "hw/core/cpu.h"
 #define MAP_GEN_HELPER_SOFT_HARD(name) \
     (g_use_hard_fpu ? gen_helper_##name##__hard : gen_helper_##name##__soft)
 #define gen_helper_flds_FT0       MAP_GEN_HELPER_SOFT_HARD(flds_FT0)
@@ -4391,6 +4393,26 @@ void tcg_x86_init(void)
                 ? "exact loads, single-precision results rounded after each operation"
                 : "fast (register width follows the precision control)", why);
     }
+}
+
+static void xemu_x87_switch_work(CPUState *cpu, run_on_cpu_data data)
+{
+    /* Every vCPU is stopped here; blocks built the other way are dropped */
+    xemu_x87_exact = data.host_int;
+    tb_flush__exclusive_or_serial();
+    fprintf(stderr, "x87: switched to %s for this game\n",
+            xemu_x87_exact ? "exact loads" : "the fast path");
+}
+
+/* Called from the UI thread when a game with another x87 need is launched */
+void xemu_x87_set_mode(int exact)
+{
+    if (!first_cpu || exact == xemu_x87_exact) {
+        xemu_x87_exact = exact;
+        return;
+    }
+    async_safe_run_on_cpu(first_cpu, xemu_x87_switch_work,
+                          RUN_ON_CPU_HOST_INT(exact));
 }
 
 static void i386_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cpu)

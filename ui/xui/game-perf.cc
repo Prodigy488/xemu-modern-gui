@@ -35,6 +35,7 @@
 extern "C" void nv2a_set_vblank_hz(int hz);
 extern "C" int xemu_x87_exact;
 extern "C" int xemu_x87_title_exact;
+extern "C" void xemu_x87_set_mode(int exact);
 extern "C" char xemu_vk_bench_msg[240];
 
 namespace
@@ -282,12 +283,14 @@ void xemu_game_perf_disc_changed(const char *path)
     Eff e = Resolve(it != g_profiles.end() ? &it->second : nullptr);
     SetLive(e);
     WriteMarker(id);
-    if (!getenv("XEMU_X87") && (WantsExactX87(id) ? 1 : 0) != xemu_x87_exact) {
-        fprintf(stderr, "game perf: %08X wants x87 %s; this run has %s\n", id,
-                WantsExactX87(id) ? "exact loads" : "the fast path",
-                xemu_x87_exact ? "exact loads" : "the fast path");
-        g_notice = "This game needs a different floating-point mode: "
-                   "restart xemu to use it";
+    if (!getenv("XEMU_X87")) {
+        // The floating-point mode can change on the fly (blocks are rebuilt)
+        xemu_x87_title_exact = WantsExactX87(id) ? 1 : 0;
+        if (xemu_x87_title_exact != xemu_x87_exact) {
+            fprintf(stderr, "game perf: %08X wants x87 %s\n", id,
+                    xemu_x87_title_exact ? "exact loads" : "the fast path");
+            xemu_x87_set_mode(xemu_x87_title_exact);
+        }
     }
     if (e.cpu != g_run_cpu || e.gpu != g_run_gpu) {
         fprintf(stderr, "game perf: %08X wants CPU boost %s, GPU boost %s; "

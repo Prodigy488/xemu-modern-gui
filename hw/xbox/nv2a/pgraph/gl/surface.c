@@ -1937,6 +1937,9 @@ static void surface_download(NV2AState *d, SurfaceBinding *surface, bool force)
                                    DIRTY_MEMORY_NV2A_TEX);
     pgraph_writeback_clear_discard(&d->pgraph, surface->vram_addr,
                                    surface->pitch * surface->height);
+    memory_region_set_client_dirty(d->vram, surface->vram_addr,
+                                   surface->pitch * surface->height,
+                                   DIRTY_MEMORY_NV2A);
 
     surface->download_pending = false;
     surface->draw_dirty = false;

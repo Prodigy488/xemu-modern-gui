@@ -31,6 +31,7 @@ typedef struct {
     char name[64];
     uint64_t cpu_us;
     uint64_t *rip;      /* one slot per sweep; 0 when not sampled */
+    uint32_t *caller;   /* nearest return address into xemu.exe on the stack, as an offset; 0 if none */
 } Sampled;
 
 static QemuThread g_thread;
@@ -59,6 +60,46 @@ static void thread_name(HANDLE h, char *out, size_t len)
         WideCharToMultiByte(CP_UTF8, 0, w, -1, out, (int)len, NULL, NULL);
         LocalFree(w);
     }
+}
+
+static const char *g_image_base;
+static uint32_t g_image_size;
+
+/* Does the code just before addr look like the end of a call instruction? */
+static bool after_call(const uint8_t *a)
+{
+    return a[-5] == 0xE8 ||                      /* call rel32 */
+           (a[-6] == 0xFF && a[-5] == 0x15) ||   /* call [rip+disp32] */
+           (a[-2] == 0xFF && (a[-1] & 0xF8) == 0xD0) ||     /* call reg */
+           (a[-3] == 0x41 && a[-2] == 0xFF && (a[-1] & 0xF8) == 0xD0) ||
+           (a[-3] == 0xFF && (a[-2] & 0xF8) == 0x50) ||     /* call [reg+disp8] */
+           (a[-4] == 0x41 && a[-3] == 0xFF && (a[-2] & 0xF8) == 0x50) ||
+           (a[-6] == 0xFF && (a[-5] & 0xF8) == 0x90) ||     /* call [reg+disp32] */
+           (a[-2] == 0xFF && (a[-1] & 0xF8) == 0x10);       /* call [reg] */
+}
+
+/*
+ * The nearest return address into xemu.exe among the top of the stack of a
+ * suspended thread: which of our functions called into the driver, the C
+ * library or the kernel. Nothing here may allocate or take a lock.
+ */
+static uint32_t nearest_caller(uint64_t rsp)
+{
+    uint64_t buf[128];
+    SIZE_T got = 0;
+    if (!ReadProcessMemory(GetCurrentProcess(), (const void *)(uintptr_t)rsp, buf,
+                           sizeof(buf), &got) || got < 16) {
+        return 0;
+    }
+    for (size_t i = 0; i < got / 8; i++) {
+        uint64_t v = buf[i];
+        if (v > (uint64_t)(uintptr_t)g_image_base + 16 &&
+            v < (uint64_t)(uintptr_t)g_image_base + g_image_size &&
+            after_call((const uint8_t *)(uintptr_t)v)) {
+            return (uint32_t)(v - (uint64_t)(uintptr_t)g_image_base);
+        }
+    }
+    return 0;
 }
 
 /* Open every thread of this process except the caller's */
@@ -195,6 +236,51 @@ static void write_report(Sampled *t, int nt, int sweeps, uint64_t window_us)
         }
         free(flat);
         free(bins);
+
+        /* Samples outside xemu.exe (waiting, driver, C library): who called */
+        Bin *cb = calloc(cap, sizeof(Bin));
+        uint32_t ncb = 0;
+        uint64_t none = 0;
+        for (int i = 0; i < sweeps; i++) {
+            uint64_t rip = s->rip[i];
+            if (!rip || (rip >= (uint64_t)(uintptr_t)base &&
+                         rip < (uint64_t)(uintptr_t)base + g_image_size)) {
+                continue;
+            }
+            uint32_t rva = s->caller[i];
+            if (!rva) {
+                none++;
+                continue;
+            }
+            uint32_t h = (rva * 2654435761u) >> 18;
+            for (;;) {
+                h &= cap - 1;
+                if (cb[h].count == 0 || cb[h].rva == rva) {
+                    break;
+                }
+                h++;
+            }
+            if (cb[h].count == 0) {
+                ncb++;
+            }
+            cb[h].rva = rva;
+            cb[h].count++;
+        }
+        Bin *cflat = malloc(sizeof(Bin) * (ncb ? ncb : 1));
+        uint32_t cm = 0;
+        for (uint32_t i = 0; i < cap; i++) {
+            if (cb[i].count) {
+                cflat[cm++] = cb[i];
+            }
+        }
+        qsort(cflat, cm, sizeof(Bin), cmp_bin);
+        fprintf(f, " callers of samples outside xemu.exe (no caller found: %llu)\n",
+                (unsigned long long)none);
+        for (uint32_t i = 0; i < cm && i < 60; i++) {
+            fprintf(f, "  C %x %u\n", cflat[i].rva, cflat[i].count);
+        }
+        free(cflat);
+        free(cb);
     }
     fclose(f);
     fprintf(stderr, "profiler: wrote %s\n", g_result);
@@ -240,10 +326,17 @@ static void *profiler_thread(void *opaque)
     }
 
     fprintf(stderr, "profiler: sampling %d busy threads\n", np);
+    g_image_base = (const char *)GetModuleHandleA(NULL);
+    {
+        const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)g_image_base;
+        const IMAGE_NT_HEADERS *nt = (const IMAGE_NT_HEADERS *)(g_image_base + dos->e_lfanew);
+        g_image_size = nt->OptionalHeader.SizeOfImage;
+    }
     const int sweeps_max = g_seconds * 1000 / INTERVAL_MS;
     for (int i = 0; i < np; i++) {
         thread_name(pick[i].h, pick[i].name, sizeof(pick[i].name));
         pick[i].rip = calloc(sweeps_max, sizeof(uint64_t));
+        pick[i].caller = calloc(sweeps_max, sizeof(uint32_t));
     }
 
     LARGE_INTEGER freq, t0, now;
@@ -263,6 +356,10 @@ static void *profiler_thread(void *opaque)
             ctx.ContextFlags = CONTEXT_CONTROL;
             if (GetThreadContext(pick[i].h, &ctx)) {
                 pick[i].rip[sweeps] = ctx.Rip;
+                if (ctx.Rip < (uint64_t)(uintptr_t)g_image_base ||
+                    ctx.Rip >= (uint64_t)(uintptr_t)g_image_base + g_image_size) {
+                    pick[i].caller[sweeps] = nearest_caller(ctx.Rsp);
+                }
             }
             ResumeThread(pick[i].h);
         }
@@ -280,6 +377,7 @@ static void *profiler_thread(void *opaque)
     for (int i = 0; i < np; i++) {
         CloseHandle(pick[i].h);
         free(pick[i].rip);
+        free(pick[i].caller);
     }
     qatomic_set(&g_done, 1);
     qatomic_set(&g_running, 0);

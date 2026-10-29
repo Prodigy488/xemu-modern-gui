@@ -1473,7 +1473,22 @@ int main(int argc, char **argv)
     xemu_main_loop_unlock();
 
     struct xemu_console *scon = &scon_list[0];
+    uint64_t last_frame_ns = 0;
     while (!qatomic_read(&qemu_exiting)) {
+        /*
+         * With vsync off nothing slows the window down, and it was drawing
+         * thousands of frames a second (the log of a capture showed 4400),
+         * which keeps a core and the graphics driver busy for no visible
+         * gain. Limit it to a rate no display can show.
+         */
+        if (!g_config.display.window.vsync) {
+            const uint64_t min_ns = 1000000000ull / 300;
+            uint64_t now = SDL_GetTicksNS();
+            if (last_frame_ns && now - last_frame_ns < min_ns) {
+                SDL_DelayPrecise(min_ns - (now - last_frame_ns));
+            }
+            last_frame_ns = SDL_GetTicksNS();
+        }
         poll_events(scon);
         gl_render_frame(scon);
     }

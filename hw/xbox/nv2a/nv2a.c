@@ -21,6 +21,7 @@
 
 #include "hw/xbox/nv2a/nv2a_int.h"
 #include "qemu/main-loop.h"
+#include "system/runstate.h"
 #include "ui/xemu-settings.h"
 
 void nv2a_update_irq(NV2AState *d)
@@ -337,6 +338,17 @@ static void nv2a_realtime_vblank_cb(void *opaque)
         }
         if (++n >= 60) {
             nv2a_vk_bench_second(xemu_diag_flips - last_flips);
+            {
+                /* A paused or stopped machine looks like a frozen game:
+                 * say so (a few times only). */
+                static int stopped_reports;
+                if (!runstate_is_running() && stopped_reports < 4) {
+                    stopped_reports++;
+                    fprintf(stderr, "nv2a: the virtual machine is not "
+                            "running (state: %s)\n",
+                            RunState_str(runstate_get()));
+                }
+            }
             if (xemu_debug_mode()) {
                 uint64_t flips = xemu_diag_flips - last_flips;
                 int64_t stall = xemu_diag_stall_sum_ns - last_stall_sum;

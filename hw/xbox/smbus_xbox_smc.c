@@ -135,14 +135,27 @@ static int smc_write_data(SMBusDevice *dev, uint8_t *buf, uint8_t len)
 
     case SMC_REG_POWER:
         if (buf[0] & (SMC_REG_POWER_RESET | SMC_REG_POWER_CYCLE)) {
+            fprintf(stderr, "smc: the console asked for a reset (0x%02x)\n",
+                    buf[0]);
             qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
         } else if (buf[0] & SMC_REG_POWER_SHUTDOWN) {
+            fprintf(stderr, "smc: the console asked to power off (0x%02x)\n",
+                    buf[0]);
             qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
         }
         break;
 
     case SMC_REG_ERROR_WRITE:
         smc->error_reg = buf[0];
+        fprintf(stderr, "smc: error code 0x%02x written\n", buf[0]);
+        break;
+
+    case SMC_REG_LEDMODE:
+        fprintf(stderr, "smc: LED mode 0x%02x\n", buf[0]);
+        break;
+
+    case SMC_REG_LEDSEQ:
+        fprintf(stderr, "smc: LED sequence 0x%02x\n", buf[0]);
         break;
 
     case SMC_REG_SCRATCH:

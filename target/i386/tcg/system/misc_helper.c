@@ -511,11 +511,56 @@ void helper_flush_page(CPUX86State *env, target_ulong addr)
     tlb_flush_page(env_cpu(env), addr);
 }
 
+/* A guest that halts with interrupts off never wakes: say where, once per
+ * halt, for the first few (a console that dies shows a black screen). */
+static void xemu_report_dead_halt(CPUX86State *env)
+{
+    static int reports;
+    CPUState *cs = env_cpu(env);
+    uint32_t v;
+
+    if (reports++ >= 6) {
+        return;
+    }
+    fprintf(stderr, "guest: HLT with interrupts disabled at %08x (eflags "
+            "%08x, cr0 %08x, cr3 %08x, cr4 %08x); eax %08x ebx %08x ecx %08x "
+            "edx %08x esi %08x edi %08x ebp %08x esp %08x\n",
+            (uint32_t)env->eip, (uint32_t)env->eflags, (uint32_t)env->cr[0],
+            (uint32_t)env->cr[3], (uint32_t)env->cr[4],
+            (uint32_t)env->regs[R_EAX], (uint32_t)env->regs[R_EBX],
+            (uint32_t)env->regs[R_ECX], (uint32_t)env->regs[R_EDX],
+            (uint32_t)env->regs[R_ESI], (uint32_t)env->regs[R_EDI],
+            (uint32_t)env->regs[R_EBP], (uint32_t)env->regs[R_ESP]);
+    fprintf(stderr, "guest: stack at the halt:");
+    for (int i = 0; i < 24; i++) {
+        if (cpu_memory_rw_debug(cs, (uint32_t)env->regs[R_ESP] + 4 * i,
+                                (uint8_t *)&v, 4, false)) {
+            break;
+        }
+        fprintf(stderr, " %08x", v);
+    }
+    fprintf(stderr, "\nguest: code before the halt:");
+    for (int i = 0; i < 24; i++) {
+        uint8_t b;
+        if (cpu_memory_rw_debug(cs, (uint32_t)env->eip - 24 + i, &b, 1,
+                                false)) {
+            fprintf(stderr, " ??");
+            continue;
+        }
+        fprintf(stderr, " %02x", b);
+    }
+    fprintf(stderr, "\n");
+    fflush(stderr);
+}
+
 G_NORETURN void helper_hlt(CPUX86State *env)
 {
     CPUState *cs = env_cpu(env);
 
     do_end_instruction(env);
+    if (!(env->eflags & IF_MASK)) {
+        xemu_report_dead_halt(env);
+    }
     cs->halted = 1;
     cs->exception_index = EXCP_HLT;
     cpu_loop_exit(cs);

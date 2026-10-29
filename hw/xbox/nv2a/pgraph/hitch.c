@@ -13,6 +13,7 @@
  * (at your option) any later version.
  */
 #include "qemu/osdep.h"
+#include "system/cpus.h"
 #include "qemu/atomic.h"
 #include "qemu/timer.h"
 #include "hitch.h"
@@ -100,6 +101,13 @@ void nv2a_hitch_disc_end(void)
         const int64_t d = qemu_clock_get_us(QEMU_CLOCK_REALTIME) - t0;
         if (d > 0) {
             qatomic_add(&g_disc_us, d);
+            if (xemu_tbrate_enabled()) {
+                xemu_vcpu_waits.ide_host_n++;
+                xemu_vcpu_waits.ide_host_us += d;
+                if (d > xemu_vcpu_waits.ide_host_max_us) {
+                    xemu_vcpu_waits.ide_host_max_us = d;
+                }
+            }
         }
     }
 }

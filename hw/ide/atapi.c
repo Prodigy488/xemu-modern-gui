@@ -31,6 +31,7 @@
 #include "scsi/constants.h"
 #include "ide-internal.h"
 #include "trace.h"
+#include "system/cpus.h"
 
 #define ATAPI_SECTOR_BITS (2 + BDRV_SECTOR_BITS)
 #define ATAPI_SECTOR_SIZE (1 << ATAPI_SECTOR_BITS)
@@ -190,6 +191,11 @@ void ide_atapi_cmd_ok(IDEState *s)
 void ide_atapi_cmd_error(IDEState *s, int sense_key, int asc)
 {
     trace_ide_atapi_cmd_error(s, sense_key, asc);
+    if (xemu_tbrate_enabled()) {
+        xemu_vcpu_waits.ide_errors++;
+        xemu_vcpu_waits.ide_err_sense = sense_key;
+        xemu_vcpu_waits.ide_err_asc = asc;
+    }
     s->error = sense_key << 4;
     s->status = READY_STAT | ERR_STAT;
     s->nsector = (s->nsector & ~7) | ATAPI_INT_REASON_IO | ATAPI_INT_REASON_CD;
@@ -451,6 +457,9 @@ static void ide_atapi_cmd_read(IDEState *s, int lba, int nb_sectors,
 {
     trace_ide_atapi_cmd_read(s, s->atapi_dma ? "dma" : "pio",
                              lba, nb_sectors);
+    if (xemu_tbrate_enabled()) {
+        xemu_tbrate_ide_read(lba, nb_sectors);
+    }
     if (s->atapi_dma) {
         ide_atapi_cmd_read_dma(s, lba, nb_sectors, sector_size);
     } else {

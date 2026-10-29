@@ -207,6 +207,10 @@ bool x86_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
         intno = cpu_get_pic_interrupt(env);
         if (unlikely(xemu_tbrate_enabled())) {
             xemu_vcpu_waits.irqs[intno & 0xff]++;
+            if ((intno & 0xff) == 0x30) {
+                xemu_tbrate_sample_eip(env->eip, env->regs[R_ESP],
+                                       env->regs[R_EBP]);
+            }
         }
         qemu_log_mask(CPU_LOG_INT,
                       "Servicing hardware INT=0x%02x\n", intno);

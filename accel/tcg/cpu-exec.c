@@ -159,6 +159,86 @@ static void xemu_tbrate_report_irqs(double s)
     fprintf(stderr, " (vCPU thread %d)\n", qemu_get_thread_id());
 }
 
+/* XEMU_TBRATE: where the guest was at each timer interrupt, with the
+ * stack at the busiest spots, and what the DVD drive was asked. */
+static bool xemu_tbrate_rd32(uint32_t addr, uint32_t *v)
+{
+    return first_cpu &&
+           cpu_memory_rw_debug(first_cpu, addr, (uint8_t *)v, 4, false) == 0;
+}
+
+static void xemu_tbrate_report_guest(double s)
+{
+    XemuVcpuWaits *w = &xemu_vcpu_waits;
+
+    fprintf(stderr, "TBRATE: where the guest was at %u timer interrupts:",
+            w->eip_samples);
+    for (int k = 0; k < 6; k++) {
+        int best = -1;
+        for (int i = 0; i < (int)ARRAY_SIZE(w->eips); i++) {
+            if (w->eips[i].n && (best < 0 || w->eips[i].n > w->eips[best].n)) {
+                best = i;
+            }
+        }
+        if (best < 0) {
+            break;
+        }
+        fprintf(stderr, " %08x (%.0f%%)", w->eips[best].eip,
+                100.0 * w->eips[best].n / MAX(w->eip_samples, 1));
+        if (k < 3) {
+            uint32_t ebp = w->eips[best].ebp, esp = w->eips[best].esp, v;
+            fprintf(stderr, " [stack");
+            for (int j = 0; j < 6 && xemu_tbrate_rd32(esp + 4 * j, &v); j++) {
+                fprintf(stderr, " %08x", v);
+            }
+            fprintf(stderr, "; frames");
+            for (int j = 0; j < 4 && ebp > 0x1000 && ebp < 0xfffffff0; j++) {
+                uint32_t ret, next;
+                if (!xemu_tbrate_rd32(ebp + 4, &ret) ||
+                    !xemu_tbrate_rd32(ebp, &next)) {
+                    break;
+                }
+                fprintf(stderr, " %08x", ret);
+                if (next <= ebp) {
+                    break;
+                }
+                ebp = next;
+            }
+            fprintf(stderr, "]");
+        }
+        w->eips[best].n = 0;
+    }
+    fprintf(stderr, "\n");
+    fprintf(stderr, "TBRATE: DVD drive, per second: %u reads (%u sectors), "
+            "start sectors %d..%d, %u failed commands",
+            w->ide_reads, w->ide_sectors, w->ide_lba_min, w->ide_lba_max,
+            w->ide_errors);
+    if (w->ide_errors) {
+        fprintf(stderr, " (last: sense key %u, code %02x)",
+                w->ide_err_sense, w->ide_err_asc);
+    }
+    fprintf(stderr, "; the host read the image %u times, %.1f ms on average, "
+            "%.1f ms slowest", w->ide_host_n,
+            w->ide_host_n ? w->ide_host_us / 1e3 / w->ide_host_n : 0.0,
+            w->ide_host_max_us / 1e3);
+    fprintf(stderr, "; busiest start sectors:");
+    for (int k = 0; k < 4; k++) {
+        int best = -1;
+        for (int i = 0; i < (int)ARRAY_SIZE(w->ide_lba); i++) {
+            if (w->ide_lba[i].n &&
+                (best < 0 || w->ide_lba[i].n > w->ide_lba[best].n)) {
+                best = i;
+            }
+        }
+        if (best < 0) {
+            break;
+        }
+        fprintf(stderr, " %d x%u", w->ide_lba[best].lba, w->ide_lba[best].n);
+        w->ide_lba[best].n = 0;
+    }
+    fprintf(stderr, "\n");
+}
+
 static void xemu_tbrate_reset_exits(void)
 {
     XemuTbRate *r = &xemu_tbrate;
@@ -611,6 +691,7 @@ static void __attribute__((noinline)) xemu_tbrate_tick(void)
                         qatomic_xchg(&xemu_tbrate_fence_ns, 0) / s / 1e6);
                 xemu_tbrate_report_exits(s);
                 xemu_tbrate_report_irqs(s);
+                xemu_tbrate_report_guest(s);
                 fflush(stderr);
             }
             start = now;

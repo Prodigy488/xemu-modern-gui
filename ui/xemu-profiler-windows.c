@@ -98,11 +98,21 @@ static int cmp_bin(const void *a, const void *b)
 
 static void write_report(Sampled *t, int nt, int sweeps, uint64_t window_us)
 {
-    snprintf(g_result, sizeof(g_result), "%s/profile.txt", xemu_settings_get_base_path());
+    snprintf(g_result, sizeof(g_result), "%sprofile.txt", xemu_settings_get_base_path());
     FILE *f = fopen(g_result, "w");
     if (!f) {
-        g_result[0] = 0;
-        return;
+        fprintf(stderr, "profiler: could not create %s (error %d)\n", g_result, errno);
+        char tmp[MAX_PATH];
+        DWORD n = GetTempPathA(sizeof(tmp), tmp);
+        if (n > 0 && n < sizeof(tmp)) {
+            snprintf(g_result, sizeof(g_result), "%sxemu-profile.txt", tmp);
+            f = fopen(g_result, "w");
+        }
+        if (!f) {
+            fprintf(stderr, "profiler: could not create %s either (error %d)\n", g_result, errno);
+            snprintf(g_result, sizeof(g_result), "FAILED: could not create profile.txt");
+            return;
+        }
     }
     const char *base = (const char *)GetModuleHandleA(NULL);
     fprintf(f, "xemu profile: %d sweeps of %d ms over %.1f s; image base %p\n",
@@ -187,6 +197,7 @@ static void write_report(Sampled *t, int nt, int sweeps, uint64_t window_us)
         free(bins);
     }
     fclose(f);
+    fprintf(stderr, "profiler: wrote %s\n", g_result);
 }
 
 static void *profiler_thread(void *opaque)
@@ -195,6 +206,7 @@ static void *profiler_thread(void *opaque)
     Sampled all[256];
     memset(all, 0, sizeof(all));
     int n = open_threads(all, 256);
+    fprintf(stderr, "profiler: started, %d threads, %d s\n", n, g_seconds);
     for (int i = 0; i < n; i++) {
         all[i].cpu_us = thread_cpu_us(all[i].h);
     }
@@ -227,6 +239,7 @@ static void *profiler_thread(void *opaque)
         }
     }
 
+    fprintf(stderr, "profiler: sampling %d busy threads\n", np);
     const int sweeps_max = g_seconds * 1000 / INTERVAL_MS;
     for (int i = 0; i < np; i++) {
         thread_name(pick[i].h, pick[i].name, sizeof(pick[i].name));
@@ -262,6 +275,7 @@ static void *profiler_thread(void *opaque)
     for (int i = 0; i < np; i++) {
         pick[i].cpu_us = thread_cpu_us(pick[i].h);
     }
+    fprintf(stderr, "profiler: %d sweeps done, writing the report\n", sweeps);
     write_report(pick, np, sweeps, window_us);
     for (int i = 0; i < np; i++) {
         CloseHandle(pick[i].h);
@@ -277,6 +291,7 @@ bool xemu_profiler_start(int seconds)
     if (qatomic_cmpxchg(&g_running, 0, 1) != 0) {
         return false;
     }
+    fprintf(stderr, "profiler: requested\n");
     g_seconds = seconds < 5 ? 5 : (seconds > 120 ? 120 : seconds);
     qemu_thread_create(&g_thread, "xemu.profiler", profiler_thread, NULL,
                        QEMU_THREAD_DETACHED);

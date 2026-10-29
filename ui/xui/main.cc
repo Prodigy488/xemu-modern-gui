@@ -60,6 +60,7 @@
 #include "osk.hh"
 #include "play-extras.hh"
 #include "compat.hh"
+#include "game-shortcut.hh"
 #include "xbox-drive-explorer.hh"
 #include "perf-capture.hh"
 #include "dynamic-res.hh"
@@ -216,7 +217,12 @@ void xemu_hud_update(void)
         char path[512];
         if (xemu_profiler_take_result(path, sizeof(path))) {
             char msg[600];
-            snprintf(msg, sizeof(msg), "Profile written to %s", path);
+            if (strncmp(path, "FAILED", 6) == 0) {
+                snprintf(msg, sizeof(msg), "Profile %s. See xemu.log", path);
+            } else {
+                snprintf(msg, sizeof(msg), "Profile written to %s", path);
+                RevealFileInFolder(path);
+            }
             xemu_queue_notification(msg);
         }
     }

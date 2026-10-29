@@ -1438,6 +1438,18 @@ static void apply_uniform_updates(PGRAPHGLState *r, const UniformInfo *info,
         cs = uniform_cache_slot(&r->uni_cache, prog);
     }
 
+    /* glGetError makes the driver drain its queue, twice per draw here: the
+     * check runs in debug mode only. */
+    static int check = -1;
+    if (check < 0) {
+        check = xemu_debug_mode() ? 1 : 0;
+    }
+    if (!check) {
+        uniform_cache_apply(&r->uni_cache, cs, r->vsh_uni_src.gen, info, locs,
+                            values, count, sections, gl_upload_uniform, &prog);
+        return;
+    }
+
     /* Only judge this function's own calls. */
     (void)glGetError();
     uniform_cache_apply(&r->uni_cache, cs, r->vsh_uni_src.gen, info, locs,

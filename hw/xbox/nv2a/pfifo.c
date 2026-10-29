@@ -446,6 +446,17 @@ static void pfifo_run_pusher(NV2AState *d)
                 SET_MASK(*dma_state, NV_PFIFO_CACHE1_DMA_STATE_ERROR,
                          NV_PFIFO_CACHE1_DMA_STATE_ERROR_RESERVED_CMD);
                 // break;
+                fprintf(stderr, "nv2a: reserved pushbuffer command 0x%08x at "
+                        "get=0x%x put=0x%x (buffer length 0x%llx); the words "
+                        "around it:", word, dma_get_v, dma_put_v,
+                        (unsigned long long)dma_len);
+                for (int64_t o = -8; o <= 8; o++) {
+                    int64_t at = (int64_t)dma_get_v + o * 4;
+                    if (at >= 0 && at + 4 <= (int64_t)dma_len) {
+                        fprintf(stderr, " %08x", ldl_le_p(dma + at));
+                    }
+                }
+                fprintf(stderr, "\n");
                 assert(!"Reserved pb command - invalid GPU command. Check logs for more info");
             }
         }

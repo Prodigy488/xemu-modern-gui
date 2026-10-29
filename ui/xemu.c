@@ -1071,8 +1071,10 @@ static void display_very_early_init(DisplayOptions *o)
     SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
+    /* GPU boost asks for 4.1 first (separable shaders); creation falls back
+     * to the stock 4.0 below if the driver refuses. */
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
     SDL_GL_SetAttribute(
         SDL_GL_CONTEXT_PROFILE_MASK,
         SDL_GL_CONTEXT_PROFILE_CORE);
@@ -1140,6 +1142,16 @@ static void display_very_early_init(DisplayOptions *o)
 
     m_context = SDL_GL_CreateContext(m_window);
 
+    if (m_context == NULL || epoxy_gl_version() < 41) {
+        /* No 4.1: fall back to the stock 4.0 context. */
+        if (m_context != NULL) {
+            SDL_GL_MakeCurrent(NULL, NULL);
+            SDL_GL_DestroyContext(m_context);
+        }
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+        m_context = SDL_GL_CreateContext(m_window);
+    }
+
     if (m_context != NULL && epoxy_gl_version() < 40) {
         SDL_GL_MakeCurrent(NULL, NULL);
         SDL_GL_DestroyContext(m_context);
@@ -1177,6 +1189,21 @@ static void display_very_early_init(DisplayOptions *o)
     fprintf(stderr, "GL_RENDERER: %s\n", glGetString(GL_RENDERER));
     fprintf(stderr, "GL_VERSION: %s\n", glGetString(GL_VERSION));
     fprintf(stderr, "GL_SHADING_LANGUAGE_VERSION: %s\n", glGetString(GL_SHADING_LANGUAGE_VERSION));
+
+    {
+        /* The GL shader optimizations of GPU boost (pgraph_gpu_boost_gl)
+         * need GL 4.1 and a driver that passes the self-test
+         * (nv2a_gl_probe_optimizations); the rest of GPU boost runs anyway. */
+        char why[96] = "GL 4.1 unavailable";
+        xemu_gl_opt_capable = epoxy_gl_version() >= 41 &&
+                              nv2a_gl_probe_optimizations(why, sizeof(why));
+        if (!xemu_gl_opt_capable) {
+            fprintf(stderr, "nv2a: GL driver self-test failed (%s):"
+                            " the GL shader optimizations are off\n", why);
+        } else {
+            fprintf(stderr, "nv2a: GL shader optimizations on\n");
+        }
+    }
 
     // Initialize offscreen rendering context now
     nv2a_context_init();

@@ -30,8 +30,10 @@ the interface: a dashboard in 11 languages that works fully with a controller,
 one-click 60 FPS patches, upscaling and CRT filters, a homebrew tab and store,
 save backups, tools for finding out why a game is slow, a guided Insignia
 setup, per-game keyboard and mouse setups and an experimental achievements
-tab (v2.1), and, new in v2.2, four more dashboard styles, achievements that
-can unlock from the game's memory, and stick drift tools.
+tab (v2.1), four more dashboard styles, achievements that can unlock from the
+game's memory and stick drift tools (v2.2), and, new in v2.3, performance
+settings: CPU boost, GPU boost and per-game settings with an automatic safe
+mode, plus a fix that lets NFL Fever 2004 run.
 
 ## Highlights
 
@@ -55,6 +57,8 @@ can unlock from the game's memory, and stick drift tools.
   off yourself (v2.1) or that unlock from the game's memory (v2.2).
 - **Stick drift test, a dead zone for each stick, pause when the window loses
   focus and a bug-report diagnostics button** (v2.2).
+- **CPU boost and GPU boost, per-game settings and safe mode** (v2.3), and a
+  floating-point fix that lets NFL Fever 2004 run.
 
 ![Home tab, Neon theme](docs/screenshots/home.jpg)
 
@@ -83,7 +87,7 @@ can unlock from the game's memory, and stick drift tools.
 ## Download
 
 Windows builds are on the [Releases](../../releases) page. Unzip and run
-`xemu.exe`. It uses the same settings folder as official xemu, so existing
+`xemu.exe`. A Linux x86_64 build is also provided for testing. It uses the same settings folder as official xemu, so existing
 settings, EEPROM and hard disk images carry over.
 
 You still need your **own** MCPX boot ROM, BIOS (flash ROM) and hard disk
@@ -331,6 +335,35 @@ see the [Releases](../../releases) page.
 - **Prefer the fastest CPU cores (optional):** on CPUs with performance and
   efficiency cores, keeps the emulated CPU, GPU and audio on the fast cores
   (Settings > General > Performance, restart needed). Off by default.
+- **CPU boost and GPU boost (v2.3):** two settings in Settings > General >
+  Performance. CPU boost runs the game's SSE math on your PC's own processor
+  and trims work in the CPU emulation; GPU boost turns on faster paths in the
+  graphics code (such as skipping textures a shader never reads). Their ideas
+  and some of their code come from Tovarichtch's xemu fork
+  (<https://github.com/Tovarichtch/xemu>, branch `perf-experimental`). Both
+  can be off if a game misbehaves.
+- **Per-game settings and safe mode (v2.3):** each game can have its own CPU
+  boost, GPU boost and shader seeding, applied the next time it starts
+  (Settings > General > Performance > This game). If xemu closes
+  unexpectedly while a boost was on, that game starts in safe mode next time
+  with the boosts off, and tells you.
+- **Fewer game freezes and a hitch monitor (v2.3):** graphics interrupts
+  reach the game right away (this fixed UFC: Tapout 2 stopping), and a
+  hitch monitor says in `xemu.log` whether a late frame came from shaders,
+  disc reads, code translation or the interface.
+- **NFL Fever 2004 runs (v2.3):** the emulated floating-point unit now keeps
+  full precision when a game loads a number while set to single precision,
+  from the xemu project's pull request #2951 (by Korze Warrior). That mode is
+  only used for games that need it, because it slows others down, so the
+  game gets it automatically and every other game keeps the faster path.
+- **Hardware virtualization (experimental, Windows):** runs the emulated CPU
+  on the Windows Hypervisor Platform. Off by default; some games may not
+  work with it.
+- **Debug mode:** start xemu with the environment variable `XEMU_DEBUG_MODE=1`
+  to get detailed timing and crash reports in `xemu.log`. For bug reports.
+- **Upstream xemu fixes merged (v2.3):** R6G5B5 textures, NV2A memory marked
+  dirty on blits and surface downloads, rgba swizzles in generated shaders
+  and VulkanMemoryAllocator 3.5.0.
 - **Under the hood:** higher-priority emulation threads, a larger CPU code
   cache, Windows power throttling turned off, and fixes for some Vulkan and
   audio crashes. These are the only changes to emulation.

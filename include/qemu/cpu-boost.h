@@ -14,5 +14,6 @@
 #define QEMU_CPU_BOOST_H
 
 extern int xemu_cpu_boost;
+extern int xemu_x87_exact;
 
 #endif

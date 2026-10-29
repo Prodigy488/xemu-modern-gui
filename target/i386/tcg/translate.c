@@ -1645,6 +1645,22 @@ static bool fpu_rounding_to_single(DisasContext *s)
     return !(s->flags & HF_FPU_PC_MASK);
 }
 
+/*
+ * The x87 precision-control field used to pick the hard-float register width
+ * (single when PC=single). That is fast but truncates FLD m64 before any
+ * arithmetic. The default now keeps double registers and rounds results (see
+ * below); XEMU_X87=fast brings the old, cheaper behaviour back.
+ */
+static bool fpu_using_double_precision(DisasContext *s)
+{
+    return s->flags & HF_FPU_PC_MASK;
+}
+
+static void gen_movi_f32(DisasContext *s, TCGv_f32 ret, float arg)
+{
+    tcg_gen_mov32i_f32(ret, tcg_constant_i32(*(uint32_t *)&arg));
+}
+
 static void gen_movi_f64(DisasContext *s, TCGv_f64 ret, double arg)
 {
     tcg_gen_mov64i_f64(ret, tcg_constant_i64(*(uint64_t *)&arg));
@@ -1668,6 +1684,30 @@ static void gen_flcr(DisasContext *s)
     }
     tcg_gen_flcr(v);
     s->flcr_set = true;
+}
+
+static void gen_mov32f_i64(TCGv_i64 ret, TCGv_f32 arg)
+{
+    TCGv_f64 t = tcg_temp_new_f64();
+    tcg_gen_cvt32f_f64(t, arg);
+    tcg_gen_mov64f_i64(ret, t);
+}
+
+static void gen_mov32f_i32(TCGv_i32 ret, TCGv_f32 arg)
+{
+    tcg_gen_mov32f_i32(ret, arg);
+}
+
+static void gen_mov32i_f32(TCGv_f32 ret, TCGv_i32 arg)
+{
+    tcg_gen_mov32i_f32(ret, arg);
+}
+
+static void gen_mov64i_f32(TCGv_f32 ret, TCGv_i64 arg)
+{
+    TCGv_f64 t = tcg_temp_new_f64();
+    tcg_gen_mov64i_f64(t, arg);
+    tcg_gen_cvt64f_f32(ret, t);
 }
 
 static void gen_mov32i_f64(TCGv_f64 ret, TCGv_i32 arg)
@@ -1694,6 +1734,10 @@ static void gen_mov64i_f64(TCGv_f64 ret, TCGv_i64 arg)
     tcg_gen_mov64i_f64(ret, arg);
 }
 
+#define PREC 32
+#include "ops_fpu.h"
+#undef PREC
+
 #define PREC 64
 #include "ops_fpu.h"
 #undef PREC
@@ -1703,7 +1747,9 @@ static void gen_mov64i_f64(TCGv_f64 ret, TCGv_i64 arg)
  * or moves. Keep the hard-float register cache at the maximum available
  * precision and explicitly round affected results below.
  */
-#define fp_wrapper(f) glue(f, _f64)
+#define fp_wrapper(f) \
+    ((xemu_x87_exact || fpu_using_double_precision(s)) ? glue(f, _f64) \
+                                                       : glue(f, _f32))
 
 static void gen_round_to_single(TCGv_f64 value)
 {
@@ -1830,8 +1876,13 @@ static void gen_fxchg_ST0_STN(DisasContext *s, int st_index)
     GEN_HELPER_FALLBACK_v_i(fxchg_ST0_STN, st_index);
 
     /* Ensure ST0, STN are loaded */
-    get_stn_f64(s, 0);
-    get_stn_f64(s, st_index);
+    if (xemu_x87_exact || fpu_using_double_precision(s)) {
+        get_stn_f64(s, 0);
+        get_stn_f64(s, st_index);
+    } else {
+        get_stn_f32(s, 0);
+        get_stn_f32(s, st_index);
+    }
     TCGv_fp i = s->fpregs[(s->fpstt_delta + 0) & 7];
     s->fpregs[(s->fpstt_delta + 0) & 7] =
         s->fpregs[(s->fpstt_delta + st_index) & 7];
@@ -1937,8 +1988,8 @@ static void gen_fabs_ST0(DisasContext *s)
 static void gen_fsqrt(DisasContext *s)
 {
     GEN_HELPER_FALLBACK_v_v(fsqrt);
-    gen_fsqrt_f64(s);
-    if (fpu_rounding_to_single(s)) {
+    fp_wrapper(gen_fsqrt)(s);
+    if (xemu_x87_exact && fpu_rounding_to_single(s)) {
         gen_round_to_single(get_st0_f64(s));
     }
 }
@@ -1968,8 +2019,9 @@ static void gen_fcos(DisasContext *s)
 static void gen_helper_fp_arith_ST0_FT0(DisasContext *s, int op)
 {
     if (g_use_hard_fpu) {
-        gen_helper_fp_arith_ST0_FT0_f64(s, op);
-        if (op != 2 && op != 3 && fpu_rounding_to_single(s)) {
+        fp_wrapper(gen_helper_fp_arith_ST0_FT0)(s, op);
+        if (xemu_x87_exact && op != 2 && op != 3 &&
+            fpu_rounding_to_single(s)) {
             gen_round_to_single(get_st0_f64(s));
         }
     } else {
@@ -2011,8 +2063,8 @@ static void gen_fcom_ST0_FT0(DisasContext *s)
 static void gen_helper_fp_arith_STN_ST0(DisasContext *s, int op, int opreg)
 {
     if (g_use_hard_fpu) {
-        gen_helper_fp_arith_STN_ST0_f64(s, op, opreg);
-        if (fpu_rounding_to_single(s)) {
+        fp_wrapper(gen_helper_fp_arith_STN_ST0)(s, op, opreg);
+        if (xemu_x87_exact && fpu_rounding_to_single(s)) {
             gen_round_to_single(get_stn_f64(s, opreg));
         }
     } else {
@@ -4317,6 +4369,13 @@ void tcg_x86_init(void)
     g_use_hard_fpu = g_config.perf.hard_fpu;
 #endif
     xemu_cpu_boost = g_config.perf.native_sse;
+    {
+        const char *x87 = getenv("XEMU_X87");
+        xemu_x87_exact = !(x87 && !strcmp(x87, "fast"));
+        fprintf(stderr, "x87: %s\n", xemu_x87_exact
+                ? "exact loads (single-precision results are rounded after each operation)"
+                : "fast (register width follows the precision control; FLD m64 may lose bits)");
+    }
 }
 
 static void i386_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cpu)

@@ -6,3 +6,4 @@
 #include "qemu/cpu-boost.h"
 
 int xemu_cpu_boost;
+int xemu_x87_exact = 1;

@@ -1216,6 +1216,12 @@ static inline bool cpu_handle_interrupt(CPUState *cpu,
 
 bool xemu_cpu_pace_on;
 int64_t xemu_cpu_pace_stall_ns;
+static int xemu_cpu_pace_mhz = 733;
+
+void xemu_cpu_pace_set_mhz(int mhz)
+{
+    qatomic_set(&xemu_cpu_pace_mhz, mhz == 1400 ? 1400 : 733);
+}
 
 void xemu_cpu_pace_sync(bool want)
 {
@@ -1240,7 +1246,9 @@ static void xemu_cpu_pace_refill(CPUState *cpu)
         given = 0;
         return;
     }
-    frac += (int64_t)(given > left ? given - left : 0) * XEMU_PACE_PS;
+    /* XEMU_PACE_PS is for 733 MHz; a faster clock takes proportionally less */
+    frac += (int64_t)(given > left ? given - left : 0) * XEMU_PACE_PS * 733 /
+            qatomic_read(&xemu_cpu_pace_mhz);
     due += frac / 1000;
     frac %= 1000;
     given = XEMU_PACE_BUDGET;

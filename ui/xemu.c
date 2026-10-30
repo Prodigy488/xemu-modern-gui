@@ -915,6 +915,7 @@ static void gl_render_frame(struct xemu_console *scon)
     /* Real hardware speed paces the CPU as well as the GPU's cost model. */
     xemu_game_perf_tick();
     xemu_cpu_pace_sync(g_config.perf.real_hw_speed);
+    xemu_cpu_pace_set_mhz(g_config.perf.cpu_mhz);
     xemu_hud_update();
     xemu_main_loop_unlock();
 

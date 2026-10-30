@@ -527,6 +527,12 @@ perf:
   real_hw_speed:
     type: bool
     default: false
+  # The CPU clock Real hardware speed paces to, in MHz: 733 (the stock Xbox) or
+  # 1400 (a console modded with a Pentium III / Celeron 1.4 GHz). Only has an
+  # effect while Real hardware speed is on. Settings > Performance > CPU speed.
+  cpu_mhz:
+    type: integer
+    default: 733
   # GPU boost: the tuned NV2A fast paths (adapted from Tovarichtch's fork)
   optimizations:
     type: bool

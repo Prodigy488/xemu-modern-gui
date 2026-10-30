@@ -32,6 +32,13 @@ extern bool xemu_cpu_pace_on;
 void xemu_cpu_pace_sync(bool want);
 
 /*
+ * The clock the pace follows, in MHz: 733 is the stock Xbox, 1400 a console
+ * with a 1.4 GHz CPU fitted. Anything else counts as 733. Takes effect at the
+ * next refill; no blocks need translating again.
+ */
+void xemu_cpu_pace_set_mhz(int mhz);
+
+/*
  * Time the vCPU thread lost to the emulator itself: a lock another thread
  * held, a block being translated. The real CPU would have gone on, so the
  * guest may make this time up, and only this time. vCPU thread only.

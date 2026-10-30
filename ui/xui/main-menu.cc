@@ -115,6 +115,17 @@ void MainMenuGeneralView::Draw()
            tr("Pace the CPU and GPU like the original console instead of running "
               "uncapped. Games that ran too fast may play at their real speed"));
     {
+        int ci = g_config.perf.cpu_mhz >= 1400 ? 1 : 0;
+        if (ChevronCombo(tr("CPU speed"), &ci,
+                         tr_items("733 MHz (original Xbox)\0" "1.4 GHz (modded console)\0"),
+                         tr("The clock Real hardware speed paces the CPU to. 1.4 GHz is "
+                            "like a console with a faster CPU fitted: games that slow "
+                            "down on the original keep up better. Has no effect while "
+                            "Real hardware speed is off"))) {
+            g_config.perf.cpu_mhz = ci ? 1400 : 733;
+        }
+    }
+    {
         static const int refresh_hz[] = { 60, 75 };
         int cur = GamePerfGlobalHz();
         int ri = 0;

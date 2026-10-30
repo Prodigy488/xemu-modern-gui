@@ -115,6 +115,24 @@ void MainMenuGeneralView::Draw()
            tr("Pace the CPU and GPU like the original console instead of running "
               "uncapped. Games that ran too fast may play at their real speed"));
     {
+        static const int refresh_hz[] = { 60, 90, 120 };
+        int cur = GamePerfGlobalHz();
+        int ri = 0;
+        for (int i = 0; i < 3; i++) {
+            if (abs(refresh_hz[i] - cur) < abs(refresh_hz[ri] - cur)) ri = i;
+        }
+        if (ChevronCombo(tr("Display refresh"), &ri,
+                         tr_items("60 Hz (normal)\0" "90 Hz\0" "120 Hz\0"),
+                         tr("Experimental: how often the console's display "
+                            "refreshes. A higher rate can keep a game that "
+                            "runs a little slow at 30 fps instead of dropping "
+                            "to 20, but a game that counts refreshes runs "
+                            "faster than real time. Applies at once. A game "
+                            "can have its own value below"))) {
+            GamePerfSetGlobalHz(refresh_hz[ri]);
+        }
+    }
+    {
         uint32_t gp_id = 0;
         std::string gp_name;
         if (GamePerfCurrent(gp_id, gp_name)) {

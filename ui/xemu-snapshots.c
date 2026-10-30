@@ -251,8 +251,11 @@ void xemu_snapshots_load(const char *vm_name, Error **err)
     bool vm_running = runstate_is_running();
     vm_stop(RUN_STATE_RESTORE_VM);
     bool ok = load_snapshot(vm_name, NULL, false, NULL, err);
-    if (ok && replug_pending) {
-        /* So a resumed game sees its controllers arrive */
+    if (ok) {
+        /* Every load, whichever way it was started: the restored machine can
+         * think the controller is missing, so plug it in again and the game
+         * sees it arrive (the save may have been made with it unplugged, or
+         * with other devices on the ports) */
         xemu_input_replug_all();
     }
     replug_pending = false;

@@ -29,6 +29,12 @@ GamePerfProfile &GamePerfEdit();
 void GamePerfChanged();
 void GamePerfForget();
 
+// The user's own display refresh in Hz (the global setting, not a game's),
+// and a change of it from the settings: applies at once to a game that does
+// not set its own refresh
+int GamePerfGlobalHz();
+void GamePerfSetGlobalHz(int hz);
+
 // True when the profile asks for a CPU or GPU boost setting other than the
 // one this run started with (those are read once, at start-up)
 bool GamePerfRestartPending();

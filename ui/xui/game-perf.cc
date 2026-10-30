@@ -389,6 +389,32 @@ void GamePerfChanged()
     SetLive(Resolve(it != g_profiles.end() ? &it->second : nullptr));
 }
 
+int GamePerfGlobalHz()
+{
+    if (g_started) {
+        return g_base.hz;
+    }
+    return g_config.perf.vblank_hz > 0 ? g_config.perf.vblank_hz : 60;
+}
+
+void GamePerfSetGlobalHz(int hz)
+{
+    if (!g_started) {
+        g_config.perf.vblank_hz = hz;
+        nv2a_set_vblank_hz(hz);
+        return;
+    }
+    auto it = g_profiles.find(g_cur_id);
+    bool overridden = g_cur_ok && it != g_profiles.end() &&
+                      (it->second.safe || it->second.hz > 0);
+    g_base.hz = hz;
+    g_config.perf.vblank_hz = hz;
+    if (!overridden) {
+        g_applied.hz = hz;
+        nv2a_set_vblank_hz(hz);
+    }
+}
+
 void GamePerfForget()
 {
     g_profiles.erase(g_cur_id);

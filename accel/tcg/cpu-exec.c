@@ -658,11 +658,13 @@ static vaddr log_pc(CPUState *cpu, const TranslationBlock *tb)
  * instructions and blocks that ran, the dispatcher entries, and where this
  * thread's time went (running, waiting for the big lock, halted,
  * translating). Flushed: Windows buffers a redirected stderr. */
+void xemu_watch_install(CPUState *cs);
 static void __attribute__((noinline)) xemu_tbrate_tick(void)
 {
     static uint64_t entries;
     static int64_t start, cpu_start;
     if (!(++entries & 0xFFFF)) {
+        xemu_watch_install(current_cpu);
         int64_t now = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
         if (!start || now - start >= 5000) {
             int64_t cpu_now = xemu_thread_cpu_ns();

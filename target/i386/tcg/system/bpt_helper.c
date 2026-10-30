@@ -22,6 +22,98 @@
 #include "exec/helper-proto.h"
 #include "exec/watchpoint.h"
 #include "tcg/helper-tcg.h"
+#include "exec/cpu-common.h"
+#include "hw/core/cpu.h"
+
+/*
+ * Debug probe (XEMU_WATCH=addr[,addr...], hex guest virtual addresses, up to
+ * eight): log every CPU write to those dwords - which instruction wrote,
+ * the registers and the call chain - without raising anything in the guest.
+ * Used to find who initialises, or wipes, a game structure.
+ */
+#define XEMU_WATCH_MAX 8
+static uint32_t xemu_watch_addr[XEMU_WATCH_MAX];
+static int xemu_watch_count;
+static int xemu_watch_state;      /* 0 not read, 1 installed, -1 off */
+static int xemu_watch_hits;
+
+static void xemu_watch_read(CPUState *cs, uint32_t addr, uint8_t *buf, int n)
+{
+    if (cpu_memory_rw_debug(cs, addr, buf, n, false) < 0) {
+        memset(buf, 0xEE, n);
+    }
+}
+
+void xemu_watch_install(CPUState *cs)
+{
+    const char *e;
+    char *dup, *tok, *save = NULL;
+
+    if (xemu_watch_state) {
+        return;
+    }
+    e = getenv("XEMU_WATCH");
+    if (!e || !*e) {
+        xemu_watch_state = -1;
+        return;
+    }
+    xemu_watch_state = 1;
+    dup = g_strdup(e);
+    for (tok = strtok_r(dup, ", ", &save); tok && xemu_watch_count < XEMU_WATCH_MAX;
+         tok = strtok_r(NULL, ", ", &save)) {
+        uint32_t a = (uint32_t)strtoul(tok, NULL, 16) & ~3u;
+        if (a && cpu_watchpoint_insert(cs, a, 4, BP_CPU | BP_MEM_WRITE, NULL) == 0) {
+            xemu_watch_addr[xemu_watch_count++] = a;
+        }
+    }
+    g_free(dup);
+    fprintf(stderr, "watch: logging CPU writes to %d dword(s)\n", xemu_watch_count);
+    fflush(stderr);
+}
+
+static bool xemu_watch_hit(CPUState *cs, CPUX86State *env, vaddr hit)
+{
+    uint8_t code[24], st[32], cur[16];
+    int i;
+    bool ours = false;
+
+    for (i = 0; i < xemu_watch_count; i++) {
+        if ((hit & ~3u) == xemu_watch_addr[i]) {
+            ours = true;
+        }
+    }
+    if (!ours) {
+        return false;
+    }
+    if (xemu_watch_hits++ >= 80) {
+        return true;
+    }
+    xemu_watch_read(cs, (uint32_t)env->eip - 24, code, 24);
+    xemu_watch_read(cs, (uint32_t)env->regs[R_ESP], st, 32);
+    fprintf(stderr, "watch: write to %08x, now at eip %08x esp %08x | eax %08x ecx %08x "
+            "edx %08x ebx %08x ebp %08x esi %08x edi %08x\n", (uint32_t)hit,
+            (uint32_t)env->eip, (uint32_t)env->regs[R_ESP],
+            (uint32_t)env->regs[R_EAX], (uint32_t)env->regs[R_ECX],
+            (uint32_t)env->regs[R_EDX], (uint32_t)env->regs[R_EBX],
+            (uint32_t)env->regs[R_EBP], (uint32_t)env->regs[R_ESI],
+            (uint32_t)env->regs[R_EDI]);
+    fprintf(stderr, "watch:   code before eip:");
+    for (i = 0; i < 24; i++) {
+        fprintf(stderr, " %02x", code[i]);
+    }
+    fprintf(stderr, "\nwatch:   stack:");
+    for (i = 0; i < 32; i += 4) {
+        fprintf(stderr, " %08x", ldl_le_p(st + i));
+    }
+    fprintf(stderr, "\nwatch:   watched dwords:");
+    for (i = 0; i < xemu_watch_count; i++) {
+        xemu_watch_read(cs, xemu_watch_addr[i], cur, 4);
+        fprintf(stderr, " %08x=%08x", xemu_watch_addr[i], ldl_le_p(cur));
+    }
+    fprintf(stderr, "\n");
+    fflush(stderr);
+    return true;
+}
 
 
 static inline bool hw_local_breakpoint_enabled(unsigned long dr7, int index)
@@ -213,6 +305,11 @@ void breakpoint_handler(CPUState *cs)
 
     if (cs->watchpoint_hit) {
         if (cs->watchpoint_hit->flags & BP_CPU) {
+            if (xemu_watch_state > 0 &&
+                xemu_watch_hit(cs, env, cs->watchpoint_hit->hitaddr)) {
+                cs->watchpoint_hit = NULL;
+                cpu_loop_exit_noexc(cs);
+            }
             cs->watchpoint_hit = NULL;
             if (check_hw_breakpoints(env, false)) {
                 /*

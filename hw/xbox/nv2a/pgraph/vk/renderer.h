@@ -861,6 +861,9 @@ unsigned pgraph_vk_off_mask(void);
 bool pgraph_vk_blackdet_enabled(void);
 void pgraph_vk_draw_ring_record(PGRAPHState *pg);
 void pgraph_vk_draw_ring_dump(PGRAPHState *pg, hwaddr scan_addr);
+void pgraph_vk_draw_ring_record_clear(PGRAPHState *pg, uint32_t parameter);
+void pgraph_vk_draw_ring_frame(PGRAPHState *pg, hwaddr scan_addr,
+                               const char *tag);
 static inline bool pgraph_vk_off(unsigned bit)
 {
     return (pgraph_vk_off_mask() & bit) != 0;

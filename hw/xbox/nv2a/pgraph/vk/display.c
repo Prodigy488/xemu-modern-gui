@@ -698,6 +698,7 @@ static void blackdet_check(PGRAPHState *pg, SurfaceBinding *surface)
     bool black = lit_frac < 0.01;
     bool dim = !black && ema > 40.0 && mean < ema * 0.3;
     static bool prev_bad;
+    bool prev_bad_before = prev_bad;
     bool bad_now = black || dim;
     bool log_it = bad_now && (!prev_bad || (black_events % 200) == 0);
     prev_bad = bad_now;
@@ -716,6 +717,7 @@ static void blackdet_check(PGRAPHState *pg, SurfaceBinding *surface)
                 (unsigned)surface->vram_addr, (unsigned)surface->size,
                 surface->width, surface->height, surface->draw_time, w, h);
         pgraph_vk_draw_ring_dump(pg, surface->vram_addr);
+        pgraph_vk_draw_ring_frame(pg, surface->vram_addr, black ? "BLACK" : "DIM");
         /* Save only after the boot screens (the picture had been lit) and
          * not more than once in 300 pictures. */
         if (saved < 8 && ema > 40.0 && shown - last_saved > 300) {
@@ -731,6 +733,16 @@ static void blackdet_check(PGRAPHState *pg, SurfaceBinding *surface)
             saved++;
         }
     } else {
+        /* A sample of good pictures to compare the bad ones against: the
+         * first good one after each bad run, once ema is established. */
+        static unsigned good_logged;
+        if (prev_bad_before && ema > 40.0 && good_logged < 6) {
+            good_logged++;
+            fprintf(stderr, "nv2a: BLACKDET GOOD picture after a bad run: "
+                    "shown %u, lit %.1f%%, mean %.1f\n", shown,
+                    lit_frac * 100, mean);
+            pgraph_vk_draw_ring_frame(pg, surface->vram_addr, "GOOD");
+        }
         if (good_size < need) {
             g_free(good);
             good = g_malloc(need);

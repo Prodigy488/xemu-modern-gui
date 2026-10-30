@@ -3414,6 +3414,9 @@ typedef struct DrawRec {
     hwaddr color, zeta;
     unsigned cw, ch;
     bool color_write;
+    bool clear;
+    uint32_t clear_param, clear_color, clear_zs;
+    uint32_t ctl0, ctl1, blend, raster;
     struct {
         bool on;
         hwaddr addr;
@@ -3443,6 +3446,10 @@ void pgraph_vk_draw_ring_record(PGRAPHState *pg)
         d->zeta = r->zeta_binding->vram_addr;
     }
     d->color_write = pgraph_color_write_enabled(pg);
+    d->ctl0 = pgraph_reg_r(pg, NV_PGRAPH_CONTROL_0);
+    d->ctl1 = pgraph_reg_r(pg, NV_PGRAPH_CONTROL_1);
+    d->blend = pgraph_reg_r(pg, NV_PGRAPH_BLEND);
+    d->raster = pgraph_reg_r(pg, NV_PGRAPH_SETUPRASTER);
     for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
         TextureBinding *b = r->texture_bindings[i];
         if (!b) {
@@ -3510,6 +3517,104 @@ void pgraph_vk_draw_ring_dump(PGRAPHState *pg, hwaddr scan_addr)
     if (!shown) {
         fprintf(stderr, "nv2a: BLACKDET   no draws to the scanout surface "
                 "%08x among the last %u\n", (unsigned)scan_addr, n);
+    }
+}
+
+
+void pgraph_vk_draw_ring_record_clear(PGRAPHState *pg, uint32_t parameter)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    DrawRec *d = &draw_ring[draw_ring_n++ % DRAW_RING];
+    memset(d, 0, sizeof(*d));
+    d->clear = true;
+    d->draw_time = pg->draw_time;
+    d->clear_param = parameter;
+    d->clear_color = pgraph_reg_r(pg, NV_PGRAPH_COLORCLEARVALUE);
+    d->clear_zs = pgraph_reg_r(pg, NV_PGRAPH_ZSTENCILCLEARVALUE);
+    if (r->color_binding) {
+        d->color = r->color_binding->vram_addr;
+        d->cw = r->color_binding->width;
+        d->ch = r->color_binding->height;
+    }
+    if (r->zeta_binding) {
+        d->zeta = r->zeta_binding->vram_addr;
+    }
+}
+
+/* Everything recorded between the previous draw to the scanout surface and
+ * the latest one: the frame the picture was made from. */
+void pgraph_vk_draw_ring_frame(PGRAPHState *pg, hwaddr scan_addr,
+                               const char *tag)
+{
+    unsigned n = MIN(draw_ring_n, DRAW_RING);
+    unsigned last = 0, prev = 0;
+    bool have_last = false, have_prev = false;
+    for (unsigned k = 0; k < n; k++) {
+        DrawRec *d = &draw_ring[(draw_ring_n - 1 - k) % DRAW_RING];
+        if (!d->clear && d->color == scan_addr) {
+            if (!have_last) {
+                last = k; have_last = true;
+            } else if (k > last + 6) { /* a separate pass, not the same one */
+                prev = k; have_prev = true;
+                break;
+            }
+        }
+    }
+    if (!have_last) {
+        fprintf(stderr, "nv2a: BLACKDET   [%s] no scanout draw in ring\n", tag);
+        return;
+    }
+    if (!have_prev) {
+        prev = n - 1;
+    }
+    struct { hwaddr c, z; uint32_t ctl0, blend; unsigned cnt, cw_off; } g[10];
+    int ng = 0;
+    unsigned total = 0, clears = 0;
+    for (unsigned k = last + 1; k < prev; k++) {
+        DrawRec *d = &draw_ring[(draw_ring_n - 1 - k) % DRAW_RING];
+        if (d->clear) {
+            clears++;
+            continue;
+        }
+        total++;
+        int j;
+        for (j = 0; j < ng; j++) {
+            if (g[j].c == d->color && g[j].z == d->zeta &&
+                g[j].ctl0 == d->ctl0 && g[j].blend == d->blend) {
+                break;
+            }
+        }
+        if (j == ng) {
+            if (ng == 10) {
+                continue;
+            }
+            g[ng].c = d->color; g[ng].z = d->zeta; g[ng].ctl0 = d->ctl0;
+            g[ng].blend = d->blend; g[ng].cnt = 0; g[ng].cw_off = 0;
+            ng++;
+        }
+        g[j].cnt++;
+        g[j].cw_off += !d->color_write;
+    }
+    fprintf(stderr, "nv2a: BLACKDET   [%s] frame before the picture: %u draws "
+            "(%u distinct state groups shown), %u clears\n", tag, total, ng,
+            clears);
+    for (int j = 0; j < ng; j++) {
+        fprintf(stderr, "nv2a: BLACKDET   [%s]   x%u -> %08x zeta %08x "
+                "ctl0 %08x blend %08x colorwrite-off %u\n", tag, g[j].cnt,
+                (unsigned)g[j].c, (unsigned)g[j].z, g[j].ctl0, g[j].blend,
+                g[j].cw_off);
+    }
+    int shown = 0;
+    for (unsigned k = prev; k > last && shown < 24; k--) {
+        DrawRec *d = &draw_ring[(draw_ring_n - 1 - (k - 1)) % DRAW_RING];
+        if (!d->clear) {
+            continue;
+        }
+        shown++;
+        fprintf(stderr, "nv2a: BLACKDET   [%s]   clear param %02x -> %08x "
+                "zeta %08x %ux%u color %08x zs %08x (at draw %d)\n", tag,
+                d->clear_param, (unsigned)d->color, (unsigned)d->zeta, d->cw,
+                d->ch, d->clear_color, d->clear_zs, d->draw_time);
     }
 }
 
@@ -3806,6 +3911,9 @@ void pgraph_vk_clear_surface(NV2AState *d, uint32_t parameter)
     PGRAPHVkState *r = pg->vk_renderer_state;
 
     nv2a_profile_inc_counter(NV2A_PROF_CLEAR);
+    if (pgraph_vk_blackdet_enabled()) {
+        pgraph_vk_draw_ring_record_clear(pg, parameter);
+    }
 
     bool write_color = (parameter & NV097_CLEAR_SURFACE_COLOR);
     bool write_zeta =

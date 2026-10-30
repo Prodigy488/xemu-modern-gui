@@ -47,6 +47,20 @@ uint64_t pgraph_read(void *opaque, hwaddr addr, unsigned int size)
     NV2AState *d = (NV2AState *)opaque;
     PGRAPHState *pg = &d->pgraph;
 
+    /* Lock-free fast path for the GPU fence register the guest busy-polls
+     * (the D3D runtime polls NV_PGRAPH_PATT_COLOR0 for its fence value).
+     * Taking pg->lock for each poll convoys with the FIFO puller, which
+     * needs the same lock to advance the fence; a momentarily stale value
+     * is what hardware gives a CPU polling an asynchronously updated
+     * register. Fixes the heavy-scene slowdown in Project Gotham Racing 2.
+     * Upstream xemu #2941 (Nick Spargo). */
+    if (addr == NV_PGRAPH_PATT_COLOR0 && size == 4) {
+        uint64_t fr = qatomic_read(&pg->regs_[NV_PGRAPH_PATT_COLOR0]);
+        smp_rmb(); /* pairs with the smp_wmb at the fence write */
+        nv2a_reg_log_read(NV_PGRAPH, addr, size, fr);
+        return fr;
+    }
+
     xemu_tbrate_lock(&pg->lock);
 
     uint64_t r = 0;
@@ -873,7 +887,10 @@ int pgraph_method(NV2AState *d, unsigned int subchannel,
     case NV_CONTEXT_PATTERN: {
         switch (method) {
         case NV044_SET_MONOCHROME_COLOR0:
-            pgraph_reg_w(pg, NV_PGRAPH_PATT_COLOR0, parameter);
+            /* D3D fence value, polled lock-free by pgraph_read: order the
+             * effects of the preceding methods before the store */
+            smp_wmb();
+            pgraph_reg_w_atomic(pg, NV_PGRAPH_PATT_COLOR0, parameter);
             break;
         default:
             goto unhandled;

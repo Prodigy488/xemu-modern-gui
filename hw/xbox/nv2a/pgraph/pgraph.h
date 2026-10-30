@@ -440,6 +440,20 @@ static inline void pgraph_reg_w(PGRAPHState *pg, unsigned int r, uint32_t v)
 }
 
 void pgraph_glsl_snapshot_shader_regs(PGRAPHState *pg);
+/* Variant of pgraph_reg_w for registers that pgraph_read serves without
+ * taking pg->lock: the atomic store keeps the compiler from tearing or
+ * eliding the write under a concurrent lock-free reader. Writers remain
+ * serialized by pg->lock. (Upstream xemu #2941) */
+static inline void pgraph_reg_w_atomic(PGRAPHState *pg, unsigned int r,
+                                       uint32_t v)
+{
+    assert(r % 4 == 0);
+    if (pg->regs_[r] != v) {
+        bitmap_set(pg->regs_dirty, r / sizeof(uint32_t), 1);
+    }
+    qatomic_set(&pg->regs_[r], v);
+}
+
 void pgraph_clear_dirty_reg_map(PGRAPHState *pg);
 
 static inline bool pgraph_is_reg_dirty(PGRAPHState *pg, unsigned int reg)

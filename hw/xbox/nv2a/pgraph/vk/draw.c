@@ -2572,6 +2572,10 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
     assert(r->debug_depth == 0);
 
     if (r->in_command_buffer) {
+        if (pgraph_vk_blackdet_enabled() &&
+            finish_reason != VK_FINISH_REASON_EAGER) {
+            pgraph_vk_draw_ring_event(pg, "finish", 0, (int)finish_reason);
+        }
         nv2a_profile_inc_counter(finish_reason_to_counter_enum[finish_reason]);
 
         if (r->in_render_pass) {
@@ -3415,7 +3419,10 @@ typedef struct DrawRec {
     unsigned cw, ch;
     bool color_write;
     bool clear;
-    uint32_t clear_param, clear_color, clear_zs;
+    uint32_t clear_param, clear_color, clear_zs, rectx, recty;
+    const char *ev;
+    hwaddr ev_addr;
+    int ev_val;
     uint32_t ctl0, ctl1, blend, raster;
     struct {
         bool on;
@@ -3475,6 +3482,9 @@ void pgraph_vk_draw_ring_dump(PGRAPHState *pg, hwaddr scan_addr)
     int ntgt = 0;
     for (unsigned k = 0; k < n; k++) {
         DrawRec *d = &draw_ring[(draw_ring_n - 1 - k) % DRAW_RING];
+        if (d->ev) {
+            continue;
+        }
         int j;
         for (j = 0; j < ntgt && tgt[j].a != d->color; j++) {
         }
@@ -3531,6 +3541,8 @@ void pgraph_vk_draw_ring_record_clear(PGRAPHState *pg, uint32_t parameter)
     d->clear_param = parameter;
     d->clear_color = pgraph_reg_r(pg, NV_PGRAPH_COLORCLEARVALUE);
     d->clear_zs = pgraph_reg_r(pg, NV_PGRAPH_ZSTENCILCLEARVALUE);
+    d->rectx = pgraph_reg_r(pg, NV_PGRAPH_CLEARRECTX);
+    d->recty = pgraph_reg_r(pg, NV_PGRAPH_CLEARRECTY);
     if (r->color_binding) {
         d->color = r->color_binding->vram_addr;
         d->cw = r->color_binding->width;
@@ -3539,6 +3551,18 @@ void pgraph_vk_draw_ring_record_clear(PGRAPHState *pg, uint32_t parameter)
     if (r->zeta_binding) {
         d->zeta = r->zeta_binding->vram_addr;
     }
+}
+
+
+void pgraph_vk_draw_ring_event(PGRAPHState *pg, const char *what, hwaddr addr,
+                               int val)
+{
+    DrawRec *d = &draw_ring[draw_ring_n++ % DRAW_RING];
+    memset(d, 0, sizeof(*d));
+    d->ev = what;
+    d->ev_addr = addr;
+    d->ev_val = val;
+    d->draw_time = pg->draw_time;
 }
 
 /* Everything recorded between the previous draw to the scanout surface and
@@ -3572,6 +3596,9 @@ void pgraph_vk_draw_ring_frame(PGRAPHState *pg, hwaddr scan_addr,
     unsigned total = 0, clears = 0;
     for (unsigned k = last + 1; k < prev; k++) {
         DrawRec *d = &draw_ring[(draw_ring_n - 1 - k) % DRAW_RING];
+        if (d->ev) {
+            continue;
+        }
         if (d->clear) {
             clears++;
             continue;
@@ -3616,6 +3643,85 @@ void pgraph_vk_draw_ring_frame(PGRAPHState *pg, hwaddr scan_addr,
                 d->clear_param, (unsigned)d->color, (unsigned)d->zeta, d->cw,
                 d->ch, d->clear_color, d->clear_zs, d->draw_time);
     }
+}
+
+
+/* The frame behind the latest scanout draw as a run-length timeline. */
+void pgraph_vk_draw_ring_timeline(PGRAPHState *pg, hwaddr scan_addr,
+                                  const char *tag)
+{
+    unsigned n = MIN(draw_ring_n, DRAW_RING);
+    unsigned last = 0, prev = n - 1;
+    bool have_last = false;
+    for (unsigned k = 0; k < n; k++) {
+        DrawRec *d = &draw_ring[(draw_ring_n - 1 - k) % DRAW_RING];
+        if (!d->clear && d->color == scan_addr) {
+            if (!have_last) {
+                last = k; have_last = true;
+            } else if (k > last + 6) {
+                prev = k;
+                break;
+            }
+        }
+    }
+    if (!have_last) {
+        return;
+    }
+    char line[400];
+    int len = 0;
+    int tokens = 0;
+    hwaddr rc = ~0ull, rz = ~0ull;
+    unsigned run = 0, rcol = 0;
+    #define FLUSH_RUN() do { \
+        if (run) { \
+            len += snprintf(line + len, sizeof(line) - len, " %ux[%x/%x]", \
+                            run, (unsigned)(rc & 0xffffff), \
+                            (unsigned)(rz & 0xffffff)); \
+            run = 0; tokens++; \
+            if (len > 300) { \
+                fprintf(stderr, "nv2a: BLACKDET   [%s] timeline:%s\n", tag, line); \
+                len = 0; \
+            } \
+        } \
+    } while (0)
+    (void)rcol;
+    #define SPILL() do { \
+        if (len > 300) { \
+            fprintf(stderr, "nv2a: BLACKDET   [%s] timeline:%s\n", tag, line); \
+            len = 0; \
+        } \
+    } while (0)
+    for (unsigned k = prev; k > last; k--) {
+        DrawRec *d = &draw_ring[(draw_ring_n - 1 - (k - 1)) % DRAW_RING];
+        if (d->ev) {
+            FLUSH_RUN();
+            SPILL();
+            len += snprintf(line + len, sizeof(line) - len, " <%s %x %d>",
+                            d->ev, (unsigned)(d->ev_addr & 0xffffff), d->ev_val);
+            continue;
+        }
+        if (d->clear) {
+            FLUSH_RUN();
+            SPILL();
+            len += snprintf(line + len, sizeof(line) - len,
+                            " CLEAR%02x[%x/%x rect %x,%x col %08x]",
+                            d->clear_param, (unsigned)(d->color & 0xffffff),
+                            (unsigned)(d->zeta & 0xffffff), d->rectx,
+                            d->recty, d->clear_color);
+            continue;
+        }
+        if (run && (d->color != rc || d->zeta != rz)) {
+            FLUSH_RUN();
+        }
+        rc = d->color; rz = d->zeta;
+        run++;
+    }
+    FLUSH_RUN();
+    if (len) {
+        fprintf(stderr, "nv2a: BLACKDET   [%s] timeline:%s\n", tag, line);
+    }
+    #undef FLUSH_RUN
+    #undef SPILL
 }
 
 static int compare_memory_sync_requirement_by_addr(const void *p1,

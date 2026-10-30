@@ -712,6 +712,10 @@ static void invalidate_surface(NV2AState *d, SurfaceBinding *surface)
 {
     PGRAPHVkState *r = d->pgraph.vk_renderer_state;
 
+    if (pgraph_vk_blackdet_enabled()) {
+        pgraph_vk_draw_ring_event(&d->pgraph, "invalidate",
+                                  surface->vram_addr, surface->color);
+    }
     trace_nv2a_pgraph_surface_invalidated(surface->vram_addr);
 
     /* The trash keeps an image the open recording used alive, and a recycled
@@ -950,6 +954,11 @@ static void create_surface_image(PGRAPHState *pg, SurfaceBinding *surface)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
 
+    if (pgraph_vk_blackdet_enabled()) {
+        pgraph_vk_draw_ring_event(pg, "create", surface->vram_addr,
+                                  surface->color);
+    }
+
     unsigned int width = surface->width ? surface->width : 1;
     unsigned int height = surface->height ? surface->height : 1;
     pgraph_apply_scaling_factor(pg, &width, &height);
@@ -1155,6 +1164,10 @@ static bool check_surface_compatibility(SurfaceBinding const *s1,
 void pgraph_vk_surface_download_if_dirty(NV2AState *d, SurfaceBinding *surface)
 {
     if (surface->draw_dirty) {
+        if (pgraph_vk_blackdet_enabled()) {
+            pgraph_vk_draw_ring_event(&d->pgraph, "download",
+                                      surface->vram_addr, surface->color);
+        }
         download_surface(d, surface, true);
     }
 }
@@ -1169,6 +1182,9 @@ void pgraph_vk_upload_surface_data(NV2AState *d, SurfaceBinding *surface,
         return;
     }
 
+    if (pgraph_vk_blackdet_enabled()) {
+        pgraph_vk_draw_ring_event(pg, "upload", surface->vram_addr, force);
+    }
     nv2a_profile_inc_counter(NV2A_PROF_SURF_UPLOAD);
 
     /* An aux upload runs before the open recording: when draws recorded

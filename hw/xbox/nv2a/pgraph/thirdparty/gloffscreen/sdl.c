@@ -85,6 +85,16 @@ static GloContext *context_create(int minor)
         context->gl_context = SDL_GL_CreateContext(context->window);
     }
     if (context->gl_context == NULL) {
+        /* Experimental: a device that tops out at GL 3.1 (V3DV on a Raspberry
+         * Pi 5) can still start with the Vulkan renderer; the GL renderer
+         * declines on its own when it finds too little (upstream #3003). */
+        SDL_GL_MakeCurrent(share_window, share_context);
+        SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
+        context->gl_context = SDL_GL_CreateContext(context->window);
+    }
+    if (context->gl_context == NULL) {
         fprintf(stderr, "%s: Failed to create GL context\n", __func__);
         SDL_DestroyWindow(context->window);
         SDL_Quit();

@@ -719,6 +719,12 @@ static void blackdet_check(PGRAPHState *pg, SurfaceBinding *surface)
                 surface->width, surface->height, surface->draw_time, w, h);
         pgraph_vk_draw_ring_dump(pg, surface->vram_addr);
         pgraph_vk_draw_ring_frames(pg, 6, black ? "BLACK" : "DIM");
+        static unsigned seq_dumped;
+        if (ema > 40.0 && seq_dumped < 14) {
+            seq_dumped++;
+            pgraph_vk_draw_ring_seq(pg, 0, "DIMSEQ");
+            pgraph_vk_draw_ring_seq(pg, 1, "DIMSEQ");
+        }
         /* Save only after the boot screens (the picture had been lit) and
          * not more than once in 300 pictures. */
         if (saved < 8 && ema > 40.0 && shown - last_saved > 300) {
@@ -737,13 +743,18 @@ static void blackdet_check(PGRAPHState *pg, SurfaceBinding *surface)
         /* A sample of good pictures to compare the bad ones against: the
          * first good one after each bad run, once ema is established. */
         static unsigned good_logged;
-        if (shown > 5000 && ema > 60.0 && (shown % 389) == 0 &&
-            good_logged < 12) {
+        if (shown > 5000 && ema > 60.0 && (shown % 97) == 0 &&
+            good_logged < 40) {
             good_logged++;
             fprintf(stderr, "nv2a: BLACKDET GOOD picture: "
                     "shown %u, lit %.1f%%, mean %.1f\n", shown,
                     lit_frac * 100, mean);
             pgraph_vk_draw_ring_frames(pg, 3, "GOOD");
+            static unsigned goodseq;
+            if (goodseq < 4 && pgraph_vk_draw_ring_frame_draws(1) > 800) {
+                goodseq++;
+                pgraph_vk_draw_ring_seq(pg, 1, "GOODSEQ");
+            }
         }
         (void)prev_bad_before;
         if (good_size < need) {

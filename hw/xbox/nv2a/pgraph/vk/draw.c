@@ -3581,6 +3581,107 @@ void pgraph_vk_draw_ring_note_picture(int mean)
     pic_mean[ring_frame % 64] = mean;
 }
 
+
+static const char *finish_code(int v)
+{
+    static const char *n[] = { "V", "SC", "SD", "NB", "FD", "PR", "FS", "FL",
+                               "ST", "SU", "TU", "EG" };
+    return (v >= 0 && v < (int)ARRAY_SIZE(n)) ? n[v] : "?";
+}
+
+/* The whole frame, in order, run-length merged: N@color/zeta draws, Cxx@ clears,
+ * F.. finishes, +create/+upload/-inval/dl events with the surface address. */
+void pgraph_vk_draw_ring_seq(PGRAPHState *pg, unsigned back, const char *tag)
+{
+    unsigned n = MIN(draw_ring_n, DRAW_RING);
+    if (back > ring_frame) {
+        return;
+    }
+    unsigned fr = ring_frame - back;
+    /* oldest record of that frame first: find the span newest-first */
+    unsigned first_k = 0, last_k = 0;
+    bool seen = false;
+    for (unsigned k = 0; k < n; k++) {
+        DrawRec *d = &draw_ring[(draw_ring_n - 1 - k) % DRAW_RING];
+        if (d->frame == fr) {
+            if (!seen) {
+                last_k = k; seen = true;
+            }
+            first_k = k;
+        } else if (seen) {
+            break;
+        }
+    }
+    if (!seen) {
+        return;
+    }
+    char line[420];
+    int len = 0;
+    unsigned run = 0;
+    hwaddr rc = 0, rz = 0;
+    fprintf(stderr, "nv2a: BLACKDET   [%s] seq frame -%u (pic mean %d):\n", tag,
+            back, pic_mean[fr % 64]);
+    #define OUT() do { if (len > 330) { \
+        fprintf(stderr, "nv2a: BLACKDET   [%s]   %s\n", tag, line); len = 0; } \
+    } while (0)
+    #define FLUSHRUN() do { if (run) { OUT(); \
+        len += snprintf(line + len, sizeof(line) - len, "%u@%x/%x ", run, \
+                        (unsigned)(rc & 0xffffff), (unsigned)(rz & 0xffffff)); \
+        run = 0; } } while (0)
+    line[0] = 0;
+    for (unsigned k = first_k + 1; k > last_k; k--) {
+        DrawRec *d = &draw_ring[(draw_ring_n - 1 - (k - 1)) % DRAW_RING];
+        if (d->ev) {
+            FLUSHRUN(); OUT();
+            if (!strcmp(d->ev, "finish")) {
+                len += snprintf(line + len, sizeof(line) - len, "F%s ",
+                                finish_code(d->ev_val));
+            } else {
+                len += snprintf(line + len, sizeof(line) - len, "%s:%x ",
+                                !strcmp(d->ev, "create") ? "+cr" :
+                                !strcmp(d->ev, "upload") ? "+up" :
+                                !strcmp(d->ev, "download") ? "dl" : "-inv",
+                                (unsigned)(d->ev_addr & 0xffffff));
+            }
+            continue;
+        }
+        if (d->clear) {
+            FLUSHRUN(); OUT();
+            len += snprintf(line + len, sizeof(line) - len, "C%02x@%x/%x ",
+                            d->clear_param, (unsigned)(d->color & 0xffffff),
+                            (unsigned)(d->zeta & 0xffffff));
+            continue;
+        }
+        if (run && (d->color != rc || d->zeta != rz)) {
+            FLUSHRUN(); OUT();
+        }
+        rc = d->color; rz = d->zeta; run++;
+    }
+    FLUSHRUN();
+    if (len) {
+        fprintf(stderr, "nv2a: BLACKDET   [%s]   %s\n", tag, line);
+    }
+    #undef OUT
+    #undef FLUSHRUN
+}
+
+
+unsigned pgraph_vk_draw_ring_frame_draws(unsigned back)
+{
+    unsigned n = MIN(draw_ring_n, DRAW_RING), cnt = 0;
+    if (back > ring_frame) {
+        return 0;
+    }
+    unsigned fr = ring_frame - back;
+    for (unsigned k = 0; k < n; k++) {
+        DrawRec *d = &draw_ring[(draw_ring_n - 1 - k) % DRAW_RING];
+        if (d->frame == fr && !d->ev && !d->clear) {
+            cnt++;
+        }
+    }
+    return cnt;
+}
+
 /* One line per game frame, newest first. */
 void pgraph_vk_draw_ring_frames(PGRAPHState *pg, unsigned nframes,
                                 const char *tag)
@@ -4093,9 +4194,6 @@ void pgraph_vk_clear_surface(NV2AState *d, uint32_t parameter)
     PGRAPHVkState *r = pg->vk_renderer_state;
 
     nv2a_profile_inc_counter(NV2A_PROF_CLEAR);
-    if (pgraph_vk_blackdet_enabled()) {
-        pgraph_vk_draw_ring_record_clear(pg, parameter);
-    }
 
     bool write_color = (parameter & NV097_CLEAR_SURFACE_COLOR);
     bool write_zeta =
@@ -4115,6 +4213,9 @@ void pgraph_vk_clear_surface(NV2AState *d, uint32_t parameter)
     }
 
     r->clear_parameter = parameter;
+    if (pgraph_vk_blackdet_enabled()) {
+        pgraph_vk_draw_ring_record_clear(pg, parameter);
+    }
 
     uint32_t clearrectx = pgraph_reg_r(pg, NV_PGRAPH_CLEARRECTX);
     uint32_t clearrecty = pgraph_reg_r(pg, NV_PGRAPH_CLEARRECTY);

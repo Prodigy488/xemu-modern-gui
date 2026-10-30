@@ -2,8 +2,9 @@
  * Game folders as discs
  *
  * A folder holding a game's files (default.xbe and the rest) can be played
- * without first making a disc image of it: the folder is laid out as an
- * XDVDFS disc and the emulated drive reads the files straight from it.
+ * like a disc image: the first time, xemu builds a disc image (XDVDFS, like
+ * an XISO) from the folder and keeps it in its folder_discs directory; the
+ * drive then loads that image exactly as it would any other.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,10 +18,10 @@
 extern "C" {
 #endif
 
-/* Lays out the folder and writes its disc plan; returns the name to open the
- * drive's medium with ("xplan:<plan file>"), to be g_free()d, or NULL with
- * *err set to a message (g_free() it too). */
-char *xemu_folder_disc_prepare(const char *folder, char **err);
+/* The prepared disc image for this folder, to be g_free()d, or NULL with
+ * *err set to a message (g_free() it too) when there is none yet or it is out
+ * of date because the folder changed. The library prepares it first. */
+char *xemu_folder_disc_ready(const char *folder, char **err);
 
 #ifdef __cplusplus
 }

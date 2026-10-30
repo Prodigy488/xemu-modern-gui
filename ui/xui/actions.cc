@@ -24,6 +24,7 @@
 #include "../xemu-notifications.h"
 #include "snapshot-manager.hh"
 #include "game-library.hh"
+#include "folder-disc.hh"
 #include <filesystem>
 
 void ActionEjectDisc(void)
@@ -70,6 +71,14 @@ void ActionLoadGameFolder(void)
 
 void ActionLoadDiscFile(const char *file_path)
 {
+    // A game folder plays from a disc image built from it, once
+    if (FolderDiscNeedsPrepare(file_path)) {
+        std::string folder = file_path;
+        std::string name = std::filesystem::u8path(folder).filename().u8string();
+        FolderDiscPrepare(folder, name,
+                          [folder] { ActionLoadDiscFile(folder.c_str()); });
+        return;
+    }
     Error *err = NULL;
     xemu_load_disc(file_path, &err);
 

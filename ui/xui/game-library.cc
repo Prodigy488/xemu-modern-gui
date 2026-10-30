@@ -38,6 +38,7 @@
 #include "game-perf.hh"
 #include "ui-prof.hh"
 #include "game-library-scan.hh"
+#include "folder-disc.hh"
 #include "rtx-video.hh"
 #include "xbox-drive-explorer.hh"
 #include "perf-capture.hh"
@@ -7670,6 +7671,7 @@ void InsigniaSetupPump();
 
 void StorePump()
 {
+    FolderDiscPump();
     HomebrewPump();
     InsigniaSetupPump();
     std::vector<std::function<void()>> fns;
@@ -10542,6 +10544,11 @@ void LaunchNow(const std::string &path)
     LibraryEntry *e = FindEntry(path);
     std::string name = e ? e->DisplayName() : fs::u8path(path).stem().u8string();
     RequestPreviewStop();
+    // A game folder plays from a disc image built from it, once
+    if (FolderDiscNeedsPrepare(path)) {
+        FolderDiscPrepare(path, name, [path] { LaunchNow(path); });
+        return;
+    }
     std::string load_path = path;
     if (e) {
         std::string error;

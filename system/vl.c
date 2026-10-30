@@ -3090,11 +3090,11 @@ void qemu_init(int argc, char **argv)
         }
     }
 
-    // A game folder is laid out as a disc on the spot (see block/xplan.c)
+    // A game folder starts from the disc image the library built for it
     char *folder_disc = NULL;
     if (dvd_path && dvd_path[0] && g_file_test(dvd_path, G_FILE_TEST_IS_DIR)) {
         char *folder_err = NULL;
-        folder_disc = xemu_folder_disc_prepare(dvd_path, &folder_err);
+        folder_disc = xemu_folder_disc_ready(dvd_path, &folder_err);
         if (folder_disc) {
             dvd_path = folder_disc;
         } else {

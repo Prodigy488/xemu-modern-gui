@@ -2113,8 +2113,11 @@ void pgraph_vk_init_surfaces(PGRAPHState *pg)
     // Check if the device supports preferred VK_FORMAT_D24_UNORM_S8_UINT
     // format, fall back to D32_SFLOAT_S8_UINT otherwise.
     r->kelvin_surface_zeta_vk_map[NV097_SET_SURFACE_FORMAT_ZETA_Z16] = zeta_d16;
-    if (check_surface_internal_formats_supported(r, &zeta_d24_unorm_s8_uint,
-                                                 1)) {
+    bool want_d32 = pgraph_vk_exp(VK_EXP_D32) &&
+                    check_surface_internal_formats_supported(
+                        r, &zeta_d32_sfloat_s8_uint, 1);
+    if (!want_d32 && check_surface_internal_formats_supported(
+                         r, &zeta_d24_unorm_s8_uint, 1)) {
         r->kelvin_surface_zeta_vk_map[NV097_SET_SURFACE_FORMAT_ZETA_Z24S8] =
             zeta_d24_unorm_s8_uint;
     } else if (check_surface_internal_formats_supported(

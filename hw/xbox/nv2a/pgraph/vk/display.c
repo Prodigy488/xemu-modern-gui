@@ -607,33 +607,54 @@ static void blackdet_write_ppm(const char *name, const uint8_t *rgba,
 }
 
 /* Scene probe: right after a submission has settled, read the 007 scene
- * surface (colour at 0x..d04000) back and log its mean colour / alpha / lit
- * share into the draw ring. Comparing the probes of a dark frame with those of
- * a good one shows at which step of the frame the scene turns black. */
-void pgraph_vk_blackdet_probe_scene(PGRAPHState *pg, bool flip)
+ * colour surface (0x..d04000) and its depth surface (0x..980000) back and log
+ * their statistics into the draw ring (P = mean colour/alpha/% lit,
+ * Z = mean/min/max depth and % of texels at the far plane). The colour images
+ * are also kept (last few) so they can be written out when a dark picture
+ * turns up. Comparing the probes of a dark frame with a good one shows at
+ * which step of the frame the scene turns black. */
+#define SCENE_IMGS 8
+static struct {
+    unsigned w, h, frame, idx;
+    uint8_t *data;
+} scene_imgs[SCENE_IMGS];
+static unsigned scene_img_n;
+
+void pgraph_vk_blackdet_scene_dump(const char *prefix)
+{
+    unsigned n = MIN(scene_img_n, SCENE_IMGS);
+    for (unsigned k = n; k > 0; k--) {
+        unsigned slot = (scene_img_n - k) % SCENE_IMGS;
+        unsigned w = scene_imgs[slot].w, h = scene_imgs[slot].h;
+        if (!scene_imgs[slot].data || w < 2 || h < 2) {
+            continue;
+        }
+        unsigned hw = w / 2, hh = h / 2;
+        uint8_t *half = g_malloc((size_t)hw * hh * 4);
+        for (unsigned y = 0; y < hh; y++) {
+            for (unsigned x = 0; x < hw; x++) {
+                memcpy(half + ((size_t)y * hw + x) * 4,
+                       scene_imgs[slot].data + ((size_t)y * 2 * w + x * 2) * 4,
+                       4);
+            }
+        }
+        char name[96];
+        snprintf(name, sizeof(name), "xemu-scene-%s-f%u-p%u.ppm", prefix,
+                 scene_imgs[slot].frame, scene_imgs[slot].idx);
+        blackdet_write_ppm(name, half, hw, hh);
+        g_free(half);
+    }
+    fprintf(stderr, "nv2a: BLACKDET scene images written (%s)\n", prefix);
+}
+
+static const uint8_t *probe_readback(PGRAPHState *pg, SurfaceBinding *s,
+                                     unsigned *pw, unsigned *ph)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
     static VkBuffer buf;
     static VmaAllocation alloc;
     static uint8_t *mapped;
     static size_t buf_size;
-    static unsigned long last_dt;
-
-    SurfaceBinding *s = NULL, *it;
-    QTAILQ_FOREACH(it, &r->surfaces, entry) {
-        if (it->color && (it->vram_addr & 0xffffff) == 0xd04000) {
-            s = it;
-            break;
-        }
-    }
-    if (!s || r->in_command_buffer || s->in_shader_read ||
-        s->image == VK_NULL_HANDLE || s->host_fmt.host_bytes_per_pixel != 4) {
-        return;
-    }
-    if (!flip && s->draw_time == last_dt) {
-        return;
-    }
-    last_dt = s->draw_time;
 
     unsigned w = s->width, h = s->height;
     pgraph_apply_scaling_factor(pg, &w, &h);
@@ -665,7 +686,8 @@ void pgraph_vk_blackdet_probe_scene(PGRAPHState *pg, bool flip)
                                       pgraph_vk_surface_base_layout(s),
                                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     VkBufferImageCopy region = {
-        .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        .imageSubresource = { s->color ? VK_IMAGE_ASPECT_COLOR_BIT :
+                                         VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1 },
         .imageExtent = { w, h, 1 },
     };
     vkCmdCopyImageToBuffer(cmd, s->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -687,23 +709,113 @@ void pgraph_vk_blackdet_probe_scene(PGRAPHState *pg, bool flip)
                          NULL);
     pgraph_vk_end_single_time_commands(pg, cmd);
     vmaInvalidateAllocation(r->allocator, alloc, 0, VK_WHOLE_SIZE);
+    *pw = w;
+    *ph = h;
+    return mapped;
+}
 
-    uint64_t sum = 0, suma = 0, lit = 0, n = 0;
-    for (unsigned y = 0; y < h; y += 2) {
-        const uint8_t *row = mapped + (size_t)y * w * 4;
-        for (unsigned x = 0; x < w; x += 5) {
-            const uint8_t *px = row + x * 4;
-            unsigned c = px[0] + px[1] + px[2];
-            sum += c;
-            suma += px[3];
-            lit += c > 30;
-            n++;
-        }
+void pgraph_vk_blackdet_probe_scene(PGRAPHState *pg, bool flip)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    static long last_dt[2];
+    static unsigned img_frame = ~0u, img_idx;
+
+    if (r->in_command_buffer) {
+        return;
     }
-    if (n) {
-        pgraph_vk_draw_ring_event(
-            pg, flip ? "probeF" : "probe", s->vram_addr,
-            (int)((sum / n / 3) | ((suma / n) << 8) | ((lit * 100 / n) << 16)));
+    for (int pass = 0; pass < 2; pass++) {
+        const bool zeta = pass == 1;
+        SurfaceBinding *s = NULL, *it;
+        QTAILQ_FOREACH(it, &r->surfaces, entry) {
+            if ((it->vram_addr & 0xffffff) == (zeta ? 0x980000 : 0xd04000) &&
+                it->color == !zeta) {
+                s = it;
+                break;
+            }
+        }
+        if (!s || s->in_shader_read || s->image == VK_NULL_HANDLE) {
+            continue;
+        }
+        if (zeta ? (s->host_fmt.vk_format != VK_FORMAT_D24_UNORM_S8_UINT &&
+                    s->host_fmt.vk_format != VK_FORMAT_D32_SFLOAT_S8_UINT) :
+                   (s->host_fmt.host_bytes_per_pixel != 4)) {
+            continue;
+        }
+        if (!flip && s->draw_time == last_dt[pass]) {
+            continue;
+        }
+        last_dt[pass] = s->draw_time;
+
+        unsigned w, h;
+        const uint8_t *px = probe_readback(pg, s, &w, &h);
+        uint64_t n = 0;
+        if (!zeta) {
+            uint64_t sum = 0, suma = 0, lit = 0;
+            for (unsigned y = 0; y < h; y += 2) {
+                const uint8_t *row = px + (size_t)y * w * 4;
+                for (unsigned x = 0; x < w; x += 5) {
+                    const uint8_t *q = row + x * 4;
+                    unsigned c = q[0] + q[1] + q[2];
+                    sum += c;
+                    suma += q[3];
+                    lit += c > 30;
+                    n++;
+                }
+            }
+            if (n) {
+                pgraph_vk_draw_ring_event(
+                    pg, flip ? "probeF" : "probe", s->vram_addr,
+                    (int)((sum / n / 3) | ((suma / n) << 8) |
+                          ((lit * 100 / n) << 16)));
+            }
+            /* keep the image */
+            unsigned fr = pgraph_vk_draw_ring_cur_frame() - (flip ? 1 : 0);
+            if (fr != img_frame) {
+                img_frame = fr;
+                img_idx = 0;
+            }
+            unsigned slot = scene_img_n++ % SCENE_IMGS;
+            scene_imgs[slot].data =
+                g_realloc(scene_imgs[slot].data, (size_t)w * h * 4);
+            memcpy(scene_imgs[slot].data, px, (size_t)w * h * 4);
+            scene_imgs[slot].w = w;
+            scene_imgs[slot].h = h;
+            scene_imgs[slot].frame = fr;
+            scene_imgs[slot].idx = img_idx++;
+        } else {
+            const bool f32 = s->host_fmt.vk_format ==
+                             VK_FORMAT_D32_SFLOAT_S8_UINT;
+            double sum = 0, mn = 1.0, mx = 0.0;
+            uint64_t at_far = 0;
+            for (unsigned y = 0; y < h; y += 2) {
+                const uint32_t *row = (const uint32_t *)px + (size_t)y * w;
+                for (unsigned x = 0; x < w; x += 5) {
+                    double v;
+                    if (f32) {
+                        float fv;
+                        memcpy(&fv, &row[x], 4);
+                        v = fv;
+                    } else {
+                        v = (row[x] & 0xffffff) / 16777215.0;
+                    }
+                    if (v < 0.0) v = 0.0;
+                    if (v > 1.0) v = 1.0;
+                    sum += v;
+                    mn = MIN(mn, v);
+                    mx = MAX(mx, v);
+                    at_far += v >= 0.99999;
+                    n++;
+                }
+            }
+            if (n) {
+                pgraph_vk_draw_ring_event(
+                    pg, flip ? "probeZF" : "probeZ", s->vram_addr,
+                    (int)(((unsigned)(sum / n * 255)) |
+                          ((unsigned)(mn * 255) << 8) |
+                          ((unsigned)(mx * 255) << 16) |
+                          ((unsigned)(at_far * 100 / n) << 24)));
+            }
+        }
     }
 }
 
@@ -825,12 +937,21 @@ static void blackdet_check(PGRAPHState *pg, SurfaceBinding *surface)
             seq_dumped++;
             pgraph_vk_draw_ring_seq(pg, 1, "DIMSEQ");
             pgraph_vk_draw_ring_seq(pg, 2, "DIMSEQ");
+            if (seq_dumped <= 4) {
+                pgraph_vk_draw_ring_states(pg, 1, "DIMSTATE");
+                pgraph_vk_draw_ring_texsum(pg, 1, "DIMTEX");
+            }
         }
         /* Save only after the boot screens (the picture had been lit) and
          * not more than once in 300 pictures. */
         if (saved < 8 && ema > 40.0 && shown - last_saved > 300) {
             last_saved = shown;
             char name[64];
+            if (saved < 2) {
+                char pre[16];
+                snprintf(pre, sizeof(pre), "bad%u", saved);
+                pgraph_vk_blackdet_scene_dump(pre);
+            }
             snprintf(name, sizeof(name), "xemu-blackdet-%u-bad.ppm", saved);
             blackdet_write_ppm(name, mapped, w, h);
             if (good && good_w == w && good_h == h) {
@@ -855,6 +976,13 @@ static void blackdet_check(PGRAPHState *pg, SurfaceBinding *surface)
             if (goodseq < 6) {
                 goodseq++;
                 pgraph_vk_draw_ring_seq(pg, 1, "GOODSEQ");
+                if (goodseq <= 3) {
+                    pgraph_vk_draw_ring_states(pg, 1, "GOODSTATE");
+                    pgraph_vk_draw_ring_texsum(pg, 1, "GOODTEX");
+                }
+                if (goodseq == 2) {
+                    pgraph_vk_blackdet_scene_dump("good");
+                }
             }
         }
         (void)prev_bad_before;
@@ -1493,6 +1621,46 @@ void pgraph_vk_render_display(PGRAPHState *pg)
     }
 }
 
+
+unsigned pgraph_vk_exp_sync_n(void);
+unsigned pgraph_vk_exp_mask(void)
+{
+    static int parsed;
+    static unsigned mask;
+    if (!parsed) {
+        parsed = 1;
+        const char *e = getenv("XEMU_VK_EXP");
+        if (e && e[0]) {
+            if (strstr(e, "nodyn"))        mask |= VK_EXP_NODYN;
+            if (strstr(e, "barrier"))      mask |= VK_EXP_BARRIER;
+            if (strstr(e, "noasync"))      mask |= VK_EXP_NOASYNC;
+            if (strstr(e, "noalphaclear")) mask |= VK_EXP_NOALPHACLEAR;
+            if (strstr(e, "d32"))          mask |= VK_EXP_D32;
+        }
+        fprintf(stderr, "nv2a: XEMU_VK_EXP=\"%s\" -> mask 0x%x (nodyn=%d "
+                "barrier=%d noasync=%d noalphaclear=%d d32=%d sync=%u)\n",
+                e ? e : "", mask, !!(mask & VK_EXP_NODYN),
+                !!(mask & VK_EXP_BARRIER), !!(mask & VK_EXP_NOASYNC),
+                !!(mask & VK_EXP_NOALPHACLEAR), !!(mask & VK_EXP_D32),
+                pgraph_vk_exp_sync_n());
+    }
+    return mask;
+}
+
+unsigned pgraph_vk_exp_sync_n(void)
+{
+    static int parsed;
+    static unsigned n;
+    if (!parsed) {
+        parsed = 1;
+        const char *e = getenv("XEMU_VK_EXP");
+        const char *p = e ? strstr(e, "sync") : NULL;
+        if (p) {
+            n = (unsigned)atoi(p + 4);
+        }
+    }
+    return n;
+}
 
 unsigned pgraph_vk_off_mask(void)
 {

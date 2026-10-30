@@ -2331,12 +2331,27 @@ static void flush_memory_buffer(PGRAPHState *pg, VkCommandBuffer cmd)
                          barriers, 0, NULL);
 }
 
+static void exp_full_barrier(VkCommandBuffer cmd)
+{
+    VkMemoryBarrier mb = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+    };
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &mb, 0, NULL,
+                         0, NULL);
+}
+
 static void begin_render_pass(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
 
     assert(r->in_command_buffer);
     assert(!r->in_render_pass);
+    if (pgraph_vk_exp(VK_EXP_BARRIER)) {
+        exp_full_barrier(r->command_buffer);
+    }
 
     nv2a_profile_inc_counter(NV2A_PROF_PIPELINE_RENDERPASSES);
 
@@ -2391,6 +2406,9 @@ static void end_render_pass(PGRAPHVkState *r)
         }
         vkCmdEndRenderPass(r->command_buffer);
         r->in_render_pass = false;
+        if (pgraph_vk_exp(VK_EXP_BARRIER)) {
+            exp_full_barrier(r->command_buffer);
+        }
     }
 }
 
@@ -2534,6 +2552,9 @@ const enum NV2A_PROF_COUNTERS_ENUM finish_reason_to_counter_enum[] = {
  * early). The others settle everything. */
 static bool finish_is_async(FinishReason why)
 {
+    if (pgraph_vk_exp(VK_EXP_NOASYNC)) {
+        return false;
+    }
     return why == VK_FINISH_REASON_STALLED ||
            why == VK_FINISH_REASON_SURFACE_DOWN ||
            why == VK_FINISH_REASON_SURFACE_UP ||
@@ -2932,6 +2953,7 @@ static void emit_dynamic_state(PGRAPHState *pg, bool force)
     PGRAPHVkState *r = pg->vk_renderer_state;
     VkCommandBuffer cmd = r->command_buffer;
 
+    force = force || pgraph_vk_exp(VK_EXP_NODYN);
     uint32_t blend = pgraph_reg_r(pg, NV_PGRAPH_BLEND);
     uint32_t blendcolor = pgraph_reg_r(pg, NV_PGRAPH_BLENDCOLOR);
     uint32_t control_0 = pgraph_reg_r(pg, NV_PGRAPH_CONTROL_0);
@@ -3419,6 +3441,13 @@ void pgraph_vk_draw_end(NV2AState *d)
             r->eager_draw_count = eager_draws;
         }
     }
+
+    static unsigned sync_cnt;
+    const unsigned sync_n = pgraph_vk_exp_sync_n();
+    if (sync_n && r->in_command_buffer && ++sync_cnt >= sync_n) {
+        sync_cnt = 0;
+        pgraph_vk_finish(pg, VK_FINISH_REASON_NEED_BUFFER_SPACE);
+    }
 }
 
 
@@ -3435,7 +3464,7 @@ typedef struct DrawRec {
     hwaddr ev_addr;
     int ev_val;
     unsigned frame;
-    uint32_t ctl0, ctl1, blend, raster;
+    uint32_t ctl0, ctl1, blend, raster, shader;
     struct {
         bool on;
         hwaddr addr;
@@ -3472,6 +3501,7 @@ void pgraph_vk_draw_ring_record(PGRAPHState *pg)
     d->ctl1 = pgraph_reg_r(pg, NV_PGRAPH_CONTROL_1);
     d->blend = pgraph_reg_r(pg, NV_PGRAPH_BLEND);
     d->raster = pgraph_reg_r(pg, NV_PGRAPH_SETUPRASTER);
+    d->shader = (uint32_t)(((uintptr_t)r->shader_binding >> 4) & 0xffffff);
     for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
         TextureBinding *b = r->texture_bindings[i];
         if (!b) {
@@ -3580,7 +3610,8 @@ void pgraph_vk_draw_ring_event(PGRAPHState *pg, const char *what, hwaddr addr,
     d->ev_val = val;
     d->frame = ring_frame;
     d->draw_time = pg->draw_time;
-    if (!strcmp(what, "probeF") && ring_frame) {
+    if (!strncmp(what, "probe", 5) && what[strlen(what) - 1] == 'F' &&
+        ring_frame) {
         d->frame = ring_frame - 1;
     }
     if (!strcmp(what, "finish") && val == VK_FINISH_REASON_FLIP_STALL) {
@@ -3656,6 +3687,14 @@ void pgraph_vk_draw_ring_seq(PGRAPHState *pg, unsigned back, const char *tag)
                                 (unsigned)d->ev_val & 0xff,
                                 ((unsigned)d->ev_val >> 8) & 0xff,
                                 ((unsigned)d->ev_val >> 16) & 0xff);
+            } else if (!strcmp(d->ev, "probeZ") || !strcmp(d->ev, "probeZF")) {
+                len += snprintf(line + len, sizeof(line) - len,
+                                "%sZ%u/%u/%u/far%u%% ",
+                                !strcmp(d->ev, "probeZF") ? "P" : "",
+                                (unsigned)d->ev_val & 0xff,
+                                ((unsigned)d->ev_val >> 8) & 0xff,
+                                ((unsigned)d->ev_val >> 16) & 0xff,
+                                ((unsigned)d->ev_val >> 24) & 0x7f);
             } else if (!strcmp(d->ev, "dlm")) {
                 len += snprintf(line + len, sizeof(line) - len,
                                 "ram:%x=%u(%ux%u) ",
@@ -3674,9 +3713,11 @@ void pgraph_vk_draw_ring_seq(PGRAPHState *pg, unsigned back, const char *tag)
         }
         if (d->clear) {
             FLUSHRUN(); OUT();
-            len += snprintf(line + len, sizeof(line) - len, "C%02x@%x/%x ",
-                            d->clear_param, (unsigned)(d->color & 0xffffff),
-                            (unsigned)(d->zeta & 0xffffff));
+            len += snprintf(line + len, sizeof(line) - len,
+                            "C%02x@%x/%x{c%08x z%08x r%x,%x} ", d->clear_param,
+                            (unsigned)(d->color & 0xffffff),
+                            (unsigned)(d->zeta & 0xffffff), d->clear_color,
+                            d->clear_zs, d->rectx, d->recty);
             continue;
         }
         if (run && (d->color != rc || d->zeta != rz)) {
@@ -3692,6 +3733,136 @@ void pgraph_vk_draw_ring_seq(PGRAPHState *pg, unsigned back, const char *tag)
     #undef FLUSHRUN
 }
 
+
+unsigned pgraph_vk_draw_ring_cur_frame(void)
+{
+    return ring_frame;
+}
+
+/* Distinct draw states of one frame (target, depth/alpha/blend/raster
+ * registers, shader), in order of first use, with the draw counts. */
+void pgraph_vk_draw_ring_states(PGRAPHState *pg, unsigned back,
+                                const char *tag)
+{
+    unsigned n = MIN(draw_ring_n, DRAW_RING);
+    if (back > ring_frame) {
+        return;
+    }
+    unsigned fr = ring_frame - back;
+    struct { hwaddr c, z; uint32_t a, b, c2, d, sh; unsigned cnt; int t; } st[48];
+    int ns = 0, lost = 0;
+    for (unsigned k = n; k > 0; k--) {
+        DrawRec *d = &draw_ring[(draw_ring_n - k) % DRAW_RING];
+        if (d->frame != fr || d->ev || d->clear) {
+            continue;
+        }
+        int j;
+        for (j = 0; j < ns; j++) {
+            if (st[j].c == d->color && st[j].z == d->zeta &&
+                st[j].a == d->ctl0 && st[j].b == d->ctl1 &&
+                st[j].c2 == d->blend && st[j].d == d->raster &&
+                st[j].sh == d->shader) {
+                break;
+            }
+        }
+        if (j == ns) {
+            if (ns == ARRAY_SIZE(st)) {
+                lost++;
+                continue;
+            }
+            st[ns].c = d->color; st[ns].z = d->zeta; st[ns].a = d->ctl0;
+            st[ns].b = d->ctl1; st[ns].c2 = d->blend; st[ns].d = d->raster;
+            st[ns].sh = d->shader; st[ns].cnt = 0; st[ns].t = d->draw_time;
+            ns++;
+        }
+        st[j].cnt++;
+    }
+    fprintf(stderr, "nv2a: BLACKDET   [%s] states of frame -%u (%d distinct%s):\n",
+            tag, back, ns, lost ? ", more not shown" : "");
+    for (int j = 0; j < ns; j++) {
+        fprintf(stderr, "nv2a: BLACKDET   [%s]   @%d %x/%x ctl0 %08x ctl1 %08x "
+                "blend %08x raster %08x shader %06x x%u\n", tag, st[j].t,
+                (unsigned)(st[j].c & 0xffffff), (unsigned)(st[j].z & 0xffffff),
+                st[j].a, st[j].b, st[j].c2, st[j].d, st[j].sh, st[j].cnt);
+    }
+}
+
+/* What the no-depth draws onto the scene surface (the post-processing pass
+ * and the HUD) sample: distinct texture sets with counts and the age, in
+ * draws, of the surface content they read. */
+void pgraph_vk_draw_ring_texsum(PGRAPHState *pg, unsigned back,
+                                const char *tag)
+{
+    unsigned n = MIN(draw_ring_n, DRAW_RING);
+    if (back > ring_frame) {
+        return;
+    }
+    unsigned fr = ring_frame - back;
+    typedef struct { bool on, borrowed; uint8_t src; hwaddr addr, sa;
+                     unsigned w, h, fmt; } TK;
+    struct { TK t[NV2A_MAX_TEXTURES]; unsigned cnt; int first;
+             int amin, amax; } st[32];
+    int ns = 0;
+    for (unsigned k = n; k > 0; k--) {
+        DrawRec *d = &draw_ring[(draw_ring_n - k) % DRAW_RING];
+        if (d->frame != fr || d->ev || d->clear || d->zeta ||
+            (d->color & 0xffffff) != 0xd04000) {
+            continue;
+        }
+        TK key[NV2A_MAX_TEXTURES];
+        memset(key, 0, sizeof(key));
+        int age = -1;
+        for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
+            key[i].on = d->tex[i].on; key[i].borrowed = d->tex[i].borrowed;
+            key[i].src = d->tex[i].src; key[i].addr = d->tex[i].addr;
+            key[i].sa = d->tex[i].sa; key[i].w = d->tex[i].w;
+            key[i].h = d->tex[i].h; key[i].fmt = d->tex[i].fmt;
+            if (d->tex[i].on && d->tex[i].sdraw > 0 &&
+                d->draw_time - d->tex[i].sdraw > age) {
+                age = d->draw_time - d->tex[i].sdraw;
+            }
+        }
+        int j;
+        for (j = 0; j < ns; j++) {
+            if (!memcmp(st[j].t, key, sizeof(key))) {
+                break;
+            }
+        }
+        if (j == ns) {
+            if (ns == ARRAY_SIZE(st)) {
+                continue;
+            }
+            memcpy(st[ns].t, key, sizeof(key));
+            st[ns].cnt = 0; st[ns].first = d->draw_time;
+            st[ns].amin = st[ns].amax = age;
+            ns++;
+        }
+        st[j].cnt++;
+        st[j].amin = MIN(st[j].amin, age);
+        st[j].amax = MAX(st[j].amax, age);
+    }
+    fprintf(stderr, "nv2a: BLACKDET   [%s] no-depth scene-target texture sets "
+            "of frame -%u (%d distinct):\n", tag, back, ns);
+    for (int j = 0; j < ns; j++) {
+        fprintf(stderr, "nv2a: BLACKDET   [%s]   @%d x%u age %d..%d:", tag,
+                st[j].first, st[j].cnt, st[j].amin, st[j].amax);
+        for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
+            if (!st[j].t[i].on) {
+                continue;
+            }
+            fprintf(stderr, " t%d %x %ux%u f%x src%u%s%s", i,
+                    (unsigned)(st[j].t[i].addr & 0xffffff), st[j].t[i].w,
+                    st[j].t[i].h, st[j].t[i].fmt, st[j].t[i].src,
+                    st[j].t[i].borrowed ? " brw" : "",
+                    st[j].t[i].src ? "" : "");
+            if (st[j].t[i].src) {
+                fprintf(stderr, " surf %x", (unsigned)(st[j].t[i].sa & 0xffffff));
+            }
+            fprintf(stderr, ";");
+        }
+        fprintf(stderr, "\n");
+    }
+}
 
 unsigned pgraph_vk_draw_ring_frame_draws(unsigned back)
 {
@@ -4242,6 +4413,10 @@ void pgraph_vk_clear_surface(NV2AState *d, uint32_t parameter)
     r->clear_parameter = parameter;
     if (pgraph_vk_blackdet_enabled()) {
         pgraph_vk_draw_ring_record_clear(pg, parameter);
+    }
+    if (pgraph_vk_exp(VK_EXP_NOALPHACLEAR) && (parameter & 0xf3) == 0x80) {
+        pg->clearing = false;
+        return;
     }
 
     uint32_t clearrectx = pgraph_reg_r(pg, NV_PGRAPH_CLEARRECTX);

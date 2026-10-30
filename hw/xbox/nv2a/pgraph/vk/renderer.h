@@ -858,6 +858,28 @@ enum {
     VK_OFF_EAGER    = 1 << 4, /* submit every N draws */
 };
 unsigned pgraph_vk_off_mask(void);
+
+/* Experiments, no rebuild needed: XEMU_VK_EXP=nodyn,barrier,noasync,
+ * noalphaclear,d32,sync<N> (comma list). */
+enum {
+    VK_EXP_NODYN        = 1 << 0, /* always re-emit all dynamic state */
+    VK_EXP_BARRIER      = 1 << 1, /* full memory barrier around render passes */
+    VK_EXP_NOASYNC      = 1 << 2, /* every submission synchronous */
+    VK_EXP_NOALPHACLEAR = 1 << 3, /* skip alpha-only surface clears */
+    VK_EXP_D32          = 1 << 4, /* 32-bit float depth instead of 24-bit */
+};
+unsigned pgraph_vk_exp_mask(void);
+unsigned pgraph_vk_exp_sync_n(void);
+static inline bool pgraph_vk_exp(unsigned bit)
+{
+    return pgraph_vk_exp_mask() & bit;
+}
+unsigned pgraph_vk_draw_ring_cur_frame(void);
+void pgraph_vk_draw_ring_states(PGRAPHState *pg, unsigned back,
+                                const char *tag);
+void pgraph_vk_draw_ring_texsum(PGRAPHState *pg, unsigned back,
+                                const char *tag);
+void pgraph_vk_blackdet_scene_dump(const char *prefix);
 bool pgraph_vk_blackdet_enabled(void);
 void pgraph_vk_draw_ring_record(PGRAPHState *pg);
 void pgraph_vk_draw_ring_dump(PGRAPHState *pg, hwaddr scan_addr);

@@ -835,7 +835,8 @@ static void evict_surface(NV2AState *d, SurfaceBinding *s)
 {
     PGRAPHVkState *r = d->pgraph.vk_renderer_state;
 
-    if (!pgraph_writeback_dead(d, s->vram_addr, s->size, s->cpu_reads)) {
+    if (pgraph_vk_off(VK_OFF_WB) ||
+        !pgraph_writeback_dead(d, s->vram_addr, s->size, s->cpu_reads)) {
         pgraph_vk_surface_download_if_dirty(d, s);
     } else {
         pgraph_writeback_record_discard(&d->pgraph, s->vram_addr, s->size);
@@ -1651,7 +1652,7 @@ static void eager_submit_at_switch(PGRAPHState *pg)
     PGRAPHVkState *r = pg->vk_renderer_state;
 
     r->rt_switches++;
-    if (!r->in_command_buffer) {
+    if (!r->in_command_buffer || pgraph_vk_off(VK_OFF_RTSWITCH)) {
         return;
     }
     unsigned interval = r->eager_interval;

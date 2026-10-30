@@ -1180,3 +1180,28 @@ void pgraph_vk_render_display(PGRAPHState *pg)
 
     render_display(pg, surface);
 }
+
+
+unsigned pgraph_vk_off_mask(void)
+{
+    static int parsed;
+    static unsigned mask;
+    if (!parsed) {
+        const char *e = getenv("XEMU_VK_OFF");
+        if (e && e[0]) {
+            bool all = strstr(e, "all") != NULL;
+            if (all || strstr(e, "borrow"))   mask |= VK_OFF_BORROW;
+            if (all || strstr(e, "wb"))       mask |= VK_OFF_WB;
+            if (all || strstr(e, "hash"))     mask |= VK_OFF_HASH;
+            if (all || strstr(e, "rtswitch")) mask |= VK_OFF_RTSWITCH;
+            if (all || strstr(e, "eager"))    mask |= VK_OFF_EAGER;
+        }
+        fprintf(stderr, "nv2a: XEMU_VK_OFF=\"%s\" -> off mask 0x%x "
+                "(borrow=%d wb=%d hash=%d rtswitch=%d eager=%d)\n",
+                e ? e : "", mask, !!(mask & VK_OFF_BORROW),
+                !!(mask & VK_OFF_WB), !!(mask & VK_OFF_HASH),
+                !!(mask & VK_OFF_RTSWITCH), !!(mask & VK_OFF_EAGER));
+        parsed = 1;
+    }
+    return mask;
+}

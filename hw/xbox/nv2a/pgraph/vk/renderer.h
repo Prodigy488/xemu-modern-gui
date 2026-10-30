@@ -841,6 +841,22 @@ void pgraph_vk_finalize_display(PGRAPHState *pg);
 void pgraph_vk_render_display(PGRAPHState *pg);
 void pgraph_vk_display_miss(NV2AState *d, const char *where);
 
+/* Bisecting aid: XEMU_VK_OFF=borrow,wb,hash,rtswitch,eager (comma list, or
+ * "all") turns the named fork-only optimisations off so the code path is the
+ * plain one. Parsed once; logs what it switched off. */
+enum {
+    VK_OFF_BORROW   = 1 << 0, /* in-place sampling of render surfaces */
+    VK_OFF_WB       = 1 << 1, /* lazy / dead writeback on eviction */
+    VK_OFF_HASH     = 1 << 2, /* once-per-frame texture revalidation */
+    VK_OFF_RTSWITCH = 1 << 3, /* submit at render-target switch */
+    VK_OFF_EAGER    = 1 << 4, /* submit every N draws */
+};
+unsigned pgraph_vk_off_mask(void);
+static inline bool pgraph_vk_off(unsigned bit)
+{
+    return (pgraph_vk_off_mask() & bit) != 0;
+}
+
 // texture.c
 void pgraph_vk_init_textures(PGRAPHState *pg);
 void pgraph_vk_finalize_textures(PGRAPHState *pg);

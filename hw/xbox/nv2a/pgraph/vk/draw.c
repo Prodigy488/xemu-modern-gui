@@ -3380,7 +3380,7 @@ void pgraph_vk_draw_end(NV2AState *d)
         const char *e = getenv("XEMU_VK_EAGER");
         eager_cfg = e && e[0] ? (unsigned)atoi(e) :
                     (unsigned)MAX(0, g_config.perf.vk_eager_draws);
-        if (!pgraph_gpu_boost()) {
+        if (!pgraph_gpu_boost() || pgraph_vk_off(VK_OFF_EAGER)) {
             eager_cfg = 0;
         }
         fprintf(stderr, "nv2a: vk early submission every %u draws%s\n",

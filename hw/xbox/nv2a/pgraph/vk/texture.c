@@ -1907,8 +1907,10 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
      * validation_frame after this call (-1 on a fresh node, which always
      * hashes). The sampler is still resolved on every bind below. */
     uint64_t content_hash = 0;
+    const bool revalidate = pgraph_vk_off(VK_OFF_HASH) ||
+                            snode->validation_frame != pg->frame_time;
     if (!surface_to_texture && !surface_to_texture_cube && possibly_dirty &&
-        snode->validation_frame != pg->frame_time) {
+        revalidate) {
         content_hash = fast_hash(texture_data, texture_length);
         if (is_indexed) {
             content_hash ^= fast_hash(palette_data, texture_palette_data_size);
@@ -1941,7 +1943,7 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
                 texture_cow_if_referenced(pg, snode, false);
                 copy_surface_to_texture(pg, surface, snode);
             }
-        } else if (snode->validation_frame != pg->frame_time) {
+        } else if (revalidate) {
             if (possibly_dirty && content_hash != snode->hash) {
                 texture_cow_if_referenced(pg, snode, true);
                 upload_texture_image(pg, texture_idx, snode);
@@ -1976,6 +1978,7 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
     /* In-place sampling: in place for the class the copy serves, minus
      * feedback, with the surface's exact VkFormat (no MUTABLE_FORMAT). */
     bool s2t_borrow =
+        !pgraph_vk_off(VK_OFF_BORROW) &&
         surface_to_texture &&
         surface != r->color_binding &&
         state.dimensionality == 2 && !state.cubemap &&
@@ -2062,7 +2065,8 @@ static bool check_textures_dirty(PGRAPHState *pg)
          * at most once per frame. HEURISTIC: a RAM change after its first
          * bind in a frame shows from the next frame on. */
         if (r->texture_bindings[i]->possibly_dirty &&
-            r->texture_bindings[i]->validation_frame != pg->frame_time) {
+            (pgraph_vk_off(VK_OFF_HASH) ||
+             r->texture_bindings[i]->validation_frame != pg->frame_time)) {
             return true;
         }
     }

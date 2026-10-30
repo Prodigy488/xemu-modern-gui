@@ -27,6 +27,7 @@
 #include "exec/cputlb.h"
 #include "tcg/helper-tcg.h"
 #include "hw/i386/apic.h"
+#include <glib/gstdio.h>
 
 void helper_outb(CPUX86State *env, uint32_t port, uint32_t data)
 {
@@ -640,6 +641,183 @@ static void xemu_dump_guest_image(CPUState *cs)
             "xemu-guest-memory.bin\n", lo, hi, mapped);
 }
 
+
+/* Debug: walk the game disc's file system the way the Xbox kernel does (a
+ * binary search of each directory's name tree) and say what it finds for a
+ * path, so a bad image shows up as a bad tree rather than a mystery. */
+const char *xemu_debug_dvd_path(void);
+
+typedef struct XdvdEnt {
+    uint16_t left, right;
+    uint32_t sector, size;
+    uint8_t attr, nlen;
+    char name[256];
+} XdvdEnt;
+
+static bool xdvd_read(FILE *f, int64_t base, uint32_t sector, uint32_t off,
+                      void *buf, size_t n)
+{
+    return fseeko(f, base + (int64_t)sector * 2048 + off, SEEK_SET) == 0 &&
+           fread(buf, 1, n, f) == n;
+}
+
+static bool xdvd_ent(FILE *f, int64_t base, uint32_t dsec, uint32_t dsize,
+                     uint32_t woff, XdvdEnt *e)
+{
+    uint8_t h[14];
+
+    if (woff * 4 + 14 > dsize || !xdvd_read(f, base, dsec, woff * 4, h, 14)) {
+        return false;
+    }
+    e->left = h[0] | h[1] << 8;
+    e->right = h[2] | h[3] << 8;
+    e->sector = ldl_le_p(h + 4);
+    e->size = ldl_le_p(h + 8);
+    e->attr = h[12];
+    e->nlen = h[13];
+    if (!xdvd_read(f, base, dsec, woff * 4 + 14, e->name, e->nlen)) {
+        return false;
+    }
+    e->name[e->nlen] = 0;
+    return true;
+}
+
+/* kernel-style lookup: walk the tree comparing names without case */
+static bool xdvd_find(FILE *f, int64_t base, uint32_t dsec, uint32_t dsize,
+                      const char *name, XdvdEnt *out, int *steps)
+{
+    uint32_t woff = 0;
+    XdvdEnt e;
+
+    for (*steps = 0; *steps < 4096; (*steps)++) {
+        int c;
+
+        if (!xdvd_ent(f, base, dsec, dsize, woff, &e)) {
+            return false;
+        }
+        c = g_ascii_strcasecmp(name, e.name);
+        if (c == 0) {
+            *out = e;
+            return true;
+        }
+        woff = c < 0 ? e.left : e.right;
+        if (!woff) {
+            return false;
+        }
+    }
+    return false;
+}
+
+/* every entry of one directory by scanning its sectors, not by the tree */
+static bool xdvd_scan(FILE *f, int64_t base, uint32_t dsec, uint32_t dsize,
+                      const char *name, XdvdEnt *out, bool list)
+{
+    uint8_t *d = g_malloc(dsize);
+    uint32_t o = 0;
+    bool found = false;
+
+    if (!xdvd_read(f, base, dsec, 0, d, dsize)) {
+        g_free(d);
+        return false;
+    }
+    while (o + 14 <= dsize) {
+        uint32_t nl = d[o + 13];
+        char nm[256];
+
+        if (ldl_le_p(d + o) == 0xffffffff) {
+            o = (o + 2048) & ~2047u;     /* padding up to the next sector */
+            continue;
+        }
+        memcpy(nm, d + o + 14, nl);
+        nm[nl] = 0;
+        if (list) {
+            fprintf(stderr, "disc:     %-28s attr %02x sector %u size %u "
+                    "(left %u right %u)\n", nm, d[o + 12],
+                    ldl_le_p(d + o + 4), ldl_le_p(d + o + 8),
+                    d[o] | d[o + 1] << 8, d[o + 2] | d[o + 3] << 8);
+        }
+        if (name && !g_ascii_strcasecmp(name, nm)) {
+            out->sector = ldl_le_p(d + o + 4);
+            out->size = ldl_le_p(d + o + 8);
+            out->attr = d[o + 12];
+            found = true;
+        }
+        o += (14 + nl + 3) & ~3u;
+    }
+    g_free(d);
+    return found;
+}
+
+static void xemu_dump_disc_tree(const char *path)
+{
+    static const int64_t bases[] = { 0, 0x18300000LL, 0x0FD90000LL,
+                                     0x30600000LL };
+    static const char *const parts[] = { "Media", "Sounds", NULL };
+    uint8_t vd[32];
+    FILE *f = g_fopen(path, "rb");
+    int64_t base = -1;
+    uint32_t dsec, dsize;
+
+    if (!f) {
+        fprintf(stderr, "disc: cannot open %s\n", path);
+        return;
+    }
+    for (size_t i = 0; i < ARRAY_SIZE(bases); i++) {
+        if (xdvd_read(f, bases[i], 32, 0, vd, 20) &&
+            !memcmp(vd, "MICROSOFT*XBOX*MEDIA*DATA", 20)) {
+            base = bases[i];
+            break;
+        }
+    }
+    if (base < 0 || !xdvd_read(f, base, 32, 20, vd, 8)) {
+        fprintf(stderr, "disc: no Xbox file system found in %s\n", path);
+        fclose(f);
+        return;
+    }
+    dsec = ldl_le_p(vd);
+    dsize = ldl_le_p(vd + 4);
+    fprintf(stderr, "disc: image offset %lld, root directory sector %u, "
+            "%u bytes\n", (long long)base, dsec, dsize);
+    for (int i = 0; i < 3; i++) {
+        XdvdEnt e = { 0 }, s = { 0 };
+        int steps = 0;
+        bool tree, scan;
+
+        if (dsize > 1 << 20) {
+            break;
+        }
+        fprintf(stderr, "disc: entries of %s directory (sector %u, %u bytes):"
+                "\n", i ? (i == 1 ? "\\Media" : "\\Media\\Sounds") : "root",
+                dsec, dsize);
+        if (!parts[i]) {
+            xdvd_scan(f, base, dsec, dsize, NULL, &s, true);
+            break;
+        }
+        tree = xdvd_find(f, base, dsec, dsize, parts[i], &e, &steps);
+        scan = xdvd_scan(f, base, dsec, dsize, parts[i], &s, true);
+        fprintf(stderr, "disc: kernel-style lookup of \"%s\": %s (%d steps)"
+                "%s; scan of the directory: %s\n", parts[i],
+                tree ? "found" : "NOT FOUND", steps,
+                tree ? "" : "", scan ? "found" : "not found");
+        if (tree) {
+            fprintf(stderr, "disc:   -> attr %02x sector %u size %u\n",
+                    e.attr, e.sector, e.size);
+        }
+        if (scan && (!tree || s.sector != e.sector)) {
+            fprintf(stderr, "disc:   scan says attr %02x sector %u size %u\n",
+                    s.attr, s.sector, s.size);
+        }
+        if (!(tree ? e.attr & 0x10 : scan && s.attr & 0x10)) {
+            fprintf(stderr, "disc:   \"%s\" is not marked as a directory\n",
+                    parts[i]);
+            break;
+        }
+        dsec = tree ? e.sector : s.sector;
+        dsize = tree ? e.size : s.size;
+    }
+    fclose(f);
+}
+
 /* The thread's FS block and its thread-local-storage array: games keep
  * their "last error" there, which says why their last failed call failed. */
 static void xemu_dump_tls(CPUState *cs, CPUX86State *env)
@@ -738,6 +916,10 @@ static void xemu_report_dead_halt(CPUX86State *env)
         xemu_dump_tls(cs, env);
     }
     if (reports == 1) {
+        const char *dvd = xemu_debug_dvd_path();
+        if (dvd && *dvd) {
+            xemu_dump_disc_tree(dvd);
+        }
         xemu_dump_guest_image(cs);
     }
     fflush(stderr);

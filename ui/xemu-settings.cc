@@ -350,6 +350,11 @@ void xemu_settings_reset_keyboard_mapping(void)
   cnode->store_to_struct(&g_config);
 }
 
+extern "C" const char *xemu_debug_dvd_path(void)
+{
+    return g_config.sys.files.dvd_path;
+}
+
 bool xemu_debug_mode(void)
 {
     static int mode = -1;

@@ -868,6 +868,9 @@ void pgraph_vk_draw_ring_timeline(PGRAPHState *pg, hwaddr scan_addr,
                                   const char *tag);
 void pgraph_vk_draw_ring_event(PGRAPHState *pg, const char *what, hwaddr addr,
                                int val);
+void pgraph_vk_draw_ring_note_picture(int mean);
+void pgraph_vk_draw_ring_frames(PGRAPHState *pg, unsigned nframes,
+                                const char *tag);
 static inline bool pgraph_vk_off(unsigned bit)
 {
     return (pgraph_vk_off_mask() & bit) != 0;

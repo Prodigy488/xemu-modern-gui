@@ -694,6 +694,7 @@ static void blackdet_check(PGRAPHState *pg, SurfaceBinding *surface)
     double lit_frac = total ? (double)lit / total : 0.0;
     double mean = total ? (double)luma / total : 0.0;
     shown++;
+    pgraph_vk_draw_ring_note_picture((int)mean);
 
     bool black = lit_frac < 0.01;
     bool dim = !black && ema > 40.0 && mean < ema * 0.3;
@@ -717,7 +718,7 @@ static void blackdet_check(PGRAPHState *pg, SurfaceBinding *surface)
                 (unsigned)surface->vram_addr, (unsigned)surface->size,
                 surface->width, surface->height, surface->draw_time, w, h);
         pgraph_vk_draw_ring_dump(pg, surface->vram_addr);
-        pgraph_vk_draw_ring_timeline(pg, surface->vram_addr, black ? "BLACK" : "DIM");
+        pgraph_vk_draw_ring_frames(pg, 6, black ? "BLACK" : "DIM");
         /* Save only after the boot screens (the picture had been lit) and
          * not more than once in 300 pictures. */
         if (saved < 8 && ema > 40.0 && shown - last_saved > 300) {
@@ -742,7 +743,7 @@ static void blackdet_check(PGRAPHState *pg, SurfaceBinding *surface)
             fprintf(stderr, "nv2a: BLACKDET GOOD picture: "
                     "shown %u, lit %.1f%%, mean %.1f\n", shown,
                     lit_frac * 100, mean);
-            pgraph_vk_draw_ring_timeline(pg, surface->vram_addr, "GOOD");
+            pgraph_vk_draw_ring_frames(pg, 3, "GOOD");
         }
         (void)prev_bad_before;
         if (good_size < need) {

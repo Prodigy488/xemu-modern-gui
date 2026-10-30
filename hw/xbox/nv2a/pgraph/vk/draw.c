@@ -2571,11 +2571,12 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
     assert(!r->in_draw);
     assert(r->debug_depth == 0);
 
+    if (pgraph_vk_blackdet_enabled() &&
+        (r->in_command_buffer ? finish_reason != VK_FINISH_REASON_EAGER :
+                                finish_reason == VK_FINISH_REASON_FLIP_STALL)) {
+        pgraph_vk_draw_ring_event(pg, "finish", 0, (int)finish_reason);
+    }
     if (r->in_command_buffer) {
-        if (pgraph_vk_blackdet_enabled() &&
-            finish_reason != VK_FINISH_REASON_EAGER) {
-            pgraph_vk_draw_ring_event(pg, "finish", 0, (int)finish_reason);
-        }
         nv2a_profile_inc_counter(finish_reason_to_counter_enum[finish_reason]);
 
         if (r->in_render_pass) {
@@ -3423,6 +3424,7 @@ typedef struct DrawRec {
     const char *ev;
     hwaddr ev_addr;
     int ev_val;
+    unsigned frame;
     uint32_t ctl0, ctl1, blend, raster;
     struct {
         bool on;
@@ -3437,12 +3439,15 @@ typedef struct DrawRec {
 #define DRAW_RING 8192
 static DrawRec draw_ring[DRAW_RING];
 static unsigned draw_ring_n;
+static unsigned ring_frame;
+static int pic_mean[64];
 
 void pgraph_vk_draw_ring_record(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
     DrawRec *d = &draw_ring[draw_ring_n++ % DRAW_RING];
     memset(d, 0, sizeof(*d));
+    d->frame = ring_frame;
     d->draw_time = pg->draw_time;
     if (r->color_binding) {
         d->color = r->color_binding->vram_addr;
@@ -3537,6 +3542,7 @@ void pgraph_vk_draw_ring_record_clear(PGRAPHState *pg, uint32_t parameter)
     DrawRec *d = &draw_ring[draw_ring_n++ % DRAW_RING];
     memset(d, 0, sizeof(*d));
     d->clear = true;
+    d->frame = ring_frame;
     d->draw_time = pg->draw_time;
     d->clear_param = parameter;
     d->clear_color = pgraph_reg_r(pg, NV_PGRAPH_COLORCLEARVALUE);
@@ -3562,7 +3568,77 @@ void pgraph_vk_draw_ring_event(PGRAPHState *pg, const char *what, hwaddr addr,
     d->ev = what;
     d->ev_addr = addr;
     d->ev_val = val;
+    d->frame = ring_frame;
     d->draw_time = pg->draw_time;
+    if (!strcmp(what, "finish") && val == VK_FINISH_REASON_FLIP_STALL) {
+        ring_frame++;
+        pic_mean[ring_frame % 64] = -1;
+    }
+}
+
+void pgraph_vk_draw_ring_note_picture(int mean)
+{
+    pic_mean[ring_frame % 64] = mean;
+}
+
+/* One line per game frame, newest first. */
+void pgraph_vk_draw_ring_frames(PGRAPHState *pg, unsigned nframes,
+                                const char *tag)
+{
+    unsigned n = MIN(draw_ring_n, DRAW_RING);
+    unsigned cur = ring_frame;
+    for (unsigned f = 0; f < nframes && f <= cur; f++) {
+        unsigned fr = cur - f;
+        unsigned draws = 0, dz = 0, clears = 0, creates = 0, uploads = 0;
+        unsigned downs = 0, invs = 0, fin_other = 0;
+        struct { hwaddr a; unsigned zc, c; } t[4] = { 0 };
+        int nt = 0;
+        bool seen = false;
+        for (unsigned k = 0; k < n; k++) {
+            DrawRec *d = &draw_ring[(draw_ring_n - 1 - k) % DRAW_RING];
+            if (d->frame != fr) {
+                if (seen) {
+                    break;
+                }
+                continue;
+            }
+            seen = true;
+            if (d->ev) {
+                if (!strcmp(d->ev, "create")) creates++;
+                else if (!strcmp(d->ev, "upload")) uploads++;
+                else if (!strcmp(d->ev, "download")) downs++;
+                else if (!strcmp(d->ev, "invalidate")) invs++;
+                else if (d->ev_val != VK_FINISH_REASON_FLIP_STALL) fin_other++;
+                continue;
+            }
+            if (d->clear) {
+                clears++;
+                continue;
+            }
+            draws++;
+            dz += d->zeta != 0;
+            int j;
+            for (j = 0; j < nt && t[j].a != d->color; j++) {
+            }
+            if (j == nt && nt < 4) {
+                t[nt].a = d->color; nt++;
+            }
+            if (j < nt) {
+                t[j].c++;
+                t[j].zc += d->zeta != 0;
+            }
+        }
+        fprintf(stderr, "nv2a: BLACKDET   [%s] frame -%u: pic mean %d, %u draws "
+                "(%u with depth), %u clears, targets", tag, f,
+                pic_mean[fr % 64], draws, dz, clears);
+        for (int j = 0; j < nt; j++) {
+            fprintf(stderr, " %x:%u/%u", (unsigned)(t[j].a & 0xffffff),
+                    t[j].zc, t[j].c);
+        }
+        fprintf(stderr, "; surf create %u upload %u download %u invalidate %u, "
+                "other finishes %u\n", creates, uploads, downs, invs,
+                fin_other);
+    }
 }
 
 /* Everything recorded between the previous draw to the scanout surface and

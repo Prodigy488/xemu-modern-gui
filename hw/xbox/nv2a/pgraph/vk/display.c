@@ -896,8 +896,50 @@ static void update_uniforms(PGRAPHState *pg, SurfaceBinding *surface)
     }
 }
 
+/* Debug: the display had no surface to show (the UI then falls back to the
+ * emulated VGA picture, which is black for a game that renders on the GPU).
+ * Logs the scanout address and the surfaces that exist, rate limited. */
+void pgraph_vk_display_miss(NV2AState *d, const char *where)
+{
+    static unsigned misses;
+    PGRAPHVkState *r = d->pgraph.vk_renderer_state;
+    VGADisplayParams p;
+    SurfaceBinding *s;
+    int n = 0;
+
+    misses++;
+    if (misses > 40 && misses % 200) {
+        return;
+    }
+    d->vga.get_params(&d->vga, &p);
+    fprintf(stderr, "nv2a: display miss #%u (%s): scanout at %08x (crtc start "
+            "%08x + line offset %u); surfaces:", misses, where,
+            (unsigned)(d->pcrtc.start + p.line_offset),
+            (unsigned)d->pcrtc.start, (unsigned)p.line_offset);
+    QTAILQ_FOREACH (s, &r->surfaces, entry) {
+        if (n++ < 12) {
+            fprintf(stderr, " [%08x+%x %s %ux%u pitch %u draw %d]",
+                    (unsigned)s->vram_addr, (unsigned)s->size,
+                    s->color ? "color" : "zeta", s->width, s->height,
+                    s->pitch, s->draw_time);
+        }
+    }
+    fprintf(stderr, " (%d total)\n", n);
+    fflush(stderr);
+}
+
 static void render_display(PGRAPHState *pg, SurfaceBinding *surface)
 {
+    static unsigned uploads;
+    if (surface->upload_pending && (++uploads <= 40 || uploads % 200 == 0)) {
+        fprintf(stderr, "nv2a: display #%u re-uploads the shown surface from "
+                "guest RAM (%08x+%x %ux%u, draw %d, cleared %d)\n", uploads,
+                (unsigned)surface->vram_addr, (unsigned)surface->size,
+                surface->width, surface->height, surface->draw_time,
+                surface->cleared);
+        fflush(stderr);
+    }
+
     NV2AState *d = container_of(pg, NV2AState, pgraph);
     PGRAPHVkState *r = pg->vk_renderer_state;
     PGRAPHVkDisplayState *disp = &r->display;
@@ -1080,6 +1122,7 @@ void pgraph_vk_render_display(PGRAPHState *pg)
         d, d->pcrtc.start + vga_display_params.line_offset);
     if (surface == NULL || !surface->color || !surface->width ||
         !surface->height) {
+        pgraph_vk_display_miss(d, "render");
         return;
     }
 

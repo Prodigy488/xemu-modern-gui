@@ -839,6 +839,7 @@ void pgraph_vk_unpack_depth_stencil(PGRAPHState *pg, SurfaceBinding *surface,
 void pgraph_vk_init_display(PGRAPHState *pg);
 void pgraph_vk_finalize_display(PGRAPHState *pg);
 void pgraph_vk_render_display(PGRAPHState *pg);
+void pgraph_vk_display_miss(NV2AState *d, const char *where);
 
 // texture.c
 void pgraph_vk_init_textures(PGRAPHState *pg);

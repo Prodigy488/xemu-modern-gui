@@ -640,6 +640,43 @@ static void xemu_dump_guest_image(CPUState *cs)
             "xemu-guest-memory.bin\n", lo, hi, mapped);
 }
 
+/* The thread's FS block and its thread-local-storage array: games keep
+ * their "last error" there, which says why their last failed call failed. */
+static void xemu_dump_tls(CPUState *cs, CPUX86State *env)
+{
+    uint32_t fsb = (uint32_t)env->segs[R_FS].base, tls = 0, v, p;
+    uint8_t buf[16];
+
+    fprintf(stderr, "guest: fs base %08x:", fsb);
+    for (int i = 0; i < 16; i++) {
+        if (cpu_memory_rw_debug(cs, fsb + 4 * i, (uint8_t *)&v, 4, false)) {
+            break;
+        }
+        if (i == 1) {
+            tls = v;
+        }
+        fprintf(stderr, " %08x", v);
+    }
+    fprintf(stderr, "\nguest: tls array at %08x:", tls);
+    for (int i = 0; i < 48; i++) {
+        if (cpu_memory_rw_debug(cs, tls + 4 * i, (uint8_t *)&p, 4, false)) {
+            break;
+        }
+        fprintf(stderr, " %08x", p);
+    }
+    for (int i = 0; i < 48; i++) {
+        if (cpu_memory_rw_debug(cs, tls + 4 * i, (uint8_t *)&p, 4, false) ||
+            p < 0x10000 || cpu_memory_rw_debug(cs, p, buf, 16, false)) {
+            continue;
+        }
+        fprintf(stderr, "\nguest:   tls[%d] -> %08x:", i, p);
+        for (int j = 0; j < 16; j++) {
+            fprintf(stderr, " %02x", buf[j]);
+        }
+    }
+    fprintf(stderr, "\n");
+}
+
 /* A guest that halts with interrupts off never wakes: say where, once per
  * halt, for the first few (a console that dies shows a black screen). */
 static void xemu_report_dead_halt(CPUX86State *env)
@@ -696,6 +733,9 @@ static void xemu_report_dead_halt(CPUX86State *env)
     fprintf(stderr, "\n");
     if (reports <= 2) {
         xemu_dump_stop_context(cs, (uint32_t)env->regs[R_ESP]);
+    }
+    if (reports <= 2) {
+        xemu_dump_tls(cs, env);
     }
     if (reports == 1) {
         xemu_dump_guest_image(cs);

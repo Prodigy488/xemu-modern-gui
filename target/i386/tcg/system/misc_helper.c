@@ -613,6 +613,33 @@ static void xemu_dump_stop_context(CPUState *cs, uint32_t esp)
     }
 }
 
+/* On the first dead halt, save the guest's low memory (the game image and
+ * its heap, 0x10000..0x800000) next to the log, so code and data can be
+ * studied offline. Unmapped pages are written as zeros. */
+static void xemu_dump_guest_image(CPUState *cs)
+{
+    const uint32_t lo = 0x10000, hi = 0x800000;
+    uint8_t page[4096];
+    FILE *f = fopen("xemu-guest-memory.bin", "wb");
+    uint32_t a, mapped = 0;
+
+    if (!f) {
+        fprintf(stderr, "guest: could not create xemu-guest-memory.bin\n");
+        return;
+    }
+    for (a = lo; a < hi; a += sizeof(page)) {
+        if (cpu_memory_rw_debug(cs, a, page, sizeof(page), false) < 0) {
+            memset(page, 0, sizeof(page));
+        } else {
+            mapped++;
+        }
+        fwrite(page, 1, sizeof(page), f);
+    }
+    fclose(f);
+    fprintf(stderr, "guest: saved %08x..%08x (%u pages mapped) to "
+            "xemu-guest-memory.bin\n", lo, hi, mapped);
+}
+
 /* A guest that halts with interrupts off never wakes: say where, once per
  * halt, for the first few (a console that dies shows a black screen). */
 static void xemu_report_dead_halt(CPUX86State *env)
@@ -669,6 +696,9 @@ static void xemu_report_dead_halt(CPUX86State *env)
     fprintf(stderr, "\n");
     if (reports <= 2) {
         xemu_dump_stop_context(cs, (uint32_t)env->regs[R_ESP]);
+    }
+    if (reports == 1) {
+        xemu_dump_guest_image(cs);
     }
     fflush(stderr);
 }

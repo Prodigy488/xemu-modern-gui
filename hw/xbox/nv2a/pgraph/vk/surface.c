@@ -507,6 +507,22 @@ static void download_surface(NV2AState *d, SurfaceBinding *surface, bool force)
 
     download_surface_to_buffer(d, surface, d->vram_ptr + surface->vram_addr);
 
+    if (pgraph_vk_blackdet_enabled() && surface->color) {
+        /* What the guest CPU will read: the mean of the bytes now in RAM. */
+        const uint8_t *p = d->vram_ptr + surface->vram_addr;
+        size_t len = (size_t)surface->pitch * surface->height;
+        uint64_t sum = 0, cnt = 0;
+        for (size_t i = 0; i < len; i += 7) {
+            sum += p[i];
+            cnt++;
+        }
+        unsigned mean = cnt ? (unsigned)(sum / cnt) : 0;
+        pgraph_vk_draw_ring_event(&d->pgraph, "dlm", surface->vram_addr,
+                                  (int)((mean & 0xff) |
+                                        ((surface->width & 0xfff) << 8) |
+                                        ((surface->height & 0xfff) << 20)));
+    }
+
     memory_region_set_client_dirty(d->vram, surface->vram_addr,
                                    surface->pitch * surface->height,
                                    DIRTY_MEMORY_VGA);

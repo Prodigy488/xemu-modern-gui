@@ -3636,6 +3636,13 @@ void pgraph_vk_draw_ring_seq(PGRAPHState *pg, unsigned back, const char *tag)
             if (!strcmp(d->ev, "finish")) {
                 len += snprintf(line + len, sizeof(line) - len, "F%s ",
                                 finish_code(d->ev_val));
+            } else if (!strcmp(d->ev, "dlm")) {
+                len += snprintf(line + len, sizeof(line) - len,
+                                "ram:%x=%u(%ux%u) ",
+                                (unsigned)(d->ev_addr & 0xffffff),
+                                (unsigned)d->ev_val & 0xff,
+                                ((unsigned)d->ev_val >> 8) & 0xfff,
+                                ((unsigned)d->ev_val >> 20) & 0xfff);
             } else {
                 len += snprintf(line + len, sizeof(line) - len, "%s:%x ",
                                 !strcmp(d->ev, "create") ? "+cr" :

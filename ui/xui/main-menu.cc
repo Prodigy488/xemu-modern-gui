@@ -220,6 +220,20 @@ void MainMenuGeneralView::Draw()
     SectionTitle(tr("Miscellaneous"));
     Toggle(tr("On-screen keyboard"), &g_config.display.ui.onscreen_keyboard,
            tr("Show a keyboard when a text box is selected with a controller"));
+    {
+        int kb = OskLayoutSettingIndex();
+        auto getter = [](void *, int i, const char **out) {
+            *out = OskLayoutItemName(i);
+            return true;
+        };
+        if (ChevronCombo(tr("Keyboard layout"), &kb, getter, nullptr,
+                         OskLayoutCount(),
+                         tr("Letters on the on-screen keyboard. By default they "
+                            "match the interface language; the key next to "
+                            "Space switches to English and back"))) {
+            OskLayoutChoose(kb);
+        }
+    }
     Toggle(tr("Skip startup animation"), &g_config.general.skip_boot_anim,
            tr("Skip the full Xbox boot animation sequence"));
     Toggle(tr("Pause when the window loses focus"), &g_config.general.pause_on_focus_loss,

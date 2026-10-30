@@ -34,7 +34,8 @@ struct Osk {
     ImGuiID target = 0;     // the text box it types into
     ImGuiID seen = 0;       // last active text box looked at
     int row = 1, col = 0;   // selected key
-    int layer = 0;          // 0 letters, 1 capitals, 2 symbols
+    int layer = 0;          // 0 letters, 1 capitals, 2 symbols, 3/4 accents
+    bool english = false;   // the layout key switched to English
     bool want_close = false, want_enter = false;
     double shown_t = -10, hidden_t = -10; // for the fade/slide in and out
     ImVec2 hl_a, hl_b;                    // animated highlight
@@ -46,14 +47,144 @@ const ImGuiID kOwner = 0x05C0FFEE; // key owner ID for the keyboard
 // Text boxes drawn this frame and the last one
 std::unordered_set<ImGuiID> g_boxes, g_boxes_prev;
 
-// Keys per layer, 10 per row; the last row is special keys
-const char *const kRows[3][4] = {
-    { "1234567890", "qwertyuiop", "asdfghjkl'", "zxcvbnm,.-" },
-    { "1234567890", "QWERTYUIOP", "ASDFGHJKL\"", "ZXCVBNM;:_" },
-    { "1234567890", "!@#$%^&*()", "-_=+[]{}\\|", ";:'\"<>/?~`" },
+// Keys per layer, 10 per row; the last row is special keys. Layers: 0 letters,
+// 1 capitals, 2 symbols (the same for every layout), 3 and 4 accented letters
+// (lower / capitals) for the layouts that have them.
+struct Layout {
+    const char *code;       // matches the interface language codes
+    const char *label;      // on the keyboard's layout key
+    const char *name;       // in the settings
+    const char32_t *rows[5][4];
+    bool accents;
 };
-enum Special { kShift, kSymbols, kSpace, kBack, kDone, kSpecialCount };
-const int kSpecialSpan[kSpecialCount] = { 2, 2, 3, 2, 1 }; // in key widths
+
+const char32_t *const kSymbolRows[4] = {
+    U"1234567890", U"!@#$%^&*()", U"-_=+[]{}\\|", U";:'\"<>/?~`"
+};
+#define SYM kSymbolRows[0], kSymbolRows[1], kSymbolRows[2], kSymbolRows[3]
+#define NOACC { nullptr, nullptr, nullptr, nullptr }
+
+const Layout kLayouts[] = {
+    { "en", "EN", "English (QWERTY)",
+      { { U"1234567890", U"qwertyuiop", U"asdfghjkl'", U"zxcvbnm,.-" },
+        { U"1234567890", U"QWERTYUIOP", U"ASDFGHJKL\"", U"ZXCVBNM;:_" },
+        { SYM }, NOACC, NOACC }, false },
+    { "fr", "FR", "Fran\xC3\xA7" "ais (AZERTY)",
+      { { U"1234567890", U"azertyuiop", U"qsdfghjklm", U"wxcvbn,.'-" },
+        { U"1234567890", U"AZERTYUIOP", U"QSDFGHJKLM", U"WXCVBN;:\"_" },
+        { SYM },
+        { U"1234567890", U"àâäçéèêëîï",
+          U"ôöùûüÿœæ«»",
+          U"€£?!.,-:;'" },
+        { U"1234567890", U"ÀÂÄÇÉÈÊËÎÏ",
+          U"ÔÖÙÛÜŸŒÆ«»",
+          U"€£?!.,-:;'" } }, true },
+    { "de", "DE", "Deutsch (QWERTZ)",
+      { { U"1234567890", U"qwertzuiop", U"asdfghjkl'", U"yxcvbnm,.-" },
+        { U"1234567890", U"QWERTZUIOP", U"ASDFGHJKL\"", U"YXCVBNM;:_" },
+        { SYM },
+        { U"1234567890", U"äöüßéèàâêñ",
+          U"çëîïôûùáíó",
+          U"€£?!.,-:;'" },
+        { U"1234567890", U"ÄÖÜ€ÉÈÀÂÊÑ",
+          U"ÇËÎÏÔÛÙÁÍÓ",
+          U"€£?!.,-:;'" } }, true },
+    { "es", "ES", "Espa\xC3\xB1ol (QWERTY)",
+      { { U"1234567890", U"qwertyuiop", U"asdfghjklñ", U"zxcvbnm,.-" },
+        { U"1234567890", U"QWERTYUIOP", U"ASDFGHJKLÑ", U"ZXCVBNM;:_" },
+        { SYM },
+        { U"1234567890", U"áéíóúü¿¡ç«",
+          U"àèìòùâêîôû",
+          U"€£?!.,-:;'" },
+        { U"1234567890", U"ÁÉÍÓÚÜ¿¡Ç»",
+          U"ÀÈÌÒÙÂÊÎÔÛ",
+          U"€£?!.,-:;'" } }, true },
+    { "it", "IT", "Italiano (QWERTY)",
+      { { U"1234567890", U"qwertyuiop", U"asdfghjkl'", U"zxcvbnm,.-" },
+        { U"1234567890", U"QWERTYUIOP", U"ASDFGHJKL\"", U"ZXCVBNM;:_" },
+        { SYM },
+        { U"1234567890", U"àèéìòùáíóú",
+          U"âêîôûäëïöü",
+          U"ç€£?!.,-:;" },
+        { U"1234567890", U"ÀÈÉÌÒÙÁÍÓÚ",
+          U"ÂÊÎÔÛÄËÏÖÜ",
+          U"Ç€£?!.,-:;" } }, true },
+    { "pl", "PL", "Polski (QWERTY)",
+      { { U"1234567890", U"qwertyuiop", U"asdfghjkl'", U"zxcvbnm,.-" },
+        { U"1234567890", U"QWERTYUIOP", U"ASDFGHJKL\"", U"ZXCVBNM;:_" },
+        { SYM },
+        { U"1234567890", U"ąćęłńóśźż€",
+          U"äöüßéèàçñá",
+          U"?!.,-:;'„”" },
+        { U"1234567890", U"ĄĆĘŁŃÓŚŹŻ€",
+          U"ÄÖÜßÉÈÀÇÑÁ",
+          U"?!.,-:;'„”" } }, true },
+    { "pt-BR", "PT", "Portugu\xC3\xAAs (ABNT2)",
+      { { U"1234567890", U"qwertyuiop", U"asdfghjklç", U"zxcvbnm,.-" },
+        { U"1234567890", U"QWERTYUIOP", U"ASDFGHJKLÇ", U"ZXCVBNM;:_" },
+        { SYM },
+        { U"1234567890", U"áàâãéêíóôõ",
+          U"úüñäëïöèìò",
+          U"€£?!.,-:;'" },
+        { U"1234567890", U"ÁÀÂÃÉÊÍÓÔÕ",
+          U"ÚÜÑÄËÏÖÈÌÒ",
+          U"€£?!.,-:;'" } }, true },
+    { "ru", "RU", "Русский (ЙЦУКЕН)",
+      { { U"1234567890", U"йцукенгшщз",
+          U"фывапролдж",
+          U"ячсмитьбю." },
+        { U"1234567890", U"ЙЦУКЕНГШЩЗ",
+          U"ФЫВАПРОЛДЖ",
+          U"ЯЧСМИТЬБЮ," },
+        { SYM },
+        { U"1234567890", U"хъэёйіїє-:",
+          U"?!.,;'\"()/", U"«»—–…%\\@#&" },
+        { U"1234567890", U"ХЪЭЁЙІЇЄ-:",
+          U"?!.,;'\"()/", U"«»—–…%\\@#&" } }, true },
+};
+const int kLayoutCount = (int)(sizeof(kLayouts) / sizeof(kLayouts[0]));
+#undef SYM
+#undef NOACC
+
+const Layout &ConfiguredLayout()
+{
+    const char *want = g_config.display.ui.keyboard_layout;
+    if (!want || !*want) {
+        want = XuiLanguageCode(); // follows the interface language
+    }
+    for (int i = 0; i < kLayoutCount; i++) {
+        if (!strcmp(kLayouts[i].code, want)) {
+            return kLayouts[i];
+        }
+    }
+    return kLayouts[0];
+}
+
+// The layout in use: the configured one, or English with the layout key
+const Layout &CurLayout()
+{
+    return g_osk.english ? kLayouts[0] : ConfiguredLayout();
+}
+
+void EncodeKey(char32_t cp, char out[5])
+{
+    unsigned int c = (unsigned int)cp;
+    int n = 0;
+    if (c < 0x80) {
+        out[n++] = (char)c;
+    } else if (c < 0x800) {
+        out[n++] = (char)(0xC0 | (c >> 6));
+        out[n++] = (char)(0x80 | (c & 0x3F));
+    } else {
+        out[n++] = (char)(0xE0 | (c >> 12));
+        out[n++] = (char)(0x80 | ((c >> 6) & 0x3F));
+        out[n++] = (char)(0x80 | (c & 0x3F));
+    }
+    out[n] = 0;
+}
+
+enum Special { kShift, kSymbols, kLayout, kSpace, kBack, kDone, kSpecialCount };
+const int kSpecialSpan[kSpecialCount] = { 2, 2, 1, 2, 2, 1 }; // in key widths
 const int kRowsTotal = 5;
 
 const ImGuiKey kOwned[] = {
@@ -117,9 +248,9 @@ int SpecialStart(int special)
     return x;
 }
 
-void Type(char c)
+void Type(unsigned int c)
 {
-    ImGui::GetIO().AddInputCharacter((unsigned int)(unsigned char)c);
+    ImGui::GetIO().AddInputCharacter(c);
 }
 
 void TapKey(ImGuiKey k)
@@ -132,19 +263,41 @@ void TapKey(ImGuiKey k)
 void Press()
 {
     if (g_osk.row < 4) {
-        Type(kRows[EffLayer()][g_osk.row][g_osk.col]);
+        const Layout &lay = CurLayout();
+        int ly = EffLayer();
+        if (ly >= 3 && !lay.accents) {
+            ly = 0;
+        }
+        Type((unsigned int)lay.rows[ly][g_osk.row][g_osk.col]);
         if (g_osk.layer == 1) {
             g_osk.layer = 0; // capitals for one letter, like a phone
+        } else if (g_osk.layer == 4) {
+            g_osk.layer = 3;
         }
         return;
     }
     switch (SpecialAt(g_osk.col)) {
-    case kShift:
-        g_osk.layer = EffLayer() == 1 ? 0 : 1;
+    case kShift: {
+        int ly = EffLayer();
+        g_osk.layer = ly == 1 ? 0 : ly == 3 ? 4 : ly == 4 ? 3 : 1;
         break;
-    case kSymbols:
-        g_osk.layer = EffLayer() == 2 ? 0 : 2;
+    }
+    case kSymbols: {
+        // letters -> symbols -> accented letters (if any) -> letters
+        int ly = EffLayer();
+        g_osk.layer = ly <= 1 ? 2 : (ly == 2 && CurLayout().accents) ? 3 : 0;
         break;
+    }
+    case kLayout: {
+        // Between the chosen layout and English (or the interface language's
+        // when English is chosen)
+        g_osk.english = !g_osk.english;
+        if (CurLayout().code == kLayouts[0].code && ConfiguredLayout().code == kLayouts[0].code) {
+            g_osk.english = false; // English is all there is
+        }
+        g_osk.layer = 0;
+        break;
+    }
     case kSpace:
         Type(' ');
         break;
@@ -499,7 +652,8 @@ void OskDraw()
     std::string space_label = tr("Space");
     const char *special[kSpecialCount] = {
         ICON_FA_ARROW_UP,
-        layer == 2 ? "abc" : "#+=",
+        layer >= 3 ? "abc" : layer == 2 ? (CurLayout().accents ? "\xC3\xA9\xC3\xBC" : "abc") : "#+=",
+        CurLayout().label,
         space_label.c_str(),
         ICON_FA_DELETE_LEFT,
         ICON_FA_CHECK,
@@ -507,7 +661,8 @@ void OskDraw()
     ImVec2 sp_a[kSpecialCount], sp_b[kSpecialCount];
     for (int i = 0, col = 0; i < kSpecialCount; col += kSpecialSpan[i], i++) {
         key_rect(4, col, kSpecialSpan[i], &sp_a[i], &sp_b[i]);
-        bool on = (i == kShift && layer == 1) || (i == kSymbols && layer == 2) ||
+        bool on = (i == kShift && (layer == 1 || layer == 4)) ||
+                  (i == kSymbols && layer >= 2) ||
                   i == kDone;
         draw_key(sp_a[i], sp_b[i], on);
     }
@@ -520,7 +675,8 @@ void OskDraw()
         for (int c = 0; c < 10; c++) {
             ImVec2 ka, kb;
             key_rect(rr, c, 1, &ka, &kb);
-            char label[2] = { kRows[layer][rr][c], 0 };
+            char label[5];
+            EncodeKey(CurLayout().rows[layer >= 3 && !CurLayout().accents ? 0 : layer][rr][c], label);
             draw_label(ka, kb, label, g_osk.row == rr && g_osk.col == c);
         }
     }
@@ -578,4 +734,39 @@ void OskDraw()
         }
         hx += 18 * u;
     }
+}
+
+int OskLayoutCount()
+{
+    return kLayoutCount + 1;
+}
+
+const char *OskLayoutItemName(int i)
+{
+    if (i <= 0 || i > kLayoutCount) {
+        return tr("Match the interface language");
+    }
+    return kLayouts[i - 1].name;
+}
+
+int OskLayoutSettingIndex()
+{
+    const char *want = g_config.display.ui.keyboard_layout;
+    if (!want || !*want) {
+        return 0;
+    }
+    for (int i = 0; i < kLayoutCount; i++) {
+        if (!strcmp(kLayouts[i].code, want)) {
+            return i + 1;
+        }
+    }
+    return 0;
+}
+
+void OskLayoutChoose(int i)
+{
+    xemu_settings_set_string(&g_config.display.ui.keyboard_layout,
+                             (i > 0 && i <= kLayoutCount) ? kLayouts[i - 1].code : "");
+    g_osk.english = false;
+    g_osk.layer = 0;
 }

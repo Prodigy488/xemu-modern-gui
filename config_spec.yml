@@ -397,6 +397,7 @@ display:
       type: bool
       default: true
     language: string
+    keyboard_layout: string
     hide_cursor:
       type: bool
       default: true

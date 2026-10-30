@@ -24,3 +24,11 @@ bool OskVisible();
 // Call right after an editable text box: lets A (not only Y) open it with
 // a controller while the keyboard is on
 void OskTextBox();
+
+// The layouts to choose from in the settings: index 0 follows the interface
+// language, the rest are named layouts. OskLayoutSettingIndex is the current
+// choice, OskLayoutChoose sets it.
+int OskLayoutCount();
+const char *OskLayoutItemName(int i);
+int OskLayoutSettingIndex();
+void OskLayoutChoose(int i);

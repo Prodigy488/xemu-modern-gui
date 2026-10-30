@@ -102,10 +102,7 @@ struct LibraryEntry {
     bool tex_attempted = false;
     uint32_t tex_gen = 0; // bumped on reload; stale decodes are dropped
 
-    const std::string &DisplayName() const
-    {
-        return title.empty() ? file_stem : title;
-    }
+    const std::string &DisplayName() const;
 };
 
 bool IsInsigniaTitle(uint32_t title_id)
@@ -120,6 +117,7 @@ bool SupportsOnline(const LibraryEntry &e)
 }
 
 struct GameStats {
+    std::string custom_name; // a name the user gave it, shown instead of the disc's
     bool favorite = false;
     double play_seconds = 0;
     int64_t last_played = 0; // unix time
@@ -141,6 +139,15 @@ struct GameOverrides {
 
 std::vector<LibraryEntry> g_entries;
 std::map<std::string, GameStats> g_stats;        // by image path
+
+const std::string &LibraryEntry::DisplayName() const
+{
+    auto it = g_stats.find(path);
+    if (it != g_stats.end() && !it->second.custom_name.empty()) {
+        return it->second.custom_name;
+    }
+    return title.empty() ? file_stem : title;
+}
 std::map<uint32_t, GameOverrides> g_overrides;   // by title ID
 
 // Game patches: files in <base>/patches/<TITLEID>/, applied in list order
@@ -366,6 +373,7 @@ bool g_settings_shader_confirm = false;
 std::string g_settings_shader_msg;
 GameOverrides g_settings_edit;
 bool g_open_settings_popup = false;
+bool g_rename_init = true; // reload the name box from the game
 bool g_focus_requested = false;
 // Minimized: the dashboard is hidden but a small tab at the bottom of the
 // screen brings it back
@@ -645,6 +653,7 @@ void LoadLibrary()
         for (auto &[path, s] : stats.items()) {
             GameStats st;
             st.favorite = s.value("favorite", false);
+            st.custom_name = s.value("name", "");
             st.play_seconds = s.value("play_seconds", 0.0);
             st.last_played = s.value("last_played", (int64_t)0);
             g_stats[path] = st;
@@ -719,10 +728,12 @@ void SaveLibrary(bool async = false)
     j["games"] = games;
     json stats = json::object();
     for (auto &[path, s] : g_stats) {
-        if (!s.favorite && s.play_seconds <= 0 && s.last_played <= 0) {
+        if (!s.favorite && s.play_seconds <= 0 && s.last_played <= 0 &&
+            s.custom_name.empty()) {
             continue;
         }
         stats[path] = { { "favorite", s.favorite },
+                        { "name", s.custom_name },
                         { "play_seconds", s.play_seconds },
                         { "last_played", s.last_played } };
     }
@@ -2042,6 +2053,7 @@ void SortedFiltered(std::vector<LibraryEntry *> &out)
 
 void OpenSettingsFor(LibraryEntry &e)
 {
+    g_rename_init = true;
     g_settings_path = e.path;
     g_settings_edit = g_overrides.count(e.title_id) ? g_overrides[e.title_id]
                                                     : GameOverrides();
@@ -3982,6 +3994,32 @@ void DrawSettingsPopup()
                                        "needs a fast PC: the Xbox is emulated "
                                        "working twice as hard. If the game "
                                        "misbehaves, turn it off."));
+        ImGui::Separator();
+    }
+    {
+        // A name of your own for the game (the disc's is often English only)
+        static char name_buf[160];
+        GameStats &gst = g_stats[e->path];
+        if (g_rename_init) {
+            snprintf(name_buf, sizeof(name_buf), "%s", e->DisplayName().c_str());
+            g_rename_init = false;
+        }
+        if (ImGui::InputText(tr("Name"), name_buf, sizeof(name_buf))) {
+            gst.custom_name = name_buf;
+            if (gst.custom_name == e->title || gst.custom_name == e->file_stem) {
+                gst.custom_name.clear();
+            }
+            g_dirty = true;
+        }
+        OskTextBox();
+        ImGui::SetItemTooltip("%s", tr("The name shown for this game in the "
+                                       "library. Clear it to go back to the "
+                                       "name on the disc."));
+        if (!gst.custom_name.empty() && ImGui::SmallButton(tr("Reset name"))) {
+            gst.custom_name.clear();
+            g_rename_init = true;
+            g_dirty = true;
+        }
         ImGui::Separator();
     }
     if (e->valid) {

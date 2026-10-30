@@ -1873,6 +1873,10 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
     LruNode *node = lru_lookup(&r->texture_cache, key_hash, &key);
     TextureBinding *snode = container_of(node, TextureBinding, node);
     bool binding_found = snode->image != VK_NULL_HANDLE;
+    snode->dbg_src = surface_to_texture ? (surface->color ? 1 : 2) :
+                     surface_to_texture_cube ? 3 : (surface ? 4 : 0);
+    snode->dbg_surface_addr = surface ? surface->vram_addr : 0;
+    snode->dbg_surface_draw = surface ? surface->draw_time : 0;
 
     /* In-place sampling: a borrowed node holds only while it aliases the
      * live surface here, not bound as the color target; else rebuilt. */

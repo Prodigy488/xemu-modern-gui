@@ -617,7 +617,7 @@ static void blackdet_check(PGRAPHState *pg, SurfaceBinding *surface)
     static uint8_t *good;       /* last good picture */
     static size_t good_size;
     static unsigned good_w, good_h;
-    static unsigned shown, black_events, saved;
+    static unsigned shown, black_events, saved, last_saved;
     static double ema = -1.0;
     static unsigned long last_draw_time;
 
@@ -697,8 +697,14 @@ static void blackdet_check(PGRAPHState *pg, SurfaceBinding *surface)
 
     bool black = lit_frac < 0.01;
     bool dim = !black && ema > 40.0 && mean < ema * 0.3;
-    if (black || dim) {
+    static bool prev_bad;
+    bool bad_now = black || dim;
+    bool log_it = bad_now && (!prev_bad || (black_events % 200) == 0);
+    prev_bad = bad_now;
+    if (bad_now) {
         black_events++;
+    }
+    if (log_it) {
         fprintf(stderr,
                 "nv2a: BLACKDET %s #%u: shown %u, lit %.1f%%, mean %.1f "
                 "(running mean %.1f); frame_time %d, draw_time %d (+%ld since "
@@ -709,7 +715,11 @@ static void blackdet_check(PGRAPHState *pg, SurfaceBinding *surface)
                 (long)pg->draw_time - (long)last_draw_time,
                 (unsigned)surface->vram_addr, (unsigned)surface->size,
                 surface->width, surface->height, surface->draw_time, w, h);
-        if (saved < 4) {
+        pgraph_vk_draw_ring_dump(pg, surface->vram_addr);
+        /* Save only after the boot screens (the picture had been lit) and
+         * not more than once in 300 pictures. */
+        if (saved < 8 && ema > 40.0 && shown - last_saved > 300) {
+            last_saved = shown;
             char name[64];
             snprintf(name, sizeof(name), "xemu-blackdet-%u-bad.ppm", saved);
             blackdet_write_ppm(name, mapped, w, h);

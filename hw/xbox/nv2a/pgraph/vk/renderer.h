@@ -263,6 +263,12 @@ typedef struct TextureBinding {
      * image_view is a private view on it, owned by this binding. */
     bool s2t_borrowed;
     VkImageCreateInfo image_ci; /* creation parameters (image pool key) */
+    /* Debug (XEMU_VK_BLACKDET): where the last bind of this texture took its
+     * content from: 0 RAM, 1 color surface, 2 zeta surface, 3 cube faces,
+     * 4 RAM although a surface sits at the address (not compatible). */
+    uint8_t dbg_src;
+    hwaddr dbg_surface_addr;
+    int dbg_surface_draw;
 } TextureBinding;
 
 typedef struct QueryReport {
@@ -853,6 +859,8 @@ enum {
 };
 unsigned pgraph_vk_off_mask(void);
 bool pgraph_vk_blackdet_enabled(void);
+void pgraph_vk_draw_ring_record(PGRAPHState *pg);
+void pgraph_vk_draw_ring_dump(PGRAPHState *pg, hwaddr scan_addr);
 static inline bool pgraph_vk_off(unsigned bit)
 {
     return (pgraph_vk_off_mask() & bit) != 0;

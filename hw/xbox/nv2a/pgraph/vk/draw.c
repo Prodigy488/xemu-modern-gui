@@ -3363,6 +3363,9 @@ void pgraph_vk_draw_end(NV2AState *d)
     if (r->color_binding && pgraph_color_write_enabled(pg)) {
         r->color_binding->draw_time = pg->draw_time;
     }
+    if (pgraph_vk_blackdet_enabled()) {
+        pgraph_vk_draw_ring_record(pg);
+    }
     if (r->zeta_binding && pgraph_zeta_write_enabled(pg)) {
         r->zeta_binding->draw_time = pg->draw_time;
     }
@@ -3400,6 +3403,113 @@ void pgraph_vk_draw_end(NV2AState *d)
         } else {
             r->eager_draw_count = eager_draws;
         }
+    }
+}
+
+
+/* XEMU_VK_BLACKDET: a ring of the last draws, with what each one drew to and
+ * sampled, dumped when the display picture comes out dark. */
+typedef struct DrawRec {
+    int draw_time;
+    hwaddr color, zeta;
+    unsigned cw, ch;
+    bool color_write;
+    struct {
+        bool on;
+        hwaddr addr;
+        unsigned w, h, fmt;
+        uint8_t src;
+        hwaddr sa;
+        int sdraw, bdraw;
+        bool borrowed;
+    } tex[NV2A_MAX_TEXTURES];
+} DrawRec;
+#define DRAW_RING 8192
+static DrawRec draw_ring[DRAW_RING];
+static unsigned draw_ring_n;
+
+void pgraph_vk_draw_ring_record(PGRAPHState *pg)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    DrawRec *d = &draw_ring[draw_ring_n++ % DRAW_RING];
+    memset(d, 0, sizeof(*d));
+    d->draw_time = pg->draw_time;
+    if (r->color_binding) {
+        d->color = r->color_binding->vram_addr;
+        d->cw = r->color_binding->width;
+        d->ch = r->color_binding->height;
+    }
+    if (r->zeta_binding) {
+        d->zeta = r->zeta_binding->vram_addr;
+    }
+    d->color_write = pgraph_color_write_enabled(pg);
+    for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
+        TextureBinding *b = r->texture_bindings[i];
+        if (!b) {
+            continue;
+        }
+        d->tex[i].on = true;
+        d->tex[i].addr = b->key.texture_vram_offset;
+        d->tex[i].w = b->key.state.width;
+        d->tex[i].h = b->key.state.height;
+        d->tex[i].fmt = b->key.state.color_format;
+        d->tex[i].src = b->dbg_src;
+        d->tex[i].sa = b->dbg_surface_addr;
+        d->tex[i].sdraw = b->dbg_surface_draw;
+        d->tex[i].bdraw = b->draw_time;
+        d->tex[i].borrowed = b->s2t_borrowed;
+    }
+}
+
+void pgraph_vk_draw_ring_dump(PGRAPHState *pg, hwaddr scan_addr)
+{
+    unsigned n = MIN(draw_ring_n, DRAW_RING);
+    struct { hwaddr a; unsigned w, h, cnt; } tgt[8] = { 0 };
+    int ntgt = 0;
+    for (unsigned k = 0; k < n; k++) {
+        DrawRec *d = &draw_ring[(draw_ring_n - 1 - k) % DRAW_RING];
+        int j;
+        for (j = 0; j < ntgt && tgt[j].a != d->color; j++) {
+        }
+        if (j == ntgt && ntgt < 8) {
+            tgt[ntgt].a = d->color; tgt[ntgt].w = d->cw; tgt[ntgt].h = d->ch;
+            ntgt++;
+        }
+        if (j < ntgt) {
+            tgt[j].cnt++;
+        }
+    }
+    fprintf(stderr, "nv2a: BLACKDET   last %u draws by render target:", n);
+    for (int j = 0; j < ntgt; j++) {
+        fprintf(stderr, " [%08x %ux%u x%u]", (unsigned)tgt[j].a, tgt[j].w,
+                tgt[j].h, tgt[j].cnt);
+    }
+    fprintf(stderr, "\n");
+    int shown = 0;
+    for (unsigned k = 0; k < n && shown < 6; k++) {
+        DrawRec *d = &draw_ring[(draw_ring_n - 1 - k) % DRAW_RING];
+        if (d->color != scan_addr) {
+            continue;
+        }
+        shown++;
+        fprintf(stderr, "nv2a: BLACKDET   draw %d -> scanout %08x%s zeta %08x:",
+                d->draw_time, (unsigned)d->color,
+                d->color_write ? "" : " (color off)", (unsigned)d->zeta);
+        for (int i = 0; i < NV2A_MAX_TEXTURES; i++) {
+            if (!d->tex[i].on) {
+                continue;
+            }
+            fprintf(stderr, " tex%d %08x %ux%u fmt %x src %u%s surf %08x@%d "
+                    "bound@%d;", i, (unsigned)d->tex[i].addr, d->tex[i].w,
+                    d->tex[i].h, d->tex[i].fmt, d->tex[i].src,
+                    d->tex[i].borrowed ? " borrowed" : "",
+                    (unsigned)d->tex[i].sa, d->tex[i].sdraw, d->tex[i].bdraw);
+        }
+        fprintf(stderr, "\n");
+    }
+    if (!shown) {
+        fprintf(stderr, "nv2a: BLACKDET   no draws to the scanout surface "
+                "%08x among the last %u\n", (unsigned)scan_addr, n);
     }
 }
 

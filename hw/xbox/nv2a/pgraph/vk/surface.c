@@ -2034,6 +2034,29 @@ void pgraph_vk_surface_update(NV2AState *d, bool upload, bool color_write,
     }
 }
 
+void pgraph_vk_sync_region_for_transfer(NV2AState *d, hwaddr addr, hwaddr size,
+                                        bool prepare_write)
+{
+    PGRAPHState *pg = &d->pgraph;
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    SurfaceBinding *surface;
+
+    /* Write back what the GPU still owes this range (parked surfaces too) */
+    pgraph_vk_download_surfaces_in_range_if_dirty(pg, addr, size);
+
+    if (!prepare_write) {
+        return;
+    }
+    QTAILQ_FOREACH(surface, &r->surfaces, entry) {
+        if (check_surface_overlaps_range(surface, addr, size)) {
+            surface->upload_pending = true;
+            pg->draw_time++;
+        }
+    }
+    memory_region_set_client_dirty(d->vram, addr, size, DIRTY_MEMORY_VGA);
+    memory_region_set_client_dirty(d->vram, addr, size, DIRTY_MEMORY_NV2A_TEX);
+}
+
 static bool check_format_and_usage_supported(PGRAPHVkState *r, VkFormat format,
                                              VkImageUsageFlags usage)
 {

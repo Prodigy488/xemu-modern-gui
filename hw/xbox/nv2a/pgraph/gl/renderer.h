@@ -530,6 +530,8 @@ void pgraph_gl_process_pending_reports(NV2AState *d);
 void pgraph_gl_drain_pending_reports(NV2AState *d);
 void pgraph_gl_surface_flush(NV2AState *d);
 void pgraph_gl_surface_update(NV2AState *d, bool upload, bool color_write, bool zeta_write);
+void pgraph_gl_sync_region_for_transfer(NV2AState *d, hwaddr addr, hwaddr size,
+                                        bool prepare_write);
 void pgraph_gl_sync(NV2AState *d);
 void pgraph_gl_present_scanout(NV2AState *d);
 /* Recounts surfaces_any_dirty at the flip (surface.c). */

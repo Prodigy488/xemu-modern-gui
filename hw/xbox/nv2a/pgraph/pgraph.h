@@ -149,6 +149,21 @@ typedef struct BetaState {
   uint32_t beta;
 } BetaState;
 
+typedef struct M2MFState {
+    hwaddr object_instance;
+    hwaddr dma_notify;
+    hwaddr dma_buffer_in;
+    hwaddr dma_buffer_out;
+    hwaddr offset_in;
+    hwaddr offset_out;
+    uint32_t pitch_in;
+    uint32_t pitch_out;
+    uint32_t line_length_in;
+    uint32_t line_count;
+    uint32_t format;
+    uint32_t buf_notify;
+} M2MFState;
+
 typedef struct GPUProperties {
     struct {
         short tri;
@@ -183,6 +198,8 @@ typedef struct PGRAPHRenderer {
         void (*prewarm_vertex_program)(NV2AState *d);
         void (*surface_flush)(NV2AState *d);
         void (*surface_update)(NV2AState *d, bool upload, bool color_write, bool zeta_write);
+        void (*sync_region_for_transfer)(NV2AState *d, hwaddr addr, hwaddr size,
+                                         bool prepare_write);
         void (*set_surface_scale_factor)(NV2AState *d, unsigned int scale);
         unsigned int (*get_surface_scale_factor)(NV2AState *d);
         int (*get_framebuffer_surface)(NV2AState *d);
@@ -208,6 +225,7 @@ typedef struct PGRAPHState {
     ImageBlitState image_blit;
     KelvinState kelvin;
     BetaState beta;
+    M2MFState m2mf;
 
     hwaddr dma_color, dma_zeta;
     Surface surface_color, surface_zeta;

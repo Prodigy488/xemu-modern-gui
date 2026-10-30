@@ -253,6 +253,7 @@ static PGRAPHRenderer pgraph_vk_renderer = {
         .process_pending_reports = pgraph_vk_process_pending_reports,
         .prewarm_vertex_program = pgraph_vk_prewarm_shaders,
         .surface_update = pgraph_vk_surface_update,
+        .sync_region_for_transfer = pgraph_vk_sync_region_for_transfer,
         .set_surface_scale_factor = pgraph_vk_set_surface_scale_factor,
         .get_surface_scale_factor = pgraph_vk_get_surface_scale_factor,
         .get_framebuffer_surface = pgraph_vk_get_framebuffer_surface,

@@ -35,6 +35,7 @@
 #include "achievements.hh"
 #include "game-library.hh"
 #include "../xemu-game-perf.h"
+#include "game-perf.hh"
 #include "ui-prof.hh"
 #include "game-library-scan.hh"
 #include "rtx-video.hh"
@@ -3981,6 +3982,30 @@ void DrawSettingsPopup()
                                        "needs a fast PC: the Xbox is emulated "
                                        "working twice as hard. If the game "
                                        "misbehaves, turn it off."));
+        ImGui::Separator();
+    }
+    if (e->valid) {
+        // Display refresh is kept apart from the custom settings below so it
+        // can be turned on for just the games it helps
+        static const int hz_values[] = { 0, 50, 60, 75, 90, 120 };
+        int cur_hz = GamePerfHzFor(e->title_id);
+        int hzi = 0;
+        for (int i = 0; i < 6; i++) {
+            if (hz_values[i] == cur_hz) hzi = i;
+        }
+        if (ImGui::Combo(tr("Display refresh"), &hzi,
+                         tr_items("Use global setting\0" "50 Hz (experimental)\0"
+                                  "60 Hz\0" "75 Hz (experimental)\0"
+                                  "90 Hz (experimental)\0"
+                                  "120 Hz (experimental)\0"))) {
+            GamePerfSetHzFor(e->title_id, hz_values[hzi]);
+        }
+        ImGui::SetItemTooltip("%s", tr("Experimental: use a different display "
+                                       "refresh rate for this game only. It "
+                                       "helps some games and not others, and "
+                                       "a game that counts refreshes runs "
+                                       "faster than real time. Applies the "
+                                       "next time the game starts."));
         ImGui::Separator();
     }
     ImGui::Checkbox(tr("Use custom settings for this game"), &g_settings_edit.enabled);

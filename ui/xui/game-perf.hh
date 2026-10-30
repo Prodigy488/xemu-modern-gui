@@ -29,6 +29,12 @@ GamePerfProfile &GamePerfEdit();
 void GamePerfChanged();
 void GamePerfForget();
 
+// A game's own display refresh by title ID, without it being loaded (0 as the
+// global setting); this is what the game library's settings page edits. If the
+// game is the one running, it applies at once
+int GamePerfHzFor(uint32_t title_id);
+void GamePerfSetHzFor(uint32_t title_id, int hz);
+
 // The user's own display refresh in Hz (the global setting, not a game's),
 // and a change of it from the settings: applies at once to a game that does
 // not set its own refresh

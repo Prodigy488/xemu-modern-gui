@@ -415,6 +415,25 @@ void GamePerfSetGlobalHz(int hz)
     }
 }
 
+int GamePerfHzFor(uint32_t title_id)
+{
+    Load();
+    auto it = g_profiles.find(title_id);
+    return it != g_profiles.end() ? it->second.hz : 0;
+}
+
+void GamePerfSetHzFor(uint32_t title_id, int hz)
+{
+    Load();
+    if (g_started && g_cur_ok && g_cur_id == title_id) {
+        GamePerfEdit().hz = hz;
+        GamePerfChanged();
+        return;
+    }
+    g_profiles[title_id].hz = hz;
+    Save();
+}
+
 void GamePerfForget()
 {
     g_profiles.erase(g_cur_id);

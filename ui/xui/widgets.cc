@@ -91,6 +91,32 @@ void WidgetTitleDescription(const char *title, const char *description,
         ImGui::PushFont(g_font_mgr.m_default_font);
         draw_list->AddText(text_pos, ImGui::GetColorU32(ImVec4(0.94f, 0.94f, 0.94f, 0.70f)), description);
         ImGui::PopFont();
+
+        // Hover tooltip: shows the full description, wrapped, so long text
+        // that doesn't fit on the single subtitle line is still readable.
+        ImVec2 row_max(pos.x + ImGui::GetColumnWidth(),
+                       pos.y + GetWidgetTitleDescriptionHeight(title, description));
+        static ImVec2 s_hover_pos(-1.0f, -1.0f);
+        static double s_hover_start = 0.0;
+        if (ImGui::IsWindowHovered() &&
+            !ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+            ImGui::IsMouseHoveringRect(pos, row_max)) {
+            double now = ImGui::GetTime();
+            if (s_hover_pos.x != pos.x || s_hover_pos.y != pos.y) {
+                s_hover_pos = pos;
+                s_hover_start = now;
+            } else if (now - s_hover_start > 0.35) {
+                ImGui::PushFont(g_font_mgr.m_default_font);
+                ImGui::BeginTooltip();
+                ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28.0f);
+                ImGui::TextUnformatted(description);
+                ImGui::PopTextWrapPos();
+                ImGui::EndTooltip();
+                ImGui::PopFont();
+            }
+        } else if (s_hover_pos.x == pos.x && s_hover_pos.y == pos.y) {
+            s_hover_pos = ImVec2(-1.0f, -1.0f);
+        }
     }
 }
 

@@ -155,20 +155,22 @@ void MainMenuGeneralView::Draw()
             int v;
             v = gp.cpu + 1;
             if (ChevronCombo(tr("CPU boost (this game)"), &v, tri,
-                             tr("Applies the next time this game starts"))) {
+                             tr("Use the CPU boost for this game only, or follow the global setting. Applies the next time this game starts"))) {
                 gp.cpu = v - 1; changed = true;
             }
             v = gp.gpu + 1;
             if (ChevronCombo(tr("GPU boost (this game)"), &v, tri,
-                             tr("Applies the next time this game starts"))) {
+                             tr("Use the GPU boost for this game only, or follow the global setting. Applies the next time this game starts"))) {
                 gp.gpu = v - 1; changed = true;
             }
             v = gp.seed + 1;
-            if (ChevronCombo(tr("Shader seeding (this game)"), &v, tri)) {
+            if (ChevronCombo(tr("Shader seeding (this game)"), &v, tri,
+                             tr("Pre-builds shaders this game used before to reduce stutter. Applies the next time this game starts"))) {
                 gp.seed = v - 1; changed = true;
             }
             v = gp.real + 1;
-            if (ChevronCombo(tr("Real hardware speed (this game)"), &v, tri)) {
+            if (ChevronCombo(tr("Real hardware speed (this game)"), &v, tri,
+                             tr("Slows emulation to match the original console's speed for this game"))) {
                 gp.real = v - 1; changed = true;
             }
             static const int hz_values[] = { 0, 50, 60, 75, 90, 120 };
@@ -180,8 +182,10 @@ void MainMenuGeneralView::Draw()
                              tr_items("Global setting\0" "50 Hz (experimental)\0" "60 Hz\0"
                                       "75 Hz (experimental)\0" "90 Hz (experimental)\0"
                                       "120 Hz (experimental)\0"),
-                             tr("Experimental: a different refresh rate changes "
-                                "how often the game finishes a frame"))) {
+                             tr("Experimental: pick a display refresh rate for this game only, "
+                                "so you can use it on the games it helps and "
+                                "leave the rest at the global setting. Some "
+                                "games run faster than real time at higher rates"))) {
                 gp.hz = hz_values[hzi]; changed = true;
             }
             if (changed) {
@@ -762,19 +766,24 @@ void MainMenuInputView::Draw()
 
         if (bound_state->type == INPUT_DEVICE_SDL_GAMEPAD) {
             Toggle(tr("Enable Rumble"),
-                   &bound_state->controller_map->enable_rumble);
+                   &bound_state->controller_map->enable_rumble,
+                   tr("Vibrate the controller when the game asks for it"));
             Toggle(tr("Invert Left X Axis"),
                    &bound_state->controller_map->controller_mapping
-                        .invert_axis_left_x);
+                        .invert_axis_left_x,
+                   tr("Flip the left stick left/right"));
             Toggle(tr("Invert Left Y Axis"),
                    &bound_state->controller_map->controller_mapping
-                        .invert_axis_left_y);
+                        .invert_axis_left_y,
+                   tr("Flip the left stick up/down"));
             Toggle(tr("Invert Right X Axis"),
                    &bound_state->controller_map->controller_mapping
-                        .invert_axis_right_x);
+                        .invert_axis_right_x,
+                   tr("Flip the right stick left/right"));
             Toggle(tr("Invert Right Y Axis"),
                    &bound_state->controller_map->controller_mapping
-                        .invert_axis_right_y);
+                        .invert_axis_right_y,
+                   tr("Flip the right stick up/down (look inversion)"));
         }
 
         if (ImGui::Button(tr("Reset to Default"))) {
@@ -834,7 +843,8 @@ void MainMenuInputView::Draw()
               "the buttons and wheel do is set below. F3 or Esc lets go. The "
               "keyboard must be bound to a port."));
     ChevronCombo(tr("Mouse moves"), &g_config.input.mouse.stick,
-                 tr_items("Right stick (look)\0" "Left stick (move)\0"));
+                 tr_items("Right stick (look)\0" "Left stick (move)\0"),
+                 tr("Which analog stick the mouse movement controls"));
     {
         float t = (g_config.input.mouse.sensitivity - 0.25f) / 2.75f;
         t = t < 0 ? 0 : (t > 1 ? 1 : t);
@@ -847,7 +857,8 @@ void MainMenuInputView::Draw()
             g_config.input.mouse.sensitivity = 0.25f + nt * 2.75f;
         }
     }
-    Toggle(tr("Invert mouse up and down"), &g_config.input.mouse.invert_y);
+    Toggle(tr("Invert mouse up and down"), &g_config.input.mouse.invert_y,
+           tr("Moving the mouse up looks down, like a flight stick"));
     {
         // What each button and the wheel do
         int *fields[7] = { &g_config.input.mouse.left,     &g_config.input.mouse.right,
@@ -860,7 +871,8 @@ void MainMenuInputView::Draw()
                          tr_items("Nothing\0" "A\0" "B\0" "X\0" "Y\0" "Back\0" "Start\0"
                                   "Left Stick Button\0" "Right Stick Button\0" "White\0"
                                   "Black\0" "DPad Up\0" "DPad Down\0" "DPad Left\0"
-                                  "DPad Right\0" "Left Trigger\0" "Right Trigger\0"));
+                                  "DPad Right\0" "Left Trigger\0" "Right Trigger\0"),
+                         tr("The controller button this mouse button or wheel direction presses"));
             ImGui::PopID();
         }
     }

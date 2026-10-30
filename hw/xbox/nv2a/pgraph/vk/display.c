@@ -606,6 +606,107 @@ static void blackdet_write_ppm(const char *name, const uint8_t *rgba,
     fclose(f);
 }
 
+/* Scene probe: right after a submission has settled, read the 007 scene
+ * surface (colour at 0x..d04000) back and log its mean colour / alpha / lit
+ * share into the draw ring. Comparing the probes of a dark frame with those of
+ * a good one shows at which step of the frame the scene turns black. */
+void pgraph_vk_blackdet_probe_scene(PGRAPHState *pg, bool flip)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    static VkBuffer buf;
+    static VmaAllocation alloc;
+    static uint8_t *mapped;
+    static size_t buf_size;
+    static unsigned long last_dt;
+
+    SurfaceBinding *s = NULL, *it;
+    QTAILQ_FOREACH(it, &r->surfaces, entry) {
+        if (it->color && (it->vram_addr & 0xffffff) == 0xd04000) {
+            s = it;
+            break;
+        }
+    }
+    if (!s || r->in_command_buffer || s->in_shader_read ||
+        s->image == VK_NULL_HANDLE || s->host_fmt.host_bytes_per_pixel != 4) {
+        return;
+    }
+    if (!flip && s->draw_time == last_dt) {
+        return;
+    }
+    last_dt = s->draw_time;
+
+    unsigned w = s->width, h = s->height;
+    pgraph_apply_scaling_factor(pg, &w, &h);
+    size_t need = (size_t)w * h * 4;
+    if (buf_size < need) {
+        if (buf) {
+            vmaDestroyBuffer(r->allocator, buf, alloc);
+        }
+        VkBufferCreateInfo bci = {
+            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .size = need,
+            .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        };
+        VmaAllocationCreateInfo aci = {
+            .usage = VMA_MEMORY_USAGE_AUTO,
+            .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                     VMA_ALLOCATION_CREATE_MAPPED_BIT,
+        };
+        VmaAllocationInfo info;
+        VK_CHECK(vmaCreateBuffer(r->allocator, &bci, &aci, &buf, &alloc,
+                                 &info));
+        mapped = info.pMappedData;
+        buf_size = need;
+    }
+
+    VkCommandBuffer cmd = pgraph_vk_begin_single_time_commands(pg);
+    pgraph_vk_transition_image_layout(pg, cmd, s->image, s->host_fmt.vk_format,
+                                      pgraph_vk_surface_base_layout(s),
+                                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    VkBufferImageCopy region = {
+        .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        .imageExtent = { w, h, 1 },
+    };
+    vkCmdCopyImageToBuffer(cmd, s->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           buf, 1, &region);
+    pgraph_vk_transition_image_layout(pg, cmd, s->image, s->host_fmt.vk_format,
+                                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                      pgraph_vk_surface_base_layout(s));
+    VkBufferMemoryBarrier hb = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .buffer = buf,
+        .size = VK_WHOLE_SIZE,
+    };
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 1, &hb, 0,
+                         NULL);
+    pgraph_vk_end_single_time_commands(pg, cmd);
+    vmaInvalidateAllocation(r->allocator, alloc, 0, VK_WHOLE_SIZE);
+
+    uint64_t sum = 0, suma = 0, lit = 0, n = 0;
+    for (unsigned y = 0; y < h; y += 2) {
+        const uint8_t *row = mapped + (size_t)y * w * 4;
+        for (unsigned x = 0; x < w; x += 5) {
+            const uint8_t *px = row + x * 4;
+            unsigned c = px[0] + px[1] + px[2];
+            sum += c;
+            suma += px[3];
+            lit += c > 30;
+            n++;
+        }
+    }
+    if (n) {
+        pgraph_vk_draw_ring_event(
+            pg, flip ? "probeF" : "probe", s->vram_addr,
+            (int)((sum / n / 3) | ((suma / n) << 8) | ((lit * 100 / n) << 16)));
+    }
+}
+
 static void blackdet_check(PGRAPHState *pg, SurfaceBinding *surface)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;

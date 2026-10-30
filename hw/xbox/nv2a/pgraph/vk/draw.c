@@ -2564,9 +2564,15 @@ static void rotate_slot(PGRAPHVkState *r, bool staged)
     r->command_buffer = r->slot_main[r->slot];
 }
 
+void pgraph_vk_blackdet_probe_scene(PGRAPHState *pg, bool flip);
+
 void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
+    bool probe_after = pgraph_vk_blackdet_enabled() &&
+                       finish_reason != VK_FINISH_REASON_EAGER &&
+                       (r->in_command_buffer ||
+                        finish_reason == VK_FINISH_REASON_FLIP_STALL);
 
     assert(!r->in_draw);
     assert(r->debug_depth == 0);
@@ -2683,6 +2689,10 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
 
     NV2AState *d = container_of(pg, NV2AState, pgraph);
     pgraph_vk_process_pending_reports_internal(d);
+    if (probe_after) {
+        pgraph_vk_blackdet_probe_scene(
+            pg, finish_reason == VK_FINISH_REASON_FLIP_STALL);
+    }
 }
 
 /* GPU busy time of the frame, for the eager policy (surface.c): timestamps
@@ -3570,6 +3580,9 @@ void pgraph_vk_draw_ring_event(PGRAPHState *pg, const char *what, hwaddr addr,
     d->ev_val = val;
     d->frame = ring_frame;
     d->draw_time = pg->draw_time;
+    if (!strcmp(what, "probeF") && ring_frame) {
+        d->frame = ring_frame - 1;
+    }
     if (!strcmp(what, "finish") && val == VK_FINISH_REASON_FLIP_STALL) {
         ring_frame++;
         pic_mean[ring_frame % 64] = -1;
@@ -3636,6 +3649,13 @@ void pgraph_vk_draw_ring_seq(PGRAPHState *pg, unsigned back, const char *tag)
             if (!strcmp(d->ev, "finish")) {
                 len += snprintf(line + len, sizeof(line) - len, "F%s ",
                                 finish_code(d->ev_val));
+            } else if (!strcmp(d->ev, "probe") || !strcmp(d->ev, "probeF")) {
+                len += snprintf(line + len, sizeof(line) - len,
+                                "%s%u/%u/%u%% ",
+                                !strcmp(d->ev, "probeF") ? "PF" : "P",
+                                (unsigned)d->ev_val & 0xff,
+                                ((unsigned)d->ev_val >> 8) & 0xff,
+                                ((unsigned)d->ev_val >> 16) & 0xff);
             } else if (!strcmp(d->ev, "dlm")) {
                 len += snprintf(line + len, sizeof(line) - len,
                                 "ram:%x=%u(%ux%u) ",

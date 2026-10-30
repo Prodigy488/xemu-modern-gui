@@ -19,6 +19,7 @@
 
 #include "renderer.h"
 #include <math.h>
+#include <glib/gstdio.h>
 
 static uint8_t *convert_texture_data__CR8YB8CB8YA8(uint8_t *data_out,
                                                    const uint8_t *data_in,
@@ -567,6 +568,176 @@ static void destroy_current_display_image(PGRAPHState *pg)
     d->draw_time = 0;
 }
 
+
+/* XEMU_VK_BLACKDET=1: read every finished display picture back and report the
+ * ones that are black (or far darker than the picture before), with the
+ * moment's state, and save a few as .ppm next to the last good picture. This
+ * tells apart "the Vulkan scene itself came out black" from "the picture was
+ * fine and got lost on the way to the screen". Debug only; it is slow. */
+bool pgraph_vk_blackdet_enabled(void)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("XEMU_VK_BLACKDET");
+        v = (e && e[0] && e[0] != '0') ? 1 : 0;
+        if (v) {
+            fprintf(stderr, "nv2a: black-frame detector on\n");
+        }
+    }
+    return v;
+}
+
+static void blackdet_write_ppm(const char *name, const uint8_t *rgba,
+                               unsigned w, unsigned h)
+{
+    FILE *f = g_fopen(name, "wb");
+    if (!f) {
+        return;
+    }
+    fprintf(f, "P6\n%u %u\n255\n", w, h);
+    uint8_t *row = g_malloc(w * 3);
+    for (unsigned y = 0; y < h; y++) {
+        for (unsigned x = 0; x < w; x++) {
+            memcpy(row + x * 3, rgba + ((size_t)y * w + x) * 4, 3);
+        }
+        fwrite(row, 1, w * 3, f);
+    }
+    g_free(row);
+    fclose(f);
+}
+
+static void blackdet_check(PGRAPHState *pg, SurfaceBinding *surface)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    PGRAPHVkDisplayState *disp = &r->display;
+    static VkBuffer buf;
+    static VmaAllocation alloc;
+    static uint8_t *mapped;
+    static size_t buf_size;
+    static uint8_t *good;       /* last good picture */
+    static size_t good_size;
+    static unsigned good_w, good_h;
+    static unsigned shown, black_events, saved;
+    static double ema = -1.0;
+    static unsigned long last_draw_time;
+
+    const unsigned w = disp->width, h = disp->height;
+    const size_t need = (size_t)w * h * 4;
+    if (!w || !h || !disp->image) {
+        return;
+    }
+    if (buf_size < need) {
+        if (buf) {
+            vmaDestroyBuffer(r->allocator, buf, alloc);
+        }
+        VkBufferCreateInfo bci = {
+            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .size = need,
+            .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        };
+        VmaAllocationCreateInfo aci = {
+            .usage = VMA_MEMORY_USAGE_AUTO,
+            .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                     VMA_ALLOCATION_CREATE_MAPPED_BIT,
+        };
+        VmaAllocationInfo info;
+        VK_CHECK(vmaCreateBuffer(r->allocator, &bci, &aci, &buf, &alloc,
+                                 &info));
+        mapped = info.pMappedData;
+        buf_size = need;
+    }
+
+    VkCommandBuffer cmd = pgraph_vk_begin_single_time_commands(pg);
+    VkImageMemoryBarrier b = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_SHADER_READ_BIT,
+        .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = disp->image,
+        .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 },
+    };
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL,
+                         1, &b);
+    VkBufferImageCopy region = {
+        .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        .imageExtent = { w, h, 1 },
+    };
+    vkCmdCopyImageToBuffer(cmd, disp->image,
+                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1,
+                           &region);
+    b.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, NULL, 0,
+                         NULL, 1, &b);
+    pgraph_vk_end_single_time_commands(pg, cmd);
+    vmaInvalidateAllocation(r->allocator, alloc, 0, need);
+
+    /* Sample every 7th pixel in both directions. */
+    uint64_t lit = 0, total = 0, luma = 0;
+    for (unsigned y = 0; y < h; y += 7) {
+        const uint8_t *row = mapped + (size_t)y * w * 4;
+        for (unsigned x = 0; x < w; x += 7) {
+            unsigned m = MAX(row[x * 4], MAX(row[x * 4 + 1], row[x * 4 + 2]));
+            lit += m > 12;
+            luma += m;
+            total++;
+        }
+    }
+    double lit_frac = total ? (double)lit / total : 0.0;
+    double mean = total ? (double)luma / total : 0.0;
+    shown++;
+
+    bool black = lit_frac < 0.01;
+    bool dim = !black && ema > 40.0 && mean < ema * 0.3;
+    if (black || dim) {
+        black_events++;
+        fprintf(stderr,
+                "nv2a: BLACKDET %s #%u: shown %u, lit %.1f%%, mean %.1f "
+                "(running mean %.1f); frame_time %d, draw_time %d (+%ld since "
+                "the last picture), scanout surface %08x+%x %ux%u draw %d, "
+                "display image %ux%u\n",
+                black ? "BLACK" : "DIM", black_events, shown, lit_frac * 100,
+                mean, ema, pg->frame_time, pg->draw_time,
+                (long)pg->draw_time - (long)last_draw_time,
+                (unsigned)surface->vram_addr, (unsigned)surface->size,
+                surface->width, surface->height, surface->draw_time, w, h);
+        if (saved < 4) {
+            char name[64];
+            snprintf(name, sizeof(name), "xemu-blackdet-%u-bad.ppm", saved);
+            blackdet_write_ppm(name, mapped, w, h);
+            if (good && good_w == w && good_h == h) {
+                snprintf(name, sizeof(name), "xemu-blackdet-%u-before.ppm",
+                         saved);
+                blackdet_write_ppm(name, good, w, h);
+            }
+            saved++;
+        }
+    } else {
+        if (good_size < need) {
+            g_free(good);
+            good = g_malloc(need);
+            good_size = need;
+        }
+        memcpy(good, mapped, need);
+        good_w = w;
+        good_h = h;
+        ema = ema < 0 ? mean : ema * 0.95 + mean * 0.05;
+    }
+    last_draw_time = pg->draw_time;
+    if (shown % 1800 == 0) {
+        fprintf(stderr, "nv2a: BLACKDET %u pictures checked, %u black or dim, "
+                "running mean %.1f\n", shown, black_events, ema);
+    }
+}
+
 // FIXME: We may need to use two images. One for actually rendering display,
 // and another for GL in the correct tiling mode
 
@@ -613,7 +784,8 @@ static void create_display_image(PGRAPHState *pg, int width, int height)
         .format = VK_FORMAT_R8G8B8A8_UNORM,
         .tiling = use_optimal_tiling ? VK_IMAGE_TILING_OPTIMAL : VK_IMAGE_TILING_LINEAR,
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+        .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                 (pgraph_vk_blackdet_enabled() ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0),
         .samples = VK_SAMPLE_COUNT_1_BIT,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
     };
@@ -1179,6 +1351,9 @@ void pgraph_vk_render_display(PGRAPHState *pg)
     }
 
     render_display(pg, surface);
+    if (pgraph_vk_blackdet_enabled()) {
+        blackdet_check(pg, surface);
+    }
 }
 
 

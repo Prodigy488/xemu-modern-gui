@@ -852,6 +852,7 @@ enum {
     VK_OFF_EAGER    = 1 << 4, /* submit every N draws */
 };
 unsigned pgraph_vk_off_mask(void);
+bool pgraph_vk_blackdet_enabled(void);
 static inline bool pgraph_vk_off(unsigned bit)
 {
     return (pgraph_vk_off_mask() & bit) != 0;

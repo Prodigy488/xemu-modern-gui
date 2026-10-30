@@ -511,6 +511,108 @@ void helper_flush_page(CPUX86State *env, target_ulong addr)
     tlb_flush_page(env_cpu(env), addr);
 }
 
+/* Print `len` bytes of guest memory from `addr` (virtual), `??` if unmapped */
+static void xemu_dump_guest_bytes(CPUState *cs, const char *label,
+                                  uint32_t addr, uint32_t len)
+{
+    fprintf(stderr, "guest: %s @%08x:", label, addr);
+    for (uint32_t i = 0; i < len; i++) {
+        uint8_t b;
+        if (cpu_memory_rw_debug(cs, addr + i, &b, 1, false)) {
+            fprintf(stderr, " ??");
+        } else {
+            fprintf(stderr, " %02x", b);
+        }
+    }
+    fprintf(stderr, "\n");
+}
+
+/* A stop in the guest kernel leaves a trap frame and the call chain on the
+ * stack. Dump the code and data they point at, so the failing kernel call and
+ * the object it was given can be worked out from the log. */
+static void xemu_dump_stop_context(CPUState *cs, uint32_t esp)
+{
+    enum { N = 192 };
+    uint32_t st[N];
+    int n = 0;
+    for (; n < N; n++) {
+        if (cpu_memory_rw_debug(cs, esp + 4 * n, (uint8_t *)&st[n], 4, false)) {
+            break;
+        }
+    }
+
+    /* trap frame: error code, EIP (kernel), CS 8, EFLAGS */
+    for (int i = 0; i + 3 < n; i++) {
+        if (st[i + 2] == 8 && st[i + 1] >= 0x80010000 && st[i + 1] < 0x80100000 &&
+            (st[i + 3] & 2) && st[i] < 0x20) {
+            xemu_dump_guest_bytes(cs, "kernel code around the fault",
+                                  st[i + 1] - 0x60, 0x80);
+            break;
+        }
+    }
+
+    uint32_t seen[16];
+    int ns = 0;
+    for (int i = 0; i < n && ns < 10; i++) {
+        uint32_t a = st[i];
+        if (a < 0x80010000 || a >= 0x80100000) {
+            continue;
+        }
+        bool dup = false;
+        for (int j = 0; j < ns; j++) {
+            dup |= seen[j] == a;
+        }
+        if (!dup) {
+            seen[ns++] = a;
+            xemu_dump_guest_bytes(cs, "kernel code before a return address",
+                                  a - 0x30, 0x40);
+        }
+    }
+
+    ns = 0;
+    for (int i = 0; i < n && ns < 8; i++) {
+        uint32_t a = st[i];
+        uint8_t b[8];
+        if (a < 0x00010000 || a >= 0x00400000 ||
+            cpu_memory_rw_debug(cs, a - 8, b, 8, false)) {
+            continue;
+        }
+        /* b[3] is the byte at a-5 (call rel32), b[2..3] at a-6 (call [mem]) */
+        bool call = b[3] == 0xe8 || (b[2] == 0xff && b[3] == 0x15) ||
+                    b[6] == 0xff;
+        bool dup = false;
+        for (int j = 0; j < ns; j++) {
+            dup |= seen[j] == a;
+        }
+        if (call && !dup) {
+            seen[ns++] = a;
+            xemu_dump_guest_bytes(cs, "game code before a return address",
+                                  a - 0x20, 0x28);
+        }
+    }
+
+    ns = 0;
+    for (int i = 0; i < n && ns < 4; i++) {
+        uint32_t a = st[i];
+        if (a < 0x00010000 || a >= 0x04000000 || (a & 3)) {
+            continue;
+        }
+        int count = 0;
+        for (int j = 0; j < n; j++) {
+            count += st[j] == a;
+        }
+        bool dup = false;
+        for (int j = 0; j < ns; j++) {
+            dup |= seen[j] == a;
+        }
+        if (count >= 2 && !dup) {
+            seen[ns++] = a;
+            xemu_dump_guest_bytes(cs, "memory a call kept passing", a - 0x10,
+                                  0x50);
+        }
+    }
+}
+
 /* A guest that halts with interrupts off never wakes: say where, once per
  * halt, for the first few (a console that dies shows a black screen). */
 static void xemu_report_dead_halt(CPUX86State *env)
@@ -565,6 +667,9 @@ static void xemu_report_dead_halt(CPUX86State *env)
         fprintf(stderr, " %02x", b);
     }
     fprintf(stderr, "\n");
+    if (reports <= 2) {
+        xemu_dump_stop_context(cs, (uint32_t)env->regs[R_ESP]);
+    }
     fflush(stderr);
 }
 

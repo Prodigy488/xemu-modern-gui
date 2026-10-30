@@ -947,6 +947,36 @@ static void render_display(PGRAPHState *pg, SurfaceBinding *surface)
     if (r->in_command_buffer &&
         (surface->draw_time >= r->command_buffer_start_time ||
          pgraph_vk_surface_borrow_pending(r, surface))) {
+        /* The shown surface is being drawn right now. Debug experiment
+         * (XEMU_VK_PRESENT=hold): keep showing the last finished picture
+         * instead of finishing the half-drawn one, at most three times in a
+         * row. XEMU_VK_PRESENT=log only reports these moments. */
+        static int mode = -1;
+        static unsigned events, held_in_a_row;
+        if (mode < 0) {
+            const char *e = getenv("XEMU_VK_PRESENT");
+            mode = e && !strcmp(e, "hold") ? 2 : e && !strcmp(e, "log") ? 1 : 0;
+            if (mode) {
+                fprintf(stderr, "nv2a: vk present mode: %s\n",
+                        mode == 2 ? "hold the last finished picture" : "log");
+            }
+        }
+        events++;
+        if (mode && (events <= 60 || events % 200 == 0)) {
+            fprintf(stderr, "nv2a: display #%u asks for a surface that is "
+                    "being drawn (%08x+%x %ux%u, draw %d, recording since "
+                    "%d, last shown draw %d, cleared %d)\n", events,
+                    (unsigned)surface->vram_addr, (unsigned)surface->size,
+                    surface->width, surface->height, surface->draw_time,
+                    r->command_buffer_start_time, disp->draw_time,
+                    surface->cleared);
+            fflush(stderr);
+        }
+        if (mode == 2 && disp->draw_time != 0 && held_in_a_row < 3) {
+            held_in_a_row++;
+            return;
+        }
+        held_in_a_row = 0;
         pgraph_vk_finish(pg, VK_FINISH_REASON_PRESENTING);
     }
 

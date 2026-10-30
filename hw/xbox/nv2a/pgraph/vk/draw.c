@@ -2661,6 +2661,11 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
         r->in_command_buffer = false;
         r->slot_fence_pending[r->slot] = true;
 
+        /* Everything drawn so far is submitted: advance the clock so the last
+         * draw of this batch is not taken for part of the next one (it made
+         * every display fetch wait for the GPU). Upstream xemu #3139 */
+        pg->draw_time++;
+
         bool async_ok = finish_is_async(finish_reason);
         if (async_ok) {
             rotate_slot(r, staged_this_submit);

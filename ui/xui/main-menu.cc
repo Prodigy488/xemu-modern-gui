@@ -122,7 +122,7 @@ void MainMenuGeneralView::Draw()
             if (abs(refresh_hz[i] - cur) < abs(refresh_hz[ri] - cur)) ri = i;
         }
         if (ChevronCombo(tr("Display refresh"), &ri,
-                         tr_items("60 Hz (normal)\0" "75 Hz\0"),
+                         tr_items("60 Hz (normal)\0" "75 Hz (experimental)\0"),
                          tr("Experimental: how often the console's display "
                             "refreshes. A higher rate can keep a game that "
                             "runs a little slow at 30 fps instead of dropping "
@@ -177,8 +177,9 @@ void MainMenuGeneralView::Draw()
                 if (hz_values[i] == gp.hz) hzi = i;
             }
             if (ChevronCombo(tr("Display refresh (this game)"), &hzi,
-                             tr_items("Global setting\0" "50 Hz\0" "60 Hz\0"
-                                      "75 Hz\0" "90 Hz\0" "120 Hz\0"),
+                             tr_items("Global setting\0" "50 Hz (experimental)\0" "60 Hz\0"
+                                      "75 Hz (experimental)\0" "90 Hz (experimental)\0"
+                                      "120 Hz (experimental)\0"),
                              tr("Experimental: a different refresh rate changes "
                                 "how often the game finishes a frame"))) {
                 gp.hz = hz_values[hzi]; changed = true;

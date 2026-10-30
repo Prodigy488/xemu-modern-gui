@@ -647,6 +647,16 @@ void pgraph_vk_blackdet_scene_dump(const char *prefix)
     fprintf(stderr, "nv2a: BLACKDET scene images written (%s)\n", prefix);
 }
 
+bool pgraph_vk_blackdet_scene_has_frame(unsigned fr)
+{
+    for (int i = 0; i < SCENE_IMGS; i++) {
+        if (scene_imgs[i].data && scene_imgs[i].frame == fr) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static const uint8_t *probe_readback(PGRAPHState *pg, SurfaceBinding *s,
                                      unsigned *pw, unsigned *ph)
 {
@@ -723,6 +733,29 @@ void pgraph_vk_blackdet_probe_scene(PGRAPHState *pg, bool flip)
     if (r->in_command_buffer) {
         return;
     }
+    /* Cost control: probes are synchronous readbacks. Default is gameplay
+     * frames only (600+ draws), one frame in three, and at least 30 draws
+     * apart; XEMU_VK_PROBE=0 turns them off, =all probes every busy frame. */
+    static int mode = -1;
+    if (mode < 0) {
+        const char *e = getenv("XEMU_VK_PROBE");
+        mode = (!e || !e[0]) ? 1 : !strcmp(e, "0") ? 0 : !strcmp(e, "all") ? 2 : 1;
+        fprintf(stderr, "nv2a: scene probe mode %d\n", mode);
+    }
+    if (!mode) {
+        return;
+    }
+    {
+        unsigned cf = pgraph_vk_draw_ring_cur_frame();
+        if (flip && !cf) {
+            return;
+        }
+        unsigned fr0 = cf - (flip ? 1 : 0);
+        if (pgraph_vk_draw_ring_frame_draws(flip ? 1 : 0) < 600 ||
+            (mode == 1 && (fr0 % 3))) {
+            return;
+        }
+    }
     for (int pass = 0; pass < 2; pass++) {
         const bool zeta = pass == 1;
         SurfaceBinding *s = NULL, *it;
@@ -741,7 +774,7 @@ void pgraph_vk_blackdet_probe_scene(PGRAPHState *pg, bool flip)
                    (s->host_fmt.host_bytes_per_pixel != 4)) {
             continue;
         }
-        if (!flip && s->draw_time == last_dt[pass]) {
+        if (!flip && s->draw_time - last_dt[pass] < 30) {
             continue;
         }
         last_dt[pass] = s->draw_time;
@@ -910,7 +943,17 @@ static void blackdet_check(PGRAPHState *pg, SurfaceBinding *surface)
     pgraph_vk_draw_ring_note_picture((int)mean);
 
     bool black = lit_frac < 0.01;
-    bool dim = !black && ema > 40.0 && mean < ema * 0.3;
+    /* A dim run counts only if it began with a sudden drop (the picture
+     * before was at least 2.5x brighter): the game's own fades are gradual. */
+    static double prev_mean = -1.0;
+    static bool prev_dim_cand, run_sudden;
+    bool dim_cand = !black && ema > 40.0 && mean < ema * 0.3;
+    if (dim_cand && !prev_dim_cand) {
+        run_sudden = prev_mean > 0 && mean < prev_mean * 0.4;
+    }
+    prev_dim_cand = dim_cand;
+    prev_mean = mean;
+    bool dim = dim_cand && run_sudden;
     static bool prev_bad;
     bool prev_bad_before = prev_bad;
     bool bad_now = black || dim;
@@ -918,6 +961,33 @@ static void blackdet_check(PGRAPHState *pg, SurfaceBinding *surface)
     prev_bad = bad_now;
     if (bad_now) {
         black_events++;
+    }
+    {
+        static unsigned probe_lines, good_probe_lines, bad_dumps, good_dumps;
+        static unsigned last_dump_shown;
+        unsigned cf = pgraph_vk_draw_ring_cur_frame();
+        if (bad_now && ema > 40.0 && probe_lines < 600) {
+            probe_lines++;
+            pgraph_vk_draw_ring_probes(1, "DIMPROBE", (int)mean);
+        } else if (!bad_now && shown > 5000 && ema > 60.0 && (shown % 10) == 0 &&
+                   good_probe_lines < 300) {
+            good_probe_lines++;
+            pgraph_vk_draw_ring_probes(1, "GOODPROBE", (int)mean);
+        }
+        if (cf && pgraph_vk_blackdet_scene_has_frame(cf - 1)) {
+            if (bad_now && ema > 40.0 && bad_dumps < 3 &&
+                shown - last_dump_shown > 300) {
+                char pre[16];
+                snprintf(pre, sizeof(pre), "bad%u", bad_dumps++);
+                last_dump_shown = shown;
+                pgraph_vk_blackdet_scene_dump(pre);
+            } else if (!bad_now && shown > 5000 && ema > 60.0 &&
+                       good_dumps < 1 && (shown % 7) == 0 &&
+                       pgraph_vk_draw_ring_frame_draws(1) > 800) {
+                good_dumps++;
+                pgraph_vk_blackdet_scene_dump("good");
+            }
+        }
     }
     if (log_it) {
         fprintf(stderr,
@@ -947,11 +1017,6 @@ static void blackdet_check(PGRAPHState *pg, SurfaceBinding *surface)
         if (saved < 8 && ema > 40.0 && shown - last_saved > 300) {
             last_saved = shown;
             char name[64];
-            if (saved < 2) {
-                char pre[16];
-                snprintf(pre, sizeof(pre), "bad%u", saved);
-                pgraph_vk_blackdet_scene_dump(pre);
-            }
             snprintf(name, sizeof(name), "xemu-blackdet-%u-bad.ppm", saved);
             blackdet_write_ppm(name, mapped, w, h);
             if (good && good_w == w && good_h == h) {
@@ -979,9 +1044,6 @@ static void blackdet_check(PGRAPHState *pg, SurfaceBinding *surface)
                 if (goodseq <= 3) {
                     pgraph_vk_draw_ring_states(pg, 1, "GOODSTATE");
                     pgraph_vk_draw_ring_texsum(pg, 1, "GOODTEX");
-                }
-                if (goodseq == 2) {
-                    pgraph_vk_blackdet_scene_dump("good");
                 }
             }
         }

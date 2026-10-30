@@ -3734,6 +3734,40 @@ void pgraph_vk_draw_ring_seq(PGRAPHState *pg, unsigned back, const char *tag)
 }
 
 
+/* One line: the probe readings of one frame, in order. */
+void pgraph_vk_draw_ring_probes(unsigned back, const char *tag, int pic)
+{
+    unsigned n = MIN(draw_ring_n, DRAW_RING);
+    if (back > ring_frame) {
+        return;
+    }
+    unsigned fr = ring_frame - back;
+    char line[400];
+    int len = 0;
+    for (unsigned k = n; k > 0 && len < 340; k--) {
+        DrawRec *d = &draw_ring[(draw_ring_n - k) % DRAW_RING];
+        if (d->frame != fr || !d->ev || strncmp(d->ev, "probe", 5)) {
+            continue;
+        }
+        bool z = d->ev[5] == 'Z';
+        bool f = d->ev[strlen(d->ev) - 1] == 'F';
+        unsigned v = (unsigned)d->ev_val;
+        if (z) {
+            len += snprintf(line + len, sizeof(line) - len, "%sZ%u/%u/%u/f%u ",
+                            f ? "E" : "", v & 0xff, (v >> 8) & 0xff,
+                            (v >> 16) & 0xff, (v >> 24) & 0x7f);
+        } else {
+            len += snprintf(line + len, sizeof(line) - len, "%s%u/%u/%u%% ",
+                            f ? "END" : "P", v & 0xff, (v >> 8) & 0xff,
+                            (v >> 16) & 0xff);
+        }
+    }
+    if (len) {
+        fprintf(stderr, "nv2a: BLACKDET [%s] frame -%u pic %d: %s\n", tag,
+                back, pic, line);
+    }
+}
+
 unsigned pgraph_vk_draw_ring_cur_frame(void)
 {
     return ring_frame;

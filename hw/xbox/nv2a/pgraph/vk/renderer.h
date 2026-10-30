@@ -880,6 +880,8 @@ void pgraph_vk_draw_ring_states(PGRAPHState *pg, unsigned back,
 void pgraph_vk_draw_ring_texsum(PGRAPHState *pg, unsigned back,
                                 const char *tag);
 void pgraph_vk_blackdet_scene_dump(const char *prefix);
+bool pgraph_vk_blackdet_scene_has_frame(unsigned fr);
+void pgraph_vk_draw_ring_probes(unsigned back, const char *tag, int pic_mean);
 bool pgraph_vk_blackdet_enabled(void);
 void pgraph_vk_draw_ring_record(PGRAPHState *pg);
 void pgraph_vk_draw_ring_dump(PGRAPHState *pg, hwaddr scan_addr);

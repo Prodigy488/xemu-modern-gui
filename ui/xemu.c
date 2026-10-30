@@ -46,6 +46,7 @@
 #include "xui/xemu-hud.h"
 #include "xemu-input.h"
 #include "xemu-settings.h"
+#include "xemu-folder-disc.h"
 #include "xemu-snapshots.h"
 #include "xemu-version.h"
 #include "xemu-os-utils.h"
@@ -1596,10 +1597,29 @@ void xemu_load_disc(const char *path, Error **errp)
     xbox_smc_eject_button();
     xemu_settings_set_string(&g_config.sys.files.dvd_path, "");
 
+    // A folder of game files is laid out as a disc on the spot; the drive
+    // reads the files straight from it (block/xplan.c)
+    char *folder_disc = NULL;
+    const char *open_path = path;
+    if (g_file_test(path, G_FILE_TEST_IS_DIR)) {
+        char *folder_err = NULL;
+        folder_disc = xemu_folder_disc_prepare(path, &folder_err);
+        if (!folder_disc) {
+            error_setg(&error, "Can't use the game folder: %s",
+                       folder_err ? folder_err : "unknown error");
+            g_free(folder_err);
+            error_propagate(errp, error);
+            xbox_smc_update_tray_state();
+            disc_unlock_if_taken(locked_here);
+            return;
+        }
+        open_path = folder_disc;
+    }
+
     // Game library patch overlays are qcow2 images backed by the disc image;
     // everything else is loaded as a raw disc image as before.
     const char *format = "raw";
-    FILE *probe = qemu_fopen(path, "rb");
+    FILE *probe = folder_disc ? NULL : qemu_fopen(path, "rb");
     if (probe) {
         unsigned char magic[4];
         if (fread(magic, 1, 4, probe) == 4 && magic[0] == 'Q' &&
@@ -1609,8 +1629,9 @@ void xemu_load_disc(const char *path, Error **errp)
         fclose(probe);
     }
 
-    qmp_blockdev_change_medium("ide0-cd1", NULL, path, format, false, false,
-                               false, 0, &error);
+    qmp_blockdev_change_medium("ide0-cd1", NULL, open_path, format, false,
+                               false, false, 0, &error);
+    g_free(folder_disc);
     if (error) {
         error_propagate(errp, error);
     } else {

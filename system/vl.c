@@ -144,6 +144,7 @@
 #include "qemu/keyval.h"
 
 #include "ui/xemu-settings.h"
+#include "ui/xemu-folder-disc.h"
 #include "ui/xemu-notifications.h"
 #include "ui/xemu-net.h"
 #include "ui/xemu-input.h"
@@ -3089,6 +3090,21 @@ void qemu_init(int argc, char **argv)
         }
     }
 
+    // A game folder is laid out as a disc on the spot (see block/xplan.c)
+    char *folder_disc = NULL;
+    if (dvd_path && dvd_path[0] && g_file_test(dvd_path, G_FILE_TEST_IS_DIR)) {
+        char *folder_err = NULL;
+        folder_disc = xemu_folder_disc_prepare(dvd_path, &folder_err);
+        if (folder_disc) {
+            dvd_path = folder_disc;
+        } else {
+            fprintf(stderr, "Can't use the game folder '%s': %s\n", dvd_path,
+                    folder_err ? folder_err : "unknown error");
+            g_free(folder_err);
+            dvd_path = "";
+        }
+    }
+
     // Always populate DVD drive. If disc path is the empty string, drive is
     // connected but no media present.
     fake_argv[fake_argc++] = strdup("-drive");
@@ -3096,6 +3112,7 @@ void qemu_init(int argc, char **argv)
     fake_argv[fake_argc++] = g_strdup_printf("index=1,media=cdrom,file=%s",
         escaped_dvd_path);
     free(escaped_dvd_path);
+    g_free(folder_disc);
 
     fake_argv[fake_argc++] = strdup("-display");
     fake_argv[fake_argc++] = strdup("xemu");

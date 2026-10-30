@@ -365,9 +365,47 @@ bool DecodeXprImage(const uint8_t *data, size_t len, int &w, int &h,
     }
 }
 
+static bool ReadXbeTitleInfo(ImageFile &img, uint64_t xbe_off,
+                             uint32_t xbe_size, DiscTitleInfo &out);
+
+// The default.xbe of a game folder (any letter case), or empty
+std::string FindDefaultXbeInFolder(const std::string &folder)
+{
+    std::error_code ec;
+    for (auto &de : std::filesystem::directory_iterator(
+             std::filesystem::u8path(folder), ec)) {
+        std::string n = de.path().filename().u8string();
+        for (auto &ch : n) {
+            ch = (char)tolower((unsigned char)ch);
+        }
+        std::error_code fec;
+        if (n == "default.xbe" && de.is_regular_file(fec)) {
+            return de.path().u8string();
+        }
+    }
+    return std::string();
+}
+
 bool ReadDiscTitleInfo(const std::string &path, DiscTitleInfo &out)
 {
     out = DiscTitleInfo();
+    {
+        // A folder holding the game's files
+        std::error_code dec;
+        if (std::filesystem::is_directory(std::filesystem::u8path(path), dec)) {
+            std::string xbe = FindDefaultXbeInFolder(path);
+            if (xbe.empty()) {
+                out.error = "No default.xbe";
+                return false;
+            }
+            ImageFile xf(xbe);
+            if (!xf.Ok() || xf.Size() < 0x178 || xf.Size() > 0xFFFFFFFFull) {
+                out.error = "Cannot open default.xbe";
+                return false;
+            }
+            return ReadXbeTitleInfo(xf, 0, (uint32_t)xf.Size(), out);
+        }
+    }
     ImageFile img(path);
     if (!img.Ok()) {
         out.error = "Cannot open file";
@@ -409,9 +447,14 @@ bool ReadDiscTitleInfo(const std::string &path, DiscTitleInfo &out)
         return false;
     }
     uint64_t xbe_off = base + (uint64_t)xbe_sector * kSectorSize;
+    return ReadXbeTitleInfo(img, xbe_off, xbe_size, out);
+}
 
-    // XBE image header
+static bool ReadXbeTitleInfo(ImageFile &img, uint64_t xbe_off,
+                             uint32_t xbe_size, DiscTitleInfo &out)
+{
     std::vector<uint8_t> hdr;
+    // XBE image header
     if (!img.Read(xbe_off, std::min<uint32_t>(xbe_size, 0x1000), hdr) ||
         memcmp(hdr.data(), "XBEH", 4) != 0 || hdr.size() < 0x178) {
         out.error = "Invalid XBE";

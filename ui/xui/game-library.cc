@@ -105,6 +105,13 @@ struct LibraryEntry {
     const std::string &DisplayName() const;
 };
 
+// A library entry that is a folder of game files rather than a disc image
+bool IsFolderGame(const std::string &path)
+{
+    std::error_code ec;
+    return fs::is_directory(fs::u8path(path), ec);
+}
+
 bool IsInsigniaTitle(uint32_t title_id)
 {
     return std::binary_search(std::begin(kInsigniaTitleIds),
@@ -851,6 +858,16 @@ void ScanWorker(std::vector<LibraryFolder> folders,
     std::set<std::string> seen;
     auto consider = [&](const fs::directory_entry &de) {
         std::error_code fec;
+        if (de.is_directory(fec)) {
+            // A folder holding a game's files (default.xbe and the rest)
+            if (!FindDefaultXbeInFolder(de.path().u8string()).empty()) {
+                std::string key = PathKey(de.path());
+                if (!hidden.count(key) && seen.insert(key).second) {
+                    files.push_back(de.path());
+                }
+            }
+            return;
+        }
         if (!de.is_regular_file(fec)) {
             return;
         }
@@ -878,6 +895,11 @@ void ScanWorker(std::vector<LibraryFolder> folders,
                     it.disable_recursion_pending(); // guard against loops
                 }
                 consider(*it);
+                std::error_code dec;
+                if (it->is_directory(dec) &&
+                    !FindDefaultXbeInFolder(it->path().u8string()).empty()) {
+                    it.disable_recursion_pending(); // a game: don't list its insides
+                }
             }
         } else {
             fs::directory_iterator it(
@@ -906,8 +928,16 @@ void ScanWorker(std::vector<LibraryFolder> folders,
         }
         LibraryEntry e;
         e.path = p.u8string();
-        e.file_stem = p.stem().u8string();
-        e.file_size = fs::file_size(p, ec);
+        std::error_code dir_ec;
+        const bool is_folder = fs::is_directory(p, dir_ec);
+        e.file_stem = is_folder ? p.filename().u8string() : p.stem().u8string();
+        if (is_folder) {
+            // A game folder: its default.xbe stands for the size
+            std::string xbe = FindDefaultXbeInFolder(e.path);
+            e.file_size = xbe.empty() ? 0 : fs::file_size(fs::u8path(xbe), ec);
+        } else {
+            e.file_size = fs::file_size(p, ec);
+        }
         e.mtime = FileMtime(p);
         found.insert(e.path);
 
@@ -1633,8 +1663,8 @@ bool PrepareLaunchImage(LibraryEntry &e, std::string &load_path,
                         std::string &error)
 {
     load_path = e.path;
-    if (!e.valid) {
-        return true;
+    if (!e.valid || IsFolderGame(e.path)) {
+        return true; // patches are applied to disc images, not folders
     }
     SyncPatches(e.title_id);
     std::vector<PatchSpec> patches = EnabledPatches(e.title_id);
@@ -2353,7 +2383,8 @@ void SixtyAfterDownload()
 
 bool Has60Fps(const LibraryEntry &e)
 {
-    return e.valid && (Online60Fps(e.title_id) || SixtyFor(e.title_id).installed);
+    return e.valid && !IsFolderGame(e.path) &&
+           (Online60Fps(e.title_id) || SixtyFor(e.title_id).installed);
 }
 
 // The 60 FPS line in a game's details, with its switch
@@ -3122,7 +3153,8 @@ void DrawContextMenu(LibraryEntry &e)
                         e.valid)) {
         OpenSettingsFor(e);
     }
-    if (ImGui::MenuItem(tr("Patches..."), NULL, false, e.valid)) {
+    if (ImGui::MenuItem(tr("Patches..."), NULL, false,
+                        e.valid && !IsFolderGame(e.path))) {
         OpenPatchesFor(e);
     }
     if (ImGui::MenuItem(tr("Clear shader cache..."), NULL, false, e.valid)) {

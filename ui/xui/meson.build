@@ -14,6 +14,7 @@ xemu_ss.add(files(
   'game-perf.cc',
   'game-store.cc',
   'xiso.cc',
+  'folder-disc.cc',
   'perf-analysis.cc',
   'perf-capture.cc',
   'perf-voice.cc',

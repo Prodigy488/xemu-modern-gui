@@ -276,6 +276,7 @@ void ShowMainMenu()
 
             if (ImGui::MenuItem(tr("Eject Disc"), SHORTCUT_MENU_TEXT(E))) ActionEjectDisc();
             if (ImGui::MenuItem(tr("Load Disc..."), SHORTCUT_MENU_TEXT(O))) ActionLoadDisc();
+            if (ImGui::MenuItem(tr("Load Game Folder..."))) ActionLoadGameFolder();
 
             ImGui::Separator();
 

@@ -21,6 +21,7 @@
 void ActionEjectDisc();
 void ActionEjectDiscNow(void); // without the library's resume-point save
 void ActionLoadDisc();
+void ActionLoadGameFolder();
 void ActionLoadDiscFile(const char *file_path);
 void ActionTogglePause();
 void ActionReset();

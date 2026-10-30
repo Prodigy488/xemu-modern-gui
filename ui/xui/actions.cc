@@ -59,6 +59,15 @@ void ActionLoadDisc(void)
     });
 }
 
+void ActionLoadGameFolder(void)
+{
+    // A folder holding default.xbe and the rest of a game's files
+    const char *default_path = g_config.general.games_dir;
+    ShowOpenFolderDialog(default_path, [](const char *path) {
+        ActionLoadDiscFile(path);
+    });
+}
+
 void ActionLoadDiscFile(const char *file_path)
 {
     Error *err = NULL;

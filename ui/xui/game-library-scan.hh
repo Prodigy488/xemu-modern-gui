@@ -30,6 +30,10 @@ struct DiscTitleInfo {
 // Parse a disc image. Returns true and fills `out` on success.
 bool ReadDiscTitleInfo(const std::string &path, DiscTitleInfo &out);
 
+// Folder games: the default.xbe inside a folder (any letter case), or empty.
+// ReadDiscTitleInfo also accepts such a folder in place of a disc image.
+std::string FindDefaultXbeInFolder(const std::string &folder);
+
 // Decode an XPR0 texture bundle (as found in the $$XTIMAGE section) to RGBA.
 bool DecodeXprImage(const uint8_t *data, size_t len, int &w, int &h,
                     std::vector<uint8_t> &rgba);

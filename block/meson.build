@@ -72,6 +72,7 @@ endif
 if get_option('vvfat').allowed()
   block_ss.add(files('vvfat.c'))
 endif
+block_ss.add(files('xplan.c'))
 if get_option('dmg').allowed()
   block_ss.add(files('dmg.c'))
 endif

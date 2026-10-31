@@ -28,7 +28,8 @@ get_version_field() {
 }
 
 get_version_dot () {
-  echo $(get_version_field 1) | cut -d. -f$1
+  # Padded, so a two-part version such as 2.4 still has a patch number
+  echo $(get_version_field 1).0.0 | cut -d. -f$1
 }
 
 XEMU_VERSION_MAJOR=$(get_version_dot 1)

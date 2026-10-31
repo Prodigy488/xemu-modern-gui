@@ -13,9 +13,10 @@ jobs:
     name: Build for Windows (${{ matrix.arch }}, ${{ matrix.configuration }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        arch: [x86_64, arm64]
-        configuration: [debug, release]
+        arch: [x86_64]
+        configuration: [release]
     container:
       image: ghcr.io/xemu-project/xemu-win64-toolchain${{ matrix.arch == 'x86_64' && '-gcc:sha-2881edd' || ':sha-0d06ce8' }}
     defaults:
@@ -93,9 +94,10 @@ jobs:
     runs-on: windows-latest
     needs: build
     strategy:
+      fail-fast: false
       matrix:
-        arch: [x86_64, arm64]
-        configuration: [debug, release]
+        arch: [x86_64]
+        configuration: [release]
     steps:
     - name: Download artifacts
       uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v4

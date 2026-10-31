@@ -191,6 +191,16 @@ void ShowMainMenu()
                     style = CONFIG_GENERAL_LIBRARY_STYLE_MODERN;
                     game_library_window.Open();
                 }
+                if (ImGui::MenuItem(tr("Holo"), NULL,
+                                    style == CONFIG_GENERAL_LIBRARY_STYLE_HOLO)) {
+                    style = CONFIG_GENERAL_LIBRARY_STYLE_HOLO;
+                    game_library_window.Open();
+                }
+                if (ImGui::MenuItem(tr("Aurora"), NULL,
+                                    style == CONFIG_GENERAL_LIBRARY_STYLE_AURORA)) {
+                    style = CONFIG_GENERAL_LIBRARY_STYLE_AURORA;
+                    game_library_window.Open();
+                }
                 ImGui::Separator();
                 ImGui::TextDisabled(tr("Dashboard theme"));
                 int &theme = g_config.general.library.theme;

@@ -10268,7 +10268,7 @@ void DrawDashSettingsTab()
                      tr_items("Dashboard (tabs)\0Classic (library window)\0"
                      "Blades (sliding panels)\0Metro (live tiles)\0"
                      "Original Xbox (menu and globe)\0Original Blades (sphere and fins)\0"
-                     "Glossy Blades (silver and green)\0Modern (side menu)\0"));
+                     "Glossy Blades (silver and green)\0Modern (side menu)\0Holo (hologram)\0Aurora (teal)\0"));
         label(tr("Dashboard theme"));
         ImGui::Combo("##theme", &g_config.general.library.theme,
                      tr_items("Neon (dark, cyan and magenta)\0Green (xemu)\0"));
@@ -10946,6 +10946,16 @@ bool GlossyStyle()
 bool ModernStyle()
 {
     return g_config.general.library.style == CONFIG_GENERAL_LIBRARY_STYLE_MODERN;
+}
+
+bool HoloStyle()
+{
+    return g_config.general.library.style == CONFIG_GENERAL_LIBRARY_STYLE_HOLO;
+}
+
+bool AuroraStyle()
+{
+    return g_config.general.library.style == CONFIG_GENERAL_LIBRARY_STYLE_AURORA;
 }
 
 void DrawTabContent(int tab, int &tex_budget)
@@ -11656,6 +11666,416 @@ void DrawModernFrame(int &tex_budget)
     DrawDashHints(ImGui::GetCursorScreenPos(), ws.x - 2 * pad);
 }
 
+// ---- Holo ----
+
+// A hologram-terminal look: thin outlines on black, small capitalised
+// labels, the nine sections as a grid of tiles, a live data stream and wave
+// beside it, and the section itself in a framed window.
+ImU32 HoloColor()
+{
+    return T().neon ? IM_COL32(72, 228, 242, 255) : IM_COL32(134, 228, 92, 255);
+}
+
+// An outlined panel with a header strip: a label on the left, a quieter one on the right
+float HoloPanel(ImDrawList *dl, ImVec2 a, ImVec2 b, ImU32 col, const char *left,
+                const char *right, ImFont *f)
+{
+    const float s = g_viewport_mgr.m_scale;
+    dl->AddRect(a, b, Alpha(col, 215), 3 * s, 0, 1.4f * s);
+    const float hh = f->FontSize + 12 * s;
+    dl->AddLine(ImVec2(a.x, a.y + hh), ImVec2(b.x, a.y + hh), Alpha(col, 150), 1.0f * s);
+    float ty = a.y + (hh - f->FontSize) / 2;
+    dl->AddText(f, f->FontSize, ImVec2(a.x + 10 * s, ty), col, left);
+    if (right && right[0]) {
+        float rw = f->CalcTextSizeA(f->FontSize, FLT_MAX, 0, right).x;
+        if (rw + 20 * s < (b.x - a.x) * 0.5f) {
+            dl->AddText(f, f->FontSize, ImVec2(b.x - 10 * s - rw, ty), Alpha(col, 140), right);
+        }
+    }
+    return hh;
+}
+
+// Bars rising and falling like a data stream
+void DrawHoloStream(ImDrawList *dl, ImVec2 a, ImVec2 b, ImU32 col, float tt)
+{
+    const float s = g_viewport_mgr.m_scale;
+    float mid = (a.y + b.y) / 2, half = (b.y - a.y) / 2 - 2 * s;
+    const float bw = 6 * s, gap = 3 * s;
+    int n = (int)((b.x - a.x) / (bw + gap));
+    for (int j = 0; j < n; j++) {
+        float x = a.x + j * (bw + gap);
+        float k = 0.5f + 0.5f * sinf(tt * 1.7f + j * 0.7f) * sinf(tt * 0.9f + j * 1.3f);
+        k = std::clamp(k, 0.04f, 1.0f);
+        dl->AddRectFilled(ImVec2(x, mid - half * k), ImVec2(x + bw, mid), Alpha(col, 215));
+        float k2 = std::clamp(k * 0.55f * (0.6f + 0.4f * sinf(j * 2.1f + tt)), 0.03f, 1.0f);
+        dl->AddRectFilled(ImVec2(x, mid + 2 * s), ImVec2(x + bw, mid + 2 * s + half * k2),
+                          Alpha(col, 90));
+    }
+    dl->AddLine(ImVec2(a.x, mid + s), ImVec2(b.x, mid + s), Alpha(col, 120), 1.0f * s);
+}
+
+// Lines swaying like a wire-mesh wave
+void DrawHoloWave(ImDrawList *dl, ImVec2 a, ImVec2 b, ImU32 col, float tt)
+{
+    const float s = g_viewport_mgr.m_scale;
+    float mid = (a.y + b.y) / 2, amp = (b.y - a.y) * 0.42f, w = b.x - a.x;
+    const int rows = 12, pts = 56;
+    ImVec2 line[pts];
+    for (int r = 0; r < rows; r++) {
+        float ph = r * 0.33f;
+        for (int i = 0; i < pts; i++) {
+            float u = (float)i / (pts - 1);
+            float env = powf(std::max(0.0f, sinf(u * 3.14159265f)), 0.8f);
+            float y = mid + sinf(u * 9.0f + tt * 1.3f + ph) * amp * 1.5f * env *
+                                (0.45f + 0.55f * cosf(u * 4.0f - tt * 0.6f + ph * 0.5f));
+            line[i] = ImVec2(a.x + u * w, y);
+        }
+        dl->AddPolyline(line, pts, Alpha(col, r % 3 == 0 ? 190 : 110), 0, 1.0f * s);
+    }
+}
+
+void DrawHoloFrame(int &tex_budget)
+{
+    const float s = g_viewport_mgr.m_scale;
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+    ImVec2 wb(wp.x + ws.x, wp.y + ws.y);
+    const bool anim = Animations();
+    const float tt = anim ? (float)ImGui::GetTime() : 0.0f;
+    const float hints_h = ImGui::GetFontSize() * 2.2f;
+    ImFont *label = HudFont();
+    ImFont *small_font = FontOr(g_font_mgr.m_menu_font_small);
+    const ImU32 cy = HoloColor();
+
+    // Black glass with a faint dot grid and a slow scan line
+    dl->AddRectFilled(wp, wb, IM_COL32(2, 7, 10, 252));
+    {
+        const float step = 30 * s;
+        int cols = std::min(120, (int)(ws.x / step)), rows = std::min(80, (int)(ws.y / step));
+        for (int j = 1; j <= rows; j++) {
+            for (int i = 1; i <= cols; i++) {
+                dl->AddRectFilled(ImVec2(wp.x + i * step, wp.y + j * step),
+                                  ImVec2(wp.x + i * step + 1.5f * s, wp.y + j * step + 1.5f * s),
+                                  Alpha(cy, 22));
+            }
+        }
+        if (anim) {
+            float y = wp.y + fmodf(tt * 36 * s, ws.y + 60 * s) - 30 * s;
+            dl->AddRectFilledMultiColor(ImVec2(wp.x, y - 40 * s), ImVec2(wb.x, y), Alpha(cy, 0),
+                                        Alpha(cy, 0), Alpha(cy, 14), Alpha(cy, 14));
+        }
+    }
+
+    // The double outline round the whole screen
+    ImVec2 fa(wp.x + 10 * s, wp.y + 10 * s), fb(wb.x - 10 * s, wb.y - 10 * s);
+    dl->AddRect(fa, fb, Alpha(cy, 225), 10 * s, 0, 1.8f * s);
+    ImVec2 ga(fa.x + 9 * s, fa.y + 9 * s), gb(fb.x - 9 * s, fb.y - 9 * s);
+    dl->AddRect(ga, gb, Alpha(cy, 120), 6 * s, 0, 1.0f * s);
+
+    // Header line: labels on the left, the window buttons on the right
+    const float hdr = 46 * s;
+    std::string section = Upper(tr(kTabNames[g_dash_tab]));
+    {
+        char idx[48];
+        snprintf(idx, sizeof(idx), "%02d | %03d", g_dash_tab + 1, 12 * (g_dash_tab + 1));
+        float ty = ga.y + (hdr - label->FontSize) / 2;
+        dl->AddText(label, label->FontSize, ImVec2(ga.x + 16 * s, ty), cy, "XEMU TOUCH APP OS1");
+        float iw = label->CalcTextSizeA(label->FontSize, FLT_MAX, 0, "XEMU TOUCH APP OS1").x;
+        dl->AddText(label, label->FontSize, ImVec2(ga.x + 28 * s + iw, ty), Alpha(cy, 140), idx);
+        if (ws.x > 1180 * s) {
+            std::string mid = "SYSTEM DATA ... LAUNCH " + section;
+            dl->AddText(label, label->FontSize, ImVec2(wp.x + ws.x * 0.40f, ty), Alpha(cy, 200),
+                        mid.c_str());
+        }
+    }
+    DrawStyleStatus(gb.x - 14 * s, ga.y + (hdr - 32 * s) / 2);
+    dl->AddLine(ImVec2(ga.x + 12 * s, ga.y + hdr), ImVec2(gb.x - 12 * s, ga.y + hdr),
+                Alpha(cy, 70), 1.0f * s);
+
+    const float top = ga.y + hdr + 12 * s, bottom = gb.y - hints_h - 2 * s;
+    const float lx0 = ga.x + 14 * s;
+    const float lw = std::clamp(ws.x * 0.27f, 214.0f * s, 380.0f * s);
+    const float gap = 10 * s;
+
+    // Sections: a 3 x 3 grid of tiles
+    ImVec2 pa(lx0, top);
+    const float tile_w = (lw - 2 * 10 * s - 2 * gap) / 3;
+    const float tile_h = std::min(tile_w * 0.86f, (bottom - top) * 0.2f);
+    const float hh = label->FontSize + 12 * s;
+    ImVec2 pb(lx0 + lw, top + hh + 12 * s + 3 * tile_h + 2 * gap + 10 * s);
+    HoloPanel(dl, pa, pb, cy, "SECTIONS .APP", "SELECT .MODE", label);
+
+    static int focus_prev = -1;
+    int focused = -1;
+    ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(1, 1, 1, 0.55f));
+    ImFont *icon_font = FontOr(g_font_mgr.m_default_font);
+    for (int i = 0; i < kTabCount; i++) {
+        int cx = i % 3, ry = i / 3;
+        ImVec2 a(pa.x + 10 * s + cx * (tile_w + gap), pa.y + hh + 12 * s + ry * (tile_h + gap));
+        ImVec2 b(a.x + tile_w, a.y + tile_h);
+        ImGui::SetCursorScreenPos(a);
+        ImGui::PushID(i);
+        bool clicked = ImGui::InvisibleButton("##tile", ImVec2(tile_w, tile_h),
+                                              ImGuiButtonFlags_EnableNav);
+        bool hov = ImGui::IsItemHovered();
+        bool focus = ImGui::IsItemFocused() && ImGui::GetIO().NavVisible;
+        ImGui::PopID();
+        if (focus) {
+            focused = i;
+            if (i != g_dash_tab && focus_prev >= 0 && focus_prev != i) {
+                SwitchTab(i);
+            }
+        }
+        if (clicked) {
+            SwitchTab(i);
+        }
+        bool on = i == g_dash_tab;
+        if (on) {
+            dl->AddRectFilled(a, b, Alpha(cy, 48), 4 * s);
+        } else if (hov) {
+            dl->AddRectFilled(a, b, Alpha(cy, 18), 4 * s);
+        }
+        dl->AddRect(a, b, on ? cy : Alpha(cy, hov ? 210 : 120), 4 * s, 0, (on ? 1.8f : 1.1f) * s);
+        const char *ic = SectionIcon(i);
+        float isz = icon_font->FontSize * 1.2f;
+        ImVec2 isize = icon_font->CalcTextSizeA(isz, FLT_MAX, 0, ic);
+        dl->AddText(icon_font, isz, ImVec2(a.x + (tile_w - isize.x) / 2, a.y + tile_h * 0.14f),
+                    on ? IM_COL32(255, 255, 255, 255) : Alpha(cy, 230), ic);
+        std::string nm = tr(kTabNames[i]);
+        float fs = small_font->FontSize * 0.72f;
+        float tw = small_font->CalcTextSizeA(fs, FLT_MAX, 0, nm.c_str()).x;
+        if (tw > tile_w - 6 * s) {
+            fs *= (tile_w - 6 * s) / tw;
+            tw = tile_w - 6 * s;
+        }
+        dl->AddText(small_font, fs, ImVec2(a.x + (tile_w - tw) / 2, b.y - fs - 6 * s),
+                    on ? IM_COL32(255, 255, 255, 255) : Alpha(cy, 190), nm.c_str());
+    }
+    ImGui::PopStyleColor();
+    focus_prev = focused;
+
+    // What is left of the column holds the data stream and the wave, if there is room
+    float rem = bottom - pb.y - gap;
+    int extra = rem >= 2 * 96 * s + gap ? 2 : (rem >= 96 * s ? 1 : 0);
+    if (extra > 0) {
+        float ph = (rem - (extra - 1) * gap) / extra;
+        float y = pb.y + gap;
+        for (int k = 0; k < extra; k++) {
+            bool wave = (extra == 1) || k == 1;
+            ImVec2 qa(lx0, y), qb(lx0 + lw, y + ph);
+            float h2 = HoloPanel(dl, qa, qb, cy, wave ? "SIGNAL .DATA" : "ACTIVITY .STREAM",
+                                 "END .PROGRAM", label);
+            ImVec2 ia(qa.x + 10 * s, qa.y + h2 + 8 * s), ib(qb.x - 10 * s, qb.y - 8 * s);
+            dl->PushClipRect(ia, ib, true);
+            if (wave) {
+                DrawHoloWave(dl, ia, ib, cy, tt);
+            } else {
+                DrawHoloStream(dl, ia, ib, cy, tt);
+            }
+            dl->PopClipRect();
+            y += ph + gap;
+        }
+    }
+
+    // The section in its window
+    ImVec2 ra(lx0 + lw + 14 * s, top), rb(gb.x - 14 * s, bottom);
+    std::string title = section + " .VIEW";
+    float rh = HoloPanel(dl, ra, rb, cy, title.c_str(), "END .PROGRAM", label);
+    float ease = EaseSince(g_anim.tab_t, 0.28f);
+    ImGui::SetCursorScreenPos(ImVec2(ra.x + 16 * s, ra.y + rh + 12 * s + (1.0f - ease) * 12 * s));
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.25f + 0.75f * ease);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::BeginChild("##holocontent",
+                      ImVec2(std::max(10.0f, rb.x - ra.x - 32 * s),
+                             std::max(10.0f, rb.y - ra.y - rh - 22 * s)),
+                      ImGuiChildFlags_NavFlattened,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleColor();
+    DrawTabContent(g_dash_tab, tex_budget);
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+
+    ImGui::SetCursorScreenPos(ImVec2(ga.x + 16 * s, gb.y - hints_h + 4 * s));
+    DrawDashHints(ImGui::GetCursorScreenPos(), ws.x - 2 * 30 * s);
+}
+
+// ---- Aurora ----
+
+// Deep teal glass: the game you last played fills the background, a bar
+// along the top holds your profile and the sections as pills (the one you
+// are in opens out into its name), and the section sits in one rounded card.
+ImU32 AuroraColor()
+{
+    return T().neon ? IM_COL32(40, 224, 184, 255) : IM_COL32(112, 214, 62, 255);
+}
+
+void DrawAuroraFrame(int &tex_budget)
+{
+    const float s = g_viewport_mgr.m_scale;
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+    ImVec2 wb(wp.x + ws.x, wp.y + ws.y);
+    const bool anim = Animations();
+    const float tt = anim ? (float)ImGui::GetTime() : 0.0f;
+    const float hints_h = ImGui::GetFontSize() * 2.2f;
+    ImFont *big = FontOr(g_font_mgr.m_menu_font);
+    ImFont *label_font = FontOr(g_font_mgr.m_menu_font_small);
+    ImFont *icon_font = FontOr(g_font_mgr.m_default_font);
+    const bool neon = T().neon;
+    const ImU32 acc = AuroraColor();
+    const ImU32 deep = neon ? IM_COL32(4, 22, 24, 255) : IM_COL32(5, 22, 10, 255);
+    const ImU32 top_col = neon ? IM_COL32(8, 56, 54, 255) : IM_COL32(12, 54, 22, 255);
+
+    // Backdrop: teal gradient, the game's art under it, slow pools of light
+    dl->AddRectFilledMultiColor(wp, wb, top_col, top_col, deep, deep);
+    LibraryEntry *cur = g_home_path.empty() ? NULL : FindEntry(g_home_path);
+    if (!cur) {
+        cur = DefaultHomeGame();
+    }
+    if (cur) {
+        EnsureTexture(*cur, tex_budget);
+        if (cur->tex && cur->tex_w > 0) {
+            float ta = (float)cur->tex_w / cur->tex_h, aa = ws.x / ws.y;
+            ImVec2 uv0(0, 0), uv1(1, 1);
+            if (ta < aa) { // crop top and bottom
+                float v = ta / aa;
+                uv0.y = (1 - v) * 0.3f;
+                uv1.y = uv0.y + v;
+            } else {       // crop the sides
+                float v = aa / ta;
+                uv0.x = (1 - v) / 2;
+                uv1.x = uv0.x + v;
+            }
+            dl->AddImage((ImTextureID)(intptr_t)cur->tex, wp, wb, uv0, uv1, IM_COL32(255, 255, 255, 64));
+        }
+    }
+    dl->AddRectFilledMultiColor(wp, wb, Alpha(top_col, 120), Alpha(top_col, 120), Alpha(deep, 236),
+                                Alpha(deep, 236));
+    for (int k = 0; k < 2; k++) {
+        ImVec2 c(wp.x + ws.x * (k ? 0.86f + 0.03f * sinf(tt * 0.1f) : 0.18f + 0.04f * cosf(tt * 0.08f)),
+                 wp.y + ws.y * (k ? 0.18f : 0.92f));
+        for (int j = 0; j < 7; j++) {
+            dl->AddCircleFilled(c, ws.y * (0.12f + 0.08f * j), Alpha(acc, 7), 56);
+        }
+    }
+
+    // Top bar
+    const float pad = 18 * s;
+    const float bar_y = wp.y + 14 * s, bar_h = 60 * s;
+    const bool compact = ws.x < 1180 * s;
+    {
+        // Profile
+        ImVec2 ac(wp.x + pad + 26 * s, bar_y + bar_h / 2);
+        dl->AddCircleFilled(ac, 27 * s, Alpha(acc, 60), 40);
+        dl->AddCircleFilled(ac, 22 * s, acc, 40);
+        dl->AddCircleFilled(ImVec2(ac.x - 6 * s, ac.y - 7 * s), 9 * s, IM_COL32(255, 255, 255, 70), 24);
+        ImVec2 xs = big->CalcTextSizeA(big->FontSize, FLT_MAX, 0, "x");
+        dl->AddText(big, big->FontSize, ImVec2(ac.x - xs.x / 2, ac.y - xs.y / 2), deep, "x");
+        if (ws.x > 760 * s) {
+            std::vector<LibraryEntry *> all;
+            SortedFiltered(all);
+            char sub[48];
+            snprintf(sub, sizeof(sub), tr("%d games"), (int)all.size());
+            dl->AddText(label_font, label_font->FontSize, ImVec2(ac.x + 36 * s, ac.y - label_font->FontSize - 1 * s),
+                        IM_COL32(244, 248, 250, 255), "xemu");
+            dl->AddText(label_font, label_font->FontSize * 0.85f, ImVec2(ac.x + 36 * s, ac.y + 2 * s),
+                        Alpha(acc, 215), sub);
+        }
+    }
+    DrawStyleStatus(wb.x - pad, bar_y + (bar_h - 32 * s) / 2);
+
+    // The pills: the open section shows its name, the rest are icons
+    static float pw[kTabCount];
+    static bool pw_init = false;
+    const float icon_w = 48 * s, pill_gap = 4 * s;
+    float want[kTabCount], total = 0;
+    for (int i = 0; i < kTabCount; i++) {
+        float nw = 0;
+        if (i == g_dash_tab && !compact) {
+            nw = label_font->CalcTextSizeA(label_font->FontSize, FLT_MAX, 0, tr(kTabNames[i])).x + 18 * s;
+        }
+        want[i] = icon_w + nw;
+        if (!pw_init) {
+            pw[i] = want[i];
+        }
+        pw[i] = Approach(pw[i], want[i], 14.0f);
+        total += pw[i] + pill_gap;
+    }
+    pw_init = true;
+    float nav_w = total - pill_gap + 12 * s;
+    float nav_x = std::max(wp.x + ws.x * 0.5f - nav_w / 2, wp.x + pad + (ws.x > 760 * s ? 190 * s : 60 * s));
+    ImVec2 na(nav_x, bar_y + 4 * s), nb(nav_x + nav_w, bar_y + bar_h - 4 * s);
+    dl->AddRectFilled(na, nb, IM_COL32(6, 24, 26, 205), (nb.y - na.y) / 2, 0);
+    dl->AddRect(na, nb, Alpha(acc, 46), (nb.y - na.y) / 2, 0, 1.0f * s);
+    static int focus_prev = -1;
+    int focused = -1;
+    ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(1, 1, 1, 0.55f));
+    float x = na.x + 6 * s;
+    for (int i = 0; i < kTabCount; i++) {
+        ImVec2 a(x, na.y + 4 * s), b(x + pw[i], nb.y - 4 * s);
+        ImGui::SetCursorScreenPos(a);
+        ImGui::PushID(i);
+        bool clicked = ImGui::InvisibleButton("##pill", ImVec2(pw[i], b.y - a.y), ImGuiButtonFlags_EnableNav);
+        bool hov = ImGui::IsItemHovered();
+        bool focus = ImGui::IsItemFocused() && ImGui::GetIO().NavVisible;
+        ImGui::PopID();
+        if (focus) {
+            focused = i;
+            if (i != g_dash_tab && focus_prev >= 0 && focus_prev != i) {
+                SwitchTab(i);
+            }
+        }
+        if (clicked) {
+            SwitchTab(i);
+        }
+        bool on = i == g_dash_tab;
+        float r = (b.y - a.y) / 2;
+        if (on) {
+            dl->AddRectFilled(a, b, acc, r);
+        } else if (hov) {
+            dl->AddRectFilled(a, b, IM_COL32(255, 255, 255, 20), r);
+        }
+        const char *ic = SectionIcon(i);
+        float isz = icon_font->FontSize * 1.15f;
+        ImVec2 isize = icon_font->CalcTextSizeA(isz, FLT_MAX, 0, ic);
+        ImU32 ink = on ? deep : IM_COL32(190, 214, 214, hov ? 255 : 225);
+        bool with_name = on && pw[i] > icon_w + 24 * s;
+        float ix = with_name ? a.x + 20 * s : a.x + (pw[i] - isize.x) / 2;
+        dl->AddText(icon_font, isz, ImVec2(ix, a.y + (b.y - a.y - isize.y) / 2), ink, ic);
+        if (with_name) {
+            std::string nm = tr(kTabNames[i]);
+            dl->AddText(label_font, label_font->FontSize,
+                        ImVec2(ix + isize.x + 9 * s, a.y + (b.y - a.y - label_font->FontSize) / 2), ink,
+                        nm.c_str());
+        }
+        x += pw[i] + pill_gap;
+    }
+    ImGui::PopStyleColor();
+    focus_prev = focused;
+
+    // The card
+    ImVec2 ca(wp.x + pad, bar_y + bar_h + 14 * s), cb(wb.x - pad, wb.y - hints_h - 2 * s);
+    dl->AddRectFilled(ca, cb, IM_COL32(6, 28, 30, 214), 24 * s);
+    dl->AddRect(ca, cb, Alpha(acc, 40), 24 * s, 0, 1.0f * s);
+    dl->AddRectFilledMultiColor(ImVec2(ca.x + 28 * s, ca.y), ImVec2(cb.x - 28 * s, ca.y + 2.5f * s),
+                                Alpha(acc, 0), acc, acc, Alpha(acc, 0));
+    float ease = EaseSince(g_anim.tab_t, 0.28f);
+    ImGui::SetCursorScreenPos(ImVec2(ca.x + 22 * s, ca.y + 18 * s + (1.0f - ease) * 14 * s));
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.25f + 0.75f * ease);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::BeginChild("##auroracontent",
+                      ImVec2(std::max(10.0f, cb.x - ca.x - 44 * s), std::max(10.0f, cb.y - ca.y - 34 * s)),
+                      ImGuiChildFlags_NavFlattened,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleColor();
+    DrawTabContent(g_dash_tab, tex_budget);
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+
+    ImGui::SetCursorScreenPos(ImVec2(wp.x + pad + 8 * s, wb.y - hints_h + 4 * s));
+    DrawDashHints(ImGui::GetCursorScreenPos(), ws.x - 2 * pad);
+}
+
 // ---- Metro ----
 
 // Metro start page, in the slim style of XBMC4Gamers: a text list of games
@@ -12109,7 +12529,7 @@ void GameLibraryWindow::Draw()
     }
 
     const bool own_frame = BladesStyle() || MetroStyle() || XboxStyle() || XBladesStyle() ||
-                           GlossyStyle() || ModernStyle();
+                           GlossyStyle() || ModernStyle() || HoloStyle() || AuroraStyle();
     if (classic) {
         DrawClassicHeader();
     } else if (!own_frame) {
@@ -12178,6 +12598,10 @@ void GameLibraryWindow::Draw()
         DrawGlossyFrame(tex_budget);
     } else if (ModernStyle()) {
         DrawModernFrame(tex_budget);
+    } else if (HoloStyle()) {
+        DrawHoloFrame(tex_budget);
+    } else if (AuroraStyle()) {
+        DrawAuroraFrame(tex_budget);
     } else {
         const float hints_h = ImGui::GetFontSize() * 2.2f;
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));

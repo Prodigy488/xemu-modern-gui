@@ -35,6 +35,7 @@
 #include "achievements.hh"
 #include "game-library.hh"
 #include "../xemu-game-perf.h"
+#include "modern-version.hh"
 #include "game-perf.hh"
 #include "ui-prof.hh"
 #include "game-library-scan.hh"
@@ -11734,6 +11735,73 @@ void DrawHoloWave(ImDrawList *dl, ImVec2 a, ImVec2 b, ImU32 col, float tt)
     }
 }
 
+// A point on the outline of a box, `d` pixels clockwise from its top-left corner
+ImVec2 HoloPerimeter(ImVec2 a, ImVec2 b, float d)
+{
+    float w = b.x - a.x, h = b.y - a.y, p = 2 * (w + h);
+    if (p <= 0) {
+        return a;
+    }
+    d = fmodf(d, p);
+    if (d < 0) {
+        d += p;
+    }
+    if (d < w) {
+        return ImVec2(a.x + d, a.y);
+    }
+    d -= w;
+    if (d < h) {
+        return ImVec2(b.x, a.y + d);
+    }
+    d -= h;
+    if (d < w) {
+        return ImVec2(b.x - d, b.y);
+    }
+    d -= w;
+    return ImVec2(a.x, b.y - d);
+}
+
+// A light-cycle trail: a bright head running round a box, its tail fading behind it
+void HoloTrail(ImDrawList *dl, ImVec2 a, ImVec2 b, float head, float len, ImU32 col)
+{
+    const float s = g_viewport_mgr.m_scale;
+    const int n = 28;
+    const float step = len / n;
+    ImVec2 prev = HoloPerimeter(a, b, head);
+    for (int i = 1; i <= n; i++) {
+        ImVec2 p = HoloPerimeter(a, b, head - i * step);
+        float k = 1.0f - (float)i / n;
+        dl->AddLine(prev, p, Alpha(col, (int)(235 * k * k)), (1.0f + 2.2f * k) * s);
+        prev = p;
+    }
+    ImVec2 h = HoloPerimeter(a, b, head);
+    dl->AddCircleFilled(h, 6 * s, Alpha(col, 46), 16);
+    dl->AddCircleFilled(h, 2.6f * s, IM_COL32(235, 255, 255, 255), 12);
+}
+
+// The first `chars` characters of a UTF-8 string
+std::string Utf8Prefix(const std::string &t, int chars)
+{
+    size_t i = 0;
+    while (i < t.size() && chars > 0) {
+        i++;
+        while (i < t.size() && (t[i] & 0xC0) == 0x80) {
+            i++;
+        }
+        chars--;
+    }
+    return t.substr(0, i);
+}
+
+int Utf8Length(const std::string &t)
+{
+    int n = 0;
+    for (unsigned char c : t) {
+        n += (c & 0xC0) != 0x80;
+    }
+    return n;
+}
+
 void DrawHoloFrame(int &tex_budget)
 {
     const float s = g_viewport_mgr.m_scale;
@@ -11771,6 +11839,13 @@ void DrawHoloFrame(int &tex_budget)
     dl->AddRect(fa, fb, Alpha(cy, 225), 10 * s, 0, 1.8f * s);
     ImVec2 ga(fa.x + 9 * s, fa.y + 9 * s), gb(fb.x - 9 * s, fb.y - 9 * s);
     dl->AddRect(ga, gb, Alpha(cy, 120), 6 * s, 0, 1.0f * s);
+    if (anim) {
+        // Light cycles: one runs the outer outline, a shorter one the inner
+        HoloTrail(dl, fa, fb, tt * 280 * s, 260 * s, cy);
+        float half = (fb.x - fa.x) + (fb.y - fa.y);
+        HoloTrail(dl, fa, fb, tt * 280 * s + half, 150 * s, Alpha(cy, 190));
+        HoloTrail(dl, ga, gb, tt * 170 * s + 400 * s, 110 * s, Alpha(cy, 150));
+    }
 
     // Header line: labels on the left, the window buttons on the right
     const float hdr = 46 * s;
@@ -11779,8 +11854,9 @@ void DrawHoloFrame(int &tex_budget)
         char idx[48];
         snprintf(idx, sizeof(idx), "%02d | %03d", g_dash_tab + 1, 12 * (g_dash_tab + 1));
         float ty = ga.y + (hdr - label->FontSize) / 2;
-        dl->AddText(label, label->FontSize, ImVec2(ga.x + 16 * s, ty), cy, "XEMU TOUCH APP OS1");
-        float iw = label->CalcTextSizeA(label->FontSize, FLT_MAX, 0, "XEMU TOUCH APP OS1").x;
+        const char *brand = "XEMU MODERN GUI V" XEMU_MODERN_GUI_VERSION;
+        dl->AddText(label, label->FontSize, ImVec2(ga.x + 16 * s, ty), cy, brand);
+        float iw = label->CalcTextSizeA(label->FontSize, FLT_MAX, 0, brand).x;
         dl->AddText(label, label->FontSize, ImVec2(ga.x + 28 * s + iw, ty), Alpha(cy, 140), idx);
         if (ws.x > 1180 * s) {
             std::string mid = "SYSTEM DATA ... LAUNCH " + section;
@@ -11791,6 +11867,17 @@ void DrawHoloFrame(int &tex_budget)
     DrawStyleStatus(gb.x - 14 * s, ga.y + (hdr - 32 * s) / 2);
     dl->AddLine(ImVec2(ga.x + 12 * s, ga.y + hdr), ImVec2(gb.x - 12 * s, ga.y + hdr),
                 Alpha(cy, 70), 1.0f * s);
+    if (anim) {
+        // A pulse of light travelling along the header line
+        float x0 = ga.x + 12 * s, x1 = gb.x - 12 * s, tail = 120 * s;
+        float x = x0 + fmodf(tt * 460 * s, (x1 - x0) + 2 * tail) - tail;
+        float xa = std::clamp(x - tail, x0, x1), xb = std::clamp(x, x0, x1);
+        if (xb > xa) {
+            float y = ga.y + hdr;
+            dl->AddRectFilledMultiColor(ImVec2(xa, y - 1.5f * s), ImVec2(xb, y + 1.5f * s),
+                                        Alpha(cy, 0), Alpha(cy, 255), Alpha(cy, 255), Alpha(cy, 0));
+        }
+    }
 
     const float top = ga.y + hdr + 12 * s, bottom = gb.y - hints_h - 2 * s;
     const float lx0 = ga.x + 14 * s;
@@ -11831,7 +11918,17 @@ void DrawHoloFrame(int &tex_budget)
         }
         bool on = i == g_dash_tab;
         if (on) {
-            dl->AddRectFilled(a, b, Alpha(cy, 48), 4 * s);
+            // The open section breathes, with a scan line passing through it
+            float br = anim ? 0.5f + 0.5f * sinf(tt * 3.0f) : 0.5f;
+            dl->AddRectFilled(a, b, Alpha(cy, 40 + (int)(26 * br)), 4 * s);
+            dl->AddRect(ImVec2(a.x - 2 * s, a.y - 2 * s), ImVec2(b.x + 2 * s, b.y + 2 * s),
+                        Alpha(cy, (int)(30 + 60 * br)), 6 * s, 0, 1.5f * s);
+            if (anim) {
+                float sy = a.y + fmodf(tt * 0.7f, 1.0f) * tile_h;
+                dl->AddRectFilledMultiColor(ImVec2(a.x + 2 * s, std::max(a.y, sy - 9 * s)),
+                                            ImVec2(b.x - 2 * s, sy), Alpha(cy, 0), Alpha(cy, 0),
+                                            Alpha(cy, 80), Alpha(cy, 80));
+            }
         } else if (hov) {
             dl->AddRectFilled(a, b, Alpha(cy, 18), 4 * s);
         }
@@ -11879,9 +11976,20 @@ void DrawHoloFrame(int &tex_budget)
 
     // The section in its window
     ImVec2 ra(lx0 + lw + 14 * s, top), rb(gb.x - 14 * s, bottom);
-    std::string title = section + " .VIEW";
-    float rh = HoloPanel(dl, ra, rb, cy, title.c_str(), "END .PROGRAM", label);
     float ease = EaseSince(g_anim.tab_t, 0.28f);
+    // The title types itself in when the section changes, then a cursor blinks after it
+    std::string title = section + " .VIEW";
+    if (anim && ease < 1.0f) {
+        title = Utf8Prefix(title, (int)ceilf(Utf8Length(title) * ease));
+    }
+    if (anim && ((int)(tt * 2.0f) & 1) == 0) {
+        title += "_";
+    }
+    float rh = HoloPanel(dl, ra, rb, cy, title.c_str(), "END .PROGRAM", label);
+    if (ease < 1.0f) {
+        // A flash round the window as it opens
+        dl->AddRect(ra, rb, Alpha(cy, (int)(200 * (1.0f - ease))), 3 * s, 0, 3.5f * s);
+    }
     ImGui::SetCursorScreenPos(ImVec2(ra.x + 16 * s, ra.y + rh + 12 * s + (1.0f - ease) * 12 * s));
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.25f + 0.75f * ease);
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));

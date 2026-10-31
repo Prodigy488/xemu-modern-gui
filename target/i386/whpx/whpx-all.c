@@ -9,6 +9,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/whpx-probe.h"
 #include "cpu.h"
 #include "system/address-spaces.h"
 #include "system/ioport.h"
@@ -878,6 +879,34 @@ static const WHV_EMULATOR_CALLBACKS whpx_emu_callbacks = {
     .WHvEmulatorTranslateGvaPage = whpx_emu_translate_callback,
 };
 
+static XemuWhpxExit whpx_probe_kind(WHV_RUN_VP_EXIT_REASON reason)
+{
+    switch (reason) {
+    case WHvRunVpExitReasonMemoryAccess:
+        return XEMU_WHPX_EXIT_MMIO;
+    case WHvRunVpExitReasonX64IoPortAccess:
+        return XEMU_WHPX_EXIT_PORTIO;
+    case WHvRunVpExitReasonX64Halt:
+        return XEMU_WHPX_EXIT_HALT;
+    case WHvRunVpExitReasonX64InterruptWindow:
+        return XEMU_WHPX_EXIT_INTWINDOW;
+    case WHvRunVpExitReasonX64ApicEoi:
+        return XEMU_WHPX_EXIT_EOI;
+    case WHvRunVpExitReasonX64MsrAccess:
+        return XEMU_WHPX_EXIT_MSR;
+    case WHvRunVpExitReasonX64Cpuid:
+        return XEMU_WHPX_EXIT_CPUID;
+    case WHvRunVpExitReasonException:
+        return XEMU_WHPX_EXIT_EXCEPTION;
+    case WHvRunVpExitReasonCanceled:
+        return XEMU_WHPX_EXIT_CANCELED;
+    case WHvRunVpExitReasonX64ApicInitSipiTrap:
+        return XEMU_WHPX_EXIT_SIPI;
+    default:
+        return XEMU_WHPX_EXIT_OTHER;
+    }
+}
+
 static int whpx_handle_mmio(CPUState *cpu, WHV_MEMORY_ACCESS_CONTEXT *ctx)
 {
     HRESULT hr;
@@ -890,12 +919,18 @@ static int whpx_handle_mmio(CPUState *cpu, WHV_MEMORY_ACCESS_CONTEXT *ctx)
         &emu_status);
     if (FAILED(hr)) {
         error_report("WHPX: Failed to parse MMIO access, hr=%08lx", hr);
+        xemu_whpx_probe_failure("could not read an instruction that touched "
+                                "a device", vcpu->exit_ctx.VpContext.Rip,
+                                (uint64_t)ctx->Gpa);
         return -1;
     }
 
     if (!emu_status.EmulationSuccessful) {
         error_report("WHPX: Failed to emulate MMIO access with"
                      " EmulatorReturnStatus: %u", emu_status.AsUINT32);
+        xemu_whpx_probe_failure("could not run an instruction that touched "
+                                "a device", vcpu->exit_ctx.VpContext.Rip,
+                                (uint64_t)ctx->Gpa);
         return -1;
     }
 
@@ -915,12 +950,18 @@ static int whpx_handle_portio(CPUState *cpu,
         &emu_status);
     if (FAILED(hr)) {
         error_report("WHPX: Failed to parse PortIO access, hr=%08lx", hr);
+        xemu_whpx_probe_failure("could not read a port instruction",
+                                vcpu->exit_ctx.VpContext.Rip,
+                                (uint64_t)ctx->PortNumber);
         return -1;
     }
 
     if (!emu_status.EmulationSuccessful) {
         error_report("WHPX: Failed to emulate PortIO access with"
                      " EmulatorReturnStatus: %u", emu_status.AsUINT32);
+        xemu_whpx_probe_failure("could not run a port instruction",
+                                vcpu->exit_ctx.VpContext.Rip,
+                                (uint64_t)ctx->PortNumber);
         return -1;
     }
 
@@ -1735,6 +1776,8 @@ static int whpx_vcpu_run(CPUState *cpu)
         if (FAILED(hr)) {
             error_report("WHPX: Failed to exec a virtual processor,"
                          " hr=%08lx", hr);
+            xemu_whpx_probe_failure("the hypervisor refused to run the CPU",
+                                    0, (uint64_t)(uint32_t)hr);
             ret = -1;
             break;
         }
@@ -1746,6 +1789,8 @@ static int whpx_vcpu_run(CPUState *cpu)
         }
 
         whpx_vcpu_post_run(cpu);
+
+        xemu_whpx_probe_exit(whpx_probe_kind(vcpu->exit_ctx.ExitReason));
 
         switch (vcpu->exit_ctx.ExitReason) {
         case WHvRunVpExitReasonMemoryAccess:
@@ -2019,6 +2064,10 @@ static int whpx_vcpu_run(CPUState *cpu)
         default:
             error_report("WHPX: Unexpected VP exit code %d",
                          vcpu->exit_ctx.ExitReason);
+            xemu_whpx_probe_failure("the CPU stopped with an exit the "
+                                    "emulator does not handle",
+                                    vcpu->exit_ctx.VpContext.Rip,
+                                    (uint64_t)vcpu->exit_ctx.ExitReason);
             whpx_get_registers(cpu);
             bql_lock();
             qemu_system_guest_panicked(cpu_get_crash_info(cpu));
@@ -2260,6 +2309,7 @@ int whpx_vcpu_exec(CPUState *cpu)
 
         if (fatal) {
             error_report("WHPX: Failed to exec a virtual processor");
+            xemu_whpx_probe_failure("the CPU could not be run, closing", 0, 0);
             abort();
         }
     }
@@ -2704,9 +2754,21 @@ static int whpx_accel_init(AccelState *as, MachineState *ms)
     whpx_memory_init();
 
     printf("Windows Hypervisor Platform accelerator is operational\n");
+    xemu_whpx_probe_started(1, NULL);
     return 0;
 
 error:
+    if (ret == -ENOSYS) {
+        xemu_whpx_probe_started(0, "Windows Hypervisor Platform is not "
+                                "installed (turn it on in Windows Features)");
+    } else if (ret == -ENOSPC) {
+        xemu_whpx_probe_started(0, "no hypervisor is running (turn on "
+                                "virtualization in the BIOS and Windows "
+                                "Hypervisor Platform in Windows Features)");
+    } else {
+        xemu_whpx_probe_started(0, "the hypervisor could not set up the "
+                                "machine (see the log for the WHPX line)");
+    }
 
     if (NULL != whpx->partition) {
         whp_dispatch.WHvDeletePartition(whpx->partition);

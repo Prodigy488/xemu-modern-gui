@@ -18,6 +18,8 @@ struct GamePerfProfile {
     int real = -1;  // real hardware speed
     int hz = 0;     // display refresh in Hz, 0 as the global setting
     bool safe = false; // started with the boosts off after a crash
+    int whpx = -1;  // hardware virtualization CPU: -1 as global, 0 off, 1 on
+    int preset = 0; // 1 set up from the preset list, 2 the user reset it
 };
 
 // The game in the drive; false when none or its title could not be read
@@ -45,3 +47,10 @@ void GamePerfSetGlobalHz(int hz);
 // one this run started with (those are read once, at start-up)
 bool GamePerfRestartPending();
 void GamePerfRestart();
+
+// Hardware CPU (Windows Hypervisor Platform) test results.
+// One line for the Performance page: running, or why it is not.
+std::string GamePerfWhpxStatus();
+// What the last run of this game on the hardware CPU showed ("" = never
+// tried): worked, failed, or stopped unexpectedly, with a detail
+std::string GamePerfWhpxResult(uint32_t title_id);

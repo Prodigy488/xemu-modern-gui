@@ -61,6 +61,10 @@ styles (Holo and Aurora) and sturdier audio.
   focus and a bug-report diagnostics button** (v2.2).
 - **CPU boost and GPU boost, per-game settings and safe mode** (v2.3), and a
   floating-point fix that lets NFL Fever 2004 run.
+- **Hardware CPU test build** (v2.5.1, Windows): the experimental hardware
+  virtualization setting now keeps notes on how each game does, can be set for
+  one game, and a game that fails on it goes back to the normal CPU by itself.
+  See "Hardware CPU test" below.
 - **Holo and Aurora dashboard styles** (v2.5), and an audio chip that skips
   bad data from a game instead of stopping the emulator.
 - **Faster library scanning and Clear library** (v2.4): games appear as they
@@ -372,6 +376,18 @@ see the [Releases](../../releases) page.
   work with it.
 - **Debug mode:** start xemu with the environment variable `XEMU_DEBUG_MODE=1`
   to get detailed timing and crash reports in `xemu.log`. For bug reports.
+- **Hardware CPU test (v2.5.1, Windows):** turn on Settings > General >
+  Hardware virtualization, restart, and play. xemu writes `whpx_report.txt`
+  and `whpx_compat.txt` in the settings folder: for every game, whether it
+  worked (ran at least 90 seconds), failed (with the guest address and device
+  address where it stopped) or closed xemu unexpectedly, plus how many times
+  the CPU stopped for each reason. A game that fails gets "Hardware CPU: Off"
+  in its own settings and runs on the normal CPU from then on; each game also
+  has its own Hardware CPU setting under "This game". If the hypervisor cannot
+  start, the reason is shown and xemu uses the normal CPU. Games can also get
+  a first-time setup from a preset: put lines in `game_presets.txt` (the same
+  format as `game_perf.txt`) in the settings folder; a game that already has
+  settings is left alone.
 - **Sturdier audio (v2.5):** the audio chip no longer stops the emulator when
   a game hands it a bad voice number, a bad DSP transfer list, or an audio
   block outside memory. The bad piece is skipped (silence for a bad block) and

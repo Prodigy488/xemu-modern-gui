@@ -23,6 +23,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/whpx-probe.h"
 #include "qemu/help-texts.h"
 #include "qemu/datadir.h"
 #include "qemu/units.h"
@@ -3104,6 +3105,7 @@ void qemu_init(int argc, char **argv)
     // Experimental: run guest code on the Windows Hypervisor Platform. The
     // second -accel is the fallback if it can not start.
     if (g_config.perf.whpx) {
+        xemu_whpx_probe_requested();
         fake_argv[fake_argc++] = strdup("-accel");
         fake_argv[fake_argc++] = strdup("whpx");
         fake_argv[fake_argc++] = strdup("-accel");

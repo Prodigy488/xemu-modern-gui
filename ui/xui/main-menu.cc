@@ -100,6 +100,20 @@ void MainMenuGeneralView::Draw()
            "Needs \"Windows Hypervisor Platform\" turned on in Windows Features. "
            "Falls back to normal emulation if it cannot start. "
            "(requires restart)");
+    {
+        std::string st = GamePerfWhpxStatus();
+        if (!st.empty()) {
+            ImGui::PushTextWrapPos(0);
+            ImGui::TextDisabled("Hardware CPU: %s", st.c_str());
+            ImGui::PopTextWrapPos();
+        }
+        if (g_config.perf.whpx) {
+            ImGui::PushTextWrapPos(0);
+            ImGui::TextDisabled("Each game's result is kept in whpx_report.txt "
+                                "in the xemu settings folder.");
+            ImGui::PopTextWrapPos();
+        }
+    }
 #endif
 
     Toggle(tr("Cache shaders to disk"), &g_config.perf.cache_shaders,
@@ -169,6 +183,24 @@ void MainMenuGeneralView::Draw()
                              tr("Use the CPU boost for this game only, or follow the global setting. Applies the next time this game starts"))) {
                 gp.cpu = v - 1; changed = true;
             }
+#if defined(_WIN32) && defined(__x86_64__)
+            v = gp.whpx + 1;
+            if (ChevronCombo("Hardware CPU (this game)", &v, tri,
+                             "Run this game on the Windows Hypervisor Platform, "
+                             "or follow the global setting. A game that fails on "
+                             "it is switched off here by itself. Applies the next "
+                             "time xemu starts")) {
+                gp.whpx = v - 1; changed = true;
+            }
+            {
+                std::string res = GamePerfWhpxResult(gp_id);
+                if (!res.empty()) {
+                    ImGui::PushTextWrapPos(0);
+                    ImGui::TextDisabled("Hardware CPU, last time: %s", res.c_str());
+                    ImGui::PopTextWrapPos();
+                }
+            }
+#endif
             v = gp.gpu + 1;
             if (ChevronCombo(tr("GPU boost (this game)"), &v, tri,
                              tr("Use the GPU boost for this game only, or follow the global setting. Applies the next time this game starts"))) {

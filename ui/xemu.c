@@ -44,6 +44,7 @@
 #include "system/runstate-action.h"
 #include "system/system.h"
 #include "xui/xemu-hud.h"
+#include "xui/modern-version.hh"
 #include "xemu-input.h"
 #include "xemu-settings.h"
 #include "xemu-snapshots.h"
@@ -1083,11 +1084,11 @@ static void display_very_early_init(DisplayOptions *o)
         SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 
-    char *title = g_strdup_printf("xemu | v%s"
+    char *title = g_strdup_printf("xemu Modern GUI v%s | xemu v%s"
 #ifdef XEMU_DEBUG_BUILD
                                   " Debug"
 #endif
-                                  , xemu_version);
+                                  , XEMU_MODERN_GUI_VERSION, xemu_version);
 
     // Decide window size
     int min_window_width = 640;

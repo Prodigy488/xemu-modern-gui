@@ -226,6 +226,7 @@ std::string FolderSignature()
 // Background scan
 std::mutex g_scan_mutex;
 std::vector<LibraryEntry> g_scan_queue;
+std::vector<std::string> g_scan_drop; // listed twice: the copy to remove
 std::set<std::string> g_scan_found;
 bool g_scan_finished = false;
 std::thread g_scan_thread;
@@ -842,74 +843,62 @@ int64_t FileMtime(const fs::path &p)
     return ec ? 0 : (int64_t)t.time_since_epoch().count();
 }
 
+// One disc image found by the folder walk, waiting to be read
+struct ScanItem {
+    size_t index = 0; // order found: of identical discs, the first one stays
+    fs::path path;
+    uint64_t size = 0;
+    int64_t mtime = 0;
+};
+
+// The normalized key of a file (see PathKey), asking the filesystem about its
+// folder once instead of about every file
+std::string ScanKeyFor(const fs::directory_entry &de,
+                       std::map<std::string, std::string> &dir_keys)
+{
+    std::error_code ec;
+    if (de.is_symlink(ec)) {
+        return PathKey(de.path());
+    }
+    fs::path parent = de.path().parent_path();
+    std::string pk = parent.u8string();
+    auto it = dir_keys.find(pk);
+    if (it == dir_keys.end()) {
+        it = dir_keys.emplace(pk, PathKey(parent)).first;
+    }
+    std::string name = de.path().filename().generic_u8string();
+#ifdef _WIN32
+    name = Lower(name);
+#endif
+    return it->second == "/" ? "/" + name : it->second + "/" + name;
+}
+
 void ScanWorker(std::vector<LibraryFolder> folders,
                 std::vector<std::string> extra_files,
                 std::set<std::string> hidden,
                 std::map<std::string, LibraryEntry> cache)
 {
-    std::vector<fs::path> files;
-    std::set<std::string> seen;
-    auto consider = [&](const fs::directory_entry &de) {
-        std::error_code fec;
-        if (!de.is_regular_file(fec)) {
-            return;
-        }
-        std::string ext = Lower(de.path().extension().u8string());
-        if (ext != ".iso" && ext != ".xiso") {
-            return;
-        }
-        std::string key = PathKey(de.path());
-        if (!hidden.count(key) && seen.insert(key).second) {
-            files.push_back(de.path());
-        }
-    };
     std::error_code ec;
-    for (auto &folder : folders) {
-        fs::path root = fs::u8path(folder.path);
-        if (folder.recursive) {
-            fs::recursive_directory_iterator it(
-                root, fs::directory_options::skip_permission_denied, ec);
-            for (; !ec && it != fs::recursive_directory_iterator();
-                 it.increment(ec)) {
-                if (g_scan_cancel) {
-                    break;
-                }
-                if (it.depth() >= 32) {
-                    it.disable_recursion_pending(); // guard against loops
-                }
-                consider(*it);
-            }
-        } else {
-            fs::directory_iterator it(
-                root, fs::directory_options::skip_permission_denied, ec);
-            for (; !ec && it != fs::directory_iterator(); it.increment(ec)) {
-                consider(*it);
-            }
-        }
-        ec.clear();
-    }
-    for (auto &f : extra_files) {
-        std::error_code fec;
-        fs::directory_entry de(fs::u8path(f), fec);
-        if (!fec) {
-            consider(de);
-        }
-    }
-    g_scan_total = (int)files.size();
-
     fs::create_directories(IconCacheDir(), ec);
+
+    // Reading a disc's title is mostly waiting on the disk (or the network),
+    // so several are read at once, and each is shown as soon as it's read
+    std::mutex work_mutex;
+    std::condition_variable work_cv;
+    std::deque<ScanItem> work;
+    bool enumerated = false;
+
     std::set<std::string> found;
-    std::set<std::string> discs; // identical copies of a disc are listed once
-    for (auto &p : files) {
-        if (g_scan_cancel) {
-            break;
-        }
+    // identical copies of a disc are listed once: key -> (index, path) kept
+    std::map<std::string, std::pair<size_t, std::string>> discs;
+    std::mutex icon_mutex;
+
+    auto process = [&](const ScanItem &it) {
         LibraryEntry e;
-        e.path = p.u8string();
-        e.file_stem = p.stem().u8string();
-        e.file_size = fs::file_size(p, ec);
-        e.mtime = FileMtime(p);
-        found.insert(e.path);
+        e.path = it.path.u8string();
+        e.file_stem = it.path.stem().u8string();
+        e.file_size = it.size;
+        e.mtime = it.mtime;
 
         auto c = cache.find(e.path);
         if (c != cache.end() && c->second.file_size == e.file_size &&
@@ -929,6 +918,7 @@ void ScanWorker(std::vector<LibraryFolder> folders,
                     if (fpng::fpng_encode_image_to_memory(
                             info.icon_rgba.data(), info.icon_w, info.icon_h,
                             4, png)) {
+                        std::lock_guard<std::mutex> il(icon_mutex);
                         std::ofstream f(IconCacheDir() /
                                             (TitleIdHex(e.title_id) + ".png"),
                                         std::ios::binary | std::ios::trunc);
@@ -938,21 +928,150 @@ void ScanWorker(std::vector<LibraryFolder> folders,
                 }
             }
         }
+        std::lock_guard<std::mutex> lock(g_scan_mutex);
         if (e.valid) {
             std::string disc_key = string_format(
                 "%08X/%08X/%08X/%u/%llu", e.title_id, e.region, e.version,
                 e.disc_number, (unsigned long long)e.file_size);
-            if (!discs.insert(disc_key).second) {
-                found.erase(e.path); // duplicate of a disc already listed
+            auto d = discs.find(disc_key);
+            if (d == discs.end()) {
+                discs[disc_key] = { it.index, e.path };
+            } else if (d->second.first < it.index) {
+                // a copy of a disc already listed
+                found.erase(e.path);
+                g_scan_drop.push_back(e.path);
                 g_scan_done++;
-                continue;
+                return;
+            } else {
+                // found before the copy that was listed first: it wins
+                found.erase(d->second.second);
+                g_scan_drop.push_back(d->second.second);
+                d->second = { it.index, e.path };
             }
         }
+        g_scan_queue.push_back(std::move(e));
+        g_scan_done++;
+    };
+
+    unsigned hc = std::thread::hardware_concurrency();
+    int nthreads = (int)std::min(6u, std::max(2u, hc));
+    std::vector<std::thread> workers;
+    for (int i = 0; i < nthreads; i++) {
+        workers.emplace_back([&] {
+            for (;;) {
+                ScanItem it;
+                {
+                    std::unique_lock<std::mutex> lock(work_mutex);
+                    work_cv.wait(lock, [&] { return enumerated || !work.empty(); });
+                    if (work.empty()) {
+                        return; // all found and handed out
+                    }
+                    it = std::move(work.front());
+                    work.pop_front();
+                }
+                if (!g_scan_cancel) {
+                    process(it);
+                }
+            }
+        });
+    }
+
+    std::set<std::string> seen;
+    std::map<std::string, std::string> dir_keys;
+    size_t next_index = 0;
+    auto consider = [&](const fs::directory_entry &de) {
+        std::error_code fec;
+        if (!de.is_regular_file(fec)) {
+            return;
+        }
+        std::string ext = Lower(de.path().extension().u8string());
+        if (ext != ".iso" && ext != ".xiso") {
+            return;
+        }
+        std::string key = ScanKeyFor(de, dir_keys);
+        if (hidden.count(key) || !seen.insert(key).second) {
+            return;
+        }
+        ScanItem it;
+        it.index = next_index++;
+        it.path = de.path();
+        it.size = (uint64_t)de.file_size(fec);
+        if (fec) {
+            it.size = 0;
+            fec.clear();
+        }
+        auto t = de.last_write_time(fec);
+        it.mtime = fec ? 0 : (int64_t)t.time_since_epoch().count();
         {
             std::lock_guard<std::mutex> lock(g_scan_mutex);
-            g_scan_queue.push_back(std::move(e));
+            found.insert(it.path.u8string());
         }
-        g_scan_done++;
+        g_scan_total++;
+        {
+            std::lock_guard<std::mutex> lock(work_mutex);
+            work.push_back(std::move(it));
+        }
+        work_cv.notify_one();
+    };
+
+    // Walks a folder, handing each disc image to the readers right away. A
+    // folder that holds default.xbe is an extracted game, not a place for
+    // disc images, so its insides are skipped (they can be thousands of files).
+    std::function<void(const fs::path &, bool, int)> walk =
+        [&](const fs::path &dir, bool recursive, int depth) {
+            std::error_code wec;
+            fs::directory_iterator it(
+                dir, fs::directory_options::skip_permission_denied, wec);
+            std::vector<fs::path> subdirs;
+            bool game_dir = false;
+            for (; !wec && it != fs::directory_iterator(); it.increment(wec)) {
+                if (g_scan_cancel) {
+                    return;
+                }
+                const fs::directory_entry &de = *it;
+                std::error_code fec;
+                if (de.is_directory(fec)) {
+                    if (recursive && depth < 32 && !de.is_symlink(fec)) {
+                        std::string n = de.path().filename().u8string();
+                        if (!n.empty() && n[0] != '$' && n[0] != '.' &&
+                            Lower(n) != "system volume information") {
+                            subdirs.push_back(de.path());
+                        }
+                    }
+                    continue;
+                }
+                if (Lower(de.path().filename().u8string()) == "default.xbe") {
+                    game_dir = true;
+                }
+                consider(de);
+            }
+            if (game_dir) {
+                return;
+            }
+            for (auto &sub : subdirs) {
+                walk(sub, recursive, depth + 1);
+            }
+        };
+    for (auto &folder : folders) {
+        if (g_scan_cancel) {
+            break;
+        }
+        walk(fs::u8path(folder.path), folder.recursive, 0);
+    }
+    for (auto &f : extra_files) {
+        std::error_code fec;
+        fs::directory_entry de(fs::u8path(f), fec);
+        if (!fec) {
+            consider(de);
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(work_mutex);
+        enumerated = true;
+    }
+    work_cv.notify_all();
+    for (auto &w : workers) {
+        w.join();
     }
 
     std::lock_guard<std::mutex> lock(g_scan_mutex);
@@ -998,11 +1117,13 @@ void StartScan()
 void MergeScanResults()
 {
     std::vector<LibraryEntry> queue;
+    std::vector<std::string> drops;
     std::set<std::string> found;
     bool finished = false;
     {
         std::lock_guard<std::mutex> lock(g_scan_mutex);
         queue.swap(g_scan_queue);
+        drops.swap(g_scan_drop);
         if (g_scan_finished) {
             finished = true;
             found.swap(g_scan_found);
@@ -1030,6 +1151,19 @@ void MergeScanResults()
         } else {
             g_entries.push_back(r);
         }
+        g_dirty = true;
+    }
+    for (auto &path : drops) {
+        for (auto &e : g_entries) {
+            if (e.path == path) {
+                FreeTexture(e);
+            }
+        }
+        g_entries.erase(std::remove_if(g_entries.begin(), g_entries.end(),
+                                       [&](const LibraryEntry &e) {
+                                           return e.path == path;
+                                       }),
+                        g_entries.end());
         g_dirty = true;
     }
     if (finished) {
@@ -4649,6 +4783,8 @@ void DrawInsigniaPopup()
 }
 
 bool g_open_folders_popup = false;
+bool g_open_clear_library = false;
+void ClearLibrary();
 
 void DrawFoldersPopup()
 {
@@ -4752,6 +4888,42 @@ void DrawFoldersPopup()
     ImGui::SameLine();
     if (ImGui::Button(tr("Add game..."))) {
         AddGameFile();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(tr(ICON_FA_TRASH "  Clear library..."))) {
+        g_open_clear_library = true;
+    }
+    ImGui::SetItemTooltip(tr("Empty the library so you can add your folders "
+                          "and games again from scratch. Your game files are "
+                          "not touched."));
+    if (g_open_clear_library) {
+        g_open_clear_library = false;
+        ImGui::OpenPopup("##clear-library");
+    }
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                            ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("##clear-library", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::PushTextWrapPos(420 * s);
+        ImGui::TextUnformatted(tr("Clear the library?"));
+        ImGui::Dummy(ImVec2(0, 4 * s));
+        ImGui::TextWrapped("%s",
+            tr("This empties the game list and forgets your game folders, "
+               "individually added games and hidden games, so you can add "
+               "them again. Your game files are not deleted. Play time, "
+               "favorites, custom names and per-game settings are kept."));
+        ImGui::PopTextWrapPos();
+        ImGui::Dummy(ImVec2(0, 6 * s));
+        if (ImGui::Button(tr("Clear library"), ImVec2(140 * s, 0))) {
+            ClearLibrary();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(tr("Cancel"), ImVec2(100 * s, 0)) ||
+            ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
     ImGui::SameLine();
     if (ImGui::Button(tr("Done"), ImVec2(100 * s, 0)) ||
@@ -10485,6 +10657,55 @@ void GameLibraryWindow::Collapse()
     g_collapsed = true;
     g_collapsed_t = ImGui::GetCurrentContext() ? ImGui::GetTime() : 0;
 }
+
+namespace {
+
+// Empties the library so it can be built again: the game list, game folders,
+// individually added and hidden games, and the cached disc icons. Game files,
+// play time, favorites, names and per-game settings are left alone.
+void ClearLibrary()
+{
+    g_scan_cancel = true;
+    if (g_scan_thread.joinable()) {
+        g_scan_thread.join();
+    }
+    g_scan_running = false;
+    {
+        std::lock_guard<std::mutex> lock(g_scan_mutex);
+        g_scan_queue.clear();
+        g_scan_drop.clear();
+        g_scan_found.clear();
+        g_scan_finished = false;
+    }
+    for (auto &e : g_entries) {
+        FreeTexture(e);
+    }
+    g_entries.clear();
+    g_extra_folders.clear();
+    g_extra_files.clear();
+    g_hidden.clear();
+    g_selected_path.clear();
+    g_primary_recursive = true;
+    xemu_settings_set_string(&g_config.general.games_dir, "");
+    xemu_settings_save();
+    g_preview_cache.clear();
+    g_pathkey_cache.clear();
+    FreeScreenshotThumbs();
+    FreeBox3DArt();
+    std::error_code ec;
+    for (auto &de : fs::directory_iterator(IconCacheDir(), ec)) {
+        std::error_code fec;
+        if (de.is_regular_file(fec) &&
+            Lower(de.path().extension().u8string()) == ".png") {
+            fs::remove(de.path(), fec);
+        }
+    }
+    g_scanned_dir = FolderSignature();
+    SaveLibrary();
+    xemu_queue_notification(tr("Library cleared. Add your game folders again."));
+}
+
+} // namespace
 
 void GameLibraryWindow::Rescan()
 {

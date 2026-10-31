@@ -112,20 +112,22 @@ static void dsp_dma_run(DSPDMAState *s)
         uint32_t block_addr = 0;
         int block_space = DSP_SPACE_X;
 
-        if (addr < 0x1800) {
-            assert(addr+6 < 0x1800);
+        /* A node outside the DSP's memories (a corrupt or unfinished list)
+         * ends the transfer instead of stopping the emulator. */
+        if (addr < 0x1800 && addr + 6 < 0x1800) {
             block_space = DSP_SPACE_X;
             block_addr = addr;
-        } else if (addr >= 0x1800 && addr < 0x2000) { //?
-            assert(addr+6 < 0x2000);
+        } else if (addr >= 0x1800 && addr < 0x2000 && addr + 6 < 0x2000) { //?
             block_space = DSP_SPACE_Y;
             block_addr = addr - 0x1800;
-        } else if (addr >= 0x2800 && addr < 0x3800) { //?
-            assert(addr+6 < 0x3800);
+        } else if (addr >= 0x2800 && addr < 0x3800 && addr + 6 < 0x3800) { //?
             block_space = DSP_SPACE_P;
             block_addr = addr - 0x2800;
         } else {
-            assert(!"Dsp dma space address out of range");
+            fprintf(stderr, "Dsp dma node address out of range: %08x\n", addr);
+            s->next_block = NODE_POINTER_EOL;
+            s->eol = true;
+            break;
         }
 
         uint32_t next_block = s->mem_read(s->mem_opaque, block_space, block_addr);
@@ -154,8 +156,9 @@ static void dsp_dma_run(DSPDMAState *s)
         // uint32_t dsp_step                = (control >> 14) & 0x3FF; // FIXME
 
         /* Check for unhandled control settings */
-        assert(unk2 == 0x0);
-        assert(unk13 == false);
+        if (unk2 != 0x0 || unk13) {
+            fprintf(stderr, "Unhandled dsp dma control bits: %08x\n", control);
+        }
 
         /* Decode count for interleaved mode */
         uint32_t channel_count = (count & 0xF) + 1;
@@ -181,29 +184,34 @@ static void dsp_dma_run(DSPDMAState *s)
             break;
         default:
             fprintf(stderr, "Unknown dsp dma format: 0x%x\n", format);
-            assert(!"Unknown dsp dma format");
+            format = 7; /* skip this node */
             break;
+        }
+        if (format == 7) {
+            continue;
         }
 
         size_t scratch_addr = scratch_base + scratch_offset;
         uint32_t mem_address = 0;
         int mem_space = DSP_SPACE_X;
 
-        if (dsp_offset < 0x1800) {
-            assert(dsp_offset+count < 0x1800);
+        /* A transfer that leaves the DSP's memories is skipped (it also
+         * keeps the count within the scratch buffer). */
+        if (dsp_offset < 0x1800 && dsp_offset + count < 0x1800) {
             mem_space = DSP_SPACE_X;
             mem_address = dsp_offset;
-        } else if (dsp_offset >= 0x1800 && dsp_offset < 0x2000) { //?
-            assert(dsp_offset+count < 0x2000);
+        } else if (dsp_offset >= 0x1800 && dsp_offset < 0x2000 &&
+                   dsp_offset + count < 0x2000) { //?
             mem_space = DSP_SPACE_Y;
             mem_address = dsp_offset - 0x1800;
-        } else if (dsp_offset >= 0x2800 && dsp_offset < 0x3800) { //?
-            assert(dsp_offset+count < 0x3800);
+        } else if (dsp_offset >= 0x2800 && dsp_offset < 0x3800 &&
+                   dsp_offset + count < 0x3800) { //?
             mem_space = DSP_SPACE_P;
             mem_address = dsp_offset - 0x2800;
         } else {
-            fprintf(stderr, "Attempt to access %08x\n", dsp_offset);
-            assert(!"Dsp dma offset out of range");
+            fprintf(stderr, "Attempt to access %08x (count %u)\n", dsp_offset,
+                    count);
+            continue;
         }
 
         size_t transfer_size = count * item_size;

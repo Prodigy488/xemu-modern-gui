@@ -524,7 +524,9 @@ static void fe_method(MCPXAPUState *d, uint32_t method, uint32_t argument)
     case NV1BA0_PIO_SET_VOICE_SSL_A: {
         int ssl = 0;
         int current_voice = d->regs[NV_PAPU_FECV];
-        assert(current_voice < MCPX_HW_MAX_VOICES);
+        if (current_voice >= MCPX_HW_MAX_VOICES) { /* a bad voice number from the game */
+            break;
+        }
         d->vp.ssl[current_voice].base[ssl] =
             GET_MASK(argument, NV1BA0_PIO_SET_VOICE_SSL_A_BASE);
         d->vp.ssl[current_voice].count[ssl] =
@@ -539,7 +541,9 @@ static void fe_method(MCPXAPUState *d, uint32_t method, uint32_t argument)
     case NV1BA0_PIO_SET_VOICE_SSL_B: {
         int ssl = 1;
         int current_voice = d->regs[NV_PAPU_FECV];
-        assert(current_voice < MCPX_HW_MAX_VOICES);
+        if (current_voice >= MCPX_HW_MAX_VOICES) { /* a bad voice number from the game */
+            break;
+        }
         d->vp.ssl[current_voice].base[ssl] =
             GET_MASK(argument, NV1BA0_PIO_SET_VOICE_SSL_A_BASE);
         d->vp.ssl[current_voice].count[ssl] =
@@ -1055,9 +1059,15 @@ static int voice_get_samples(MCPXAPUState *d, uint32_t v, float samples[][2],
                 if (stream) {
                     hwaddr addr = segment_offset + linear_addr;
                     int max_seg_byte = (seg_len >> 6) * block_size;
-                    assert(linear_addr + block_size <= max_seg_byte);
-                    memcpy(adpcm_block, &d->ram_ptr[addr],
-                           block_size); // FIXME: Use idiomatic DMA function
+                    /* A block outside its segment or outside RAM (the guest
+                     * sets both) plays as silence, not as stray host memory */
+                    if (linear_addr + block_size <= max_seg_byte &&
+                        addr + block_size <= memory_region_size(d->ram)) {
+                        memcpy(adpcm_block, &d->ram_ptr[addr],
+                               block_size); // FIXME: Use idiomatic DMA function
+                    } else {
+                        memset(adpcm_block, 0, block_size);
+                    }
                 } else {
                     linear_addr += ba;
                     for (unsigned int word_index = 0;

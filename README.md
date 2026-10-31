@@ -33,14 +33,15 @@ setup, per-game keyboard and mouse setups and an experimental achievements
 tab (v2.1), four more dashboard styles, achievements that can unlock from the
 game's memory and stick drift tools (v2.2), performance settings in v2.3 (CPU
 boost, GPU boost and per-game settings with an automatic safe mode, plus a fix
-that lets NFL Fever 2004 run), and, new in v2.4, a faster game library with a
-"Clear library" button and a 1.4 GHz CPU option.
+that lets NFL Fever 2004 run), a faster game library with a "Clear library"
+button and a 1.4 GHz CPU option in v2.4, and, new in v2.5, two more dashboard
+styles (Holo and Aurora) and sturdier audio.
 
 ## Highlights
 
 - **Console-style dashboard** with Home, Library, Insignia, Media, Drive,
-  Homebrew, Patches and Settings tabs, eight styles (v2.2 adds Original Xbox,
-  Original Blades, Glossy Blades and Modern) and two themes. Everything works
+  Homebrew, Patches and Settings tabs, ten styles (v2.2 adds Original Xbox,
+  Original Blades, Glossy Blades and Modern; v2.5 adds Holo and Aurora) and two themes. Everything works
   from a controller.
 - **Game library** with cover art, play time, per-game settings, preview
   videos, save states and resume.
@@ -60,6 +61,8 @@ that lets NFL Fever 2004 run), and, new in v2.4, a faster game library with a
   focus and a bug-report diagnostics button** (v2.2).
 - **CPU boost and GPU boost, per-game settings and safe mode** (v2.3), and a
   floating-point fix that lets NFL Fever 2004 run.
+- **Holo and Aurora dashboard styles** (v2.5), and an audio chip that skips
+  bad data from a game instead of stopping the emulator.
 - **Faster library scanning and Clear library** (v2.4): games appear as they
   are found, and Library > Folders > Clear library empties the list so you can
   add your folders again. The version is shown in the window title.
@@ -117,8 +120,8 @@ see the [Releases](../../releases) page.
 
 ### A console-style dashboard
 
-- **Eight styles**, switchable any time: the tabbed **Dashboard**, **Blades**
-  (sliding side-by-side panels), **Metro** (slim XBMC4Gamers-style lists), **Original Xbox** (a from-scratch homage to the first Xbox's menu with a glowing wireframe globe; no Microsoft artwork), **Original Blades** (a bright green web, a glowing sphere with fins and an arc of orbs, one per section), **Glossy Blades** (silver blades on glossy green, in the spirit of the Xbox 360's first dashboard) and **Modern** (a side menu with icons, and one calm card)
+- **Ten styles**, switchable any time: the tabbed **Dashboard**, **Blades**
+  (sliding side-by-side panels), **Metro** (slim XBMC4Gamers-style lists), **Original Xbox** (a from-scratch homage to the first Xbox's menu with a glowing wireframe globe; no Microsoft artwork), **Original Blades** (a bright green web, a glowing sphere with fins and an arc of orbs, one per section), **Glossy Blades** (silver blades on glossy green, in the spirit of the Xbox 360's first dashboard) **Modern** (a side menu with icons, and one calm card), **Holo** (v2.5: a hologram terminal, thin outlines on black, the nine sections as a grid of tiles beside a live data stream and wave) and **Aurora** (v2.5: teal glass, the game you last played behind it, and a top bar with section pills)
   and the **Classic** single library window.
 - **Two themes:** **Neon** (near-black with cyan and magenta, cut-corner
   panels and HUD labels) and **Green** (the rounded look in xemu green).
@@ -369,6 +372,11 @@ see the [Releases](../../releases) page.
   work with it.
 - **Debug mode:** start xemu with the environment variable `XEMU_DEBUG_MODE=1`
   to get detailed timing and crash reports in `xemu.log`. For bug reports.
+- **Sturdier audio (v2.5):** the audio chip no longer stops the emulator when
+  a game hands it a bad voice number, a bad DSP transfer list, or an audio
+  block outside memory. The bad piece is skipped (silence for a bad block) and
+  the game carries on. Found by comparing with another Xbox emulator, hakuX,
+  which checks the same values; none of its code is used.
 - **Faster library scanning (v2.4):** the library walk hands each disc image
   to several readers as soon as it is found, so games appear while the scan
   is still running, and folders holding `default.xbe` (extracted games) are

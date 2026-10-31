@@ -31,9 +31,10 @@ one-click 60 FPS patches, upscaling and CRT filters, a homebrew tab and store,
 save backups, tools for finding out why a game is slow, a guided Insignia
 setup, per-game keyboard and mouse setups and an experimental achievements
 tab (v2.1), four more dashboard styles, achievements that can unlock from the
-game's memory and stick drift tools (v2.2), and, new in v2.3, performance
-settings: CPU boost, GPU boost and per-game settings with an automatic safe
-mode, plus a fix that lets NFL Fever 2004 run.
+game's memory and stick drift tools (v2.2), performance settings in v2.3 (CPU
+boost, GPU boost and per-game settings with an automatic safe mode, plus a fix
+that lets NFL Fever 2004 run), and, new in v2.4, a faster game library with a
+"Clear library" button and a 1.4 GHz CPU option.
 
 ## Highlights
 
@@ -59,6 +60,9 @@ mode, plus a fix that lets NFL Fever 2004 run.
   focus and a bug-report diagnostics button** (v2.2).
 - **CPU boost and GPU boost, per-game settings and safe mode** (v2.3), and a
   floating-point fix that lets NFL Fever 2004 run.
+- **Faster library scanning and Clear library** (v2.4): games appear as they
+  are found, and Library > Folders > Clear library empties the list so you can
+  add your folders again. The version is shown in the window title.
 
 ![Home tab, Neon theme](docs/screenshots/home.jpg)
 
@@ -92,13 +96,13 @@ settings, EEPROM and hard disk images carry over.
 
 A Linux x86_64 AppImage (and a tarball) is also on the Releases page, for
 testing: make the AppImage executable and run it. It has had very little
-testing and needs a recent distribution (glibc 2.39 or newer).
+testing and needs glibc 2.35 or newer (Ubuntu 22.04+, Fedora 36+, Debian 12+).
 
 You still need your **own** MCPX boot ROM, BIOS (flash ROM) and hard disk
 image, the same as with official xemu. They are not included and must not be
 shared.
 
-Windows is the main platform. The Linux AppImage is new in v2.3 and lightly
+Windows is the main platform. The Linux AppImage (new in v2.3, updated in v2.4) is lightly
 tested; macOS builds from source are untested.
 
 **Updating:** from v1.4 on, **Help > Check for Updates** finds new releases
@@ -365,6 +369,18 @@ see the [Releases](../../releases) page.
   work with it.
 - **Debug mode:** start xemu with the environment variable `XEMU_DEBUG_MODE=1`
   to get detailed timing and crash reports in `xemu.log`. For bug reports.
+- **Faster library scanning (v2.4):** the library walk hands each disc image
+  to several readers as soon as it is found, so games appear while the scan
+  is still running, and folders holding `default.xbe` (extracted games) are
+  not searched file by file. **Clear library** (Library > Folders) empties the
+  game list, game folders, individually added games and hidden games so you
+  can start again; game files, play time, favorites, names and per-game
+  settings are not touched.
+- **1.4 GHz CPU option (v2.4):** Real hardware speed can pace the CPU to 733
+  MHz (stock) or 1.4 GHz, like a modded console (Settings > Performance). Real
+  hardware speed is off by default. Also new: per-game display refresh,
+  a hover description on every setting, more on-screen keyboard layouts and
+  renaming games.
 - **Upstream xemu fixes merged (v2.3):** R6G5B5 textures, NV2A memory marked
   dirty on blits and surface downloads, rgba swizzles in generated shaders
   and VulkanMemoryAllocator 3.5.0.

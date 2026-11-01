@@ -157,6 +157,16 @@ void MainMenuGeneralView::Draw()
             GamePerfSetGlobalHz(refresh_hz[ri]);
         }
     }
+    if (GamePerfSafeModeCount() > 0) {
+        ImGui::PushTextWrapPos(0);
+        ImGui::Text("%d game(s) are in safe mode: boosts off and a 60 Hz "
+                    "display, so they run slower.",
+                    GamePerfSafeModeCount());
+        ImGui::PopTextWrapPos();
+        if (ImGui::Button("Take every game out of safe mode")) {
+            GamePerfLeaveSafeModeAll();
+        }
+    }
     {
         uint32_t gp_id = 0;
         std::string gp_name;

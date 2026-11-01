@@ -616,6 +616,11 @@ void xemu_game_perf_startup(const char *dvd_path)
                                                           : " (its own settings)")
                                        : "");
         fprintf(stderr, "game perf: hardware CPU %s\n", OnOff(e.whpx));
+        if (it != g_profiles.end() && it->second.safe && g_notice.empty()) {
+            g_notice = "This game is in safe mode (boosts off, so it runs "
+                       "slower). Settings > General > This game > Leave safe "
+                       "mode, then restart";
+        }
         WriteMarker(id);
         StartTitle();
     } else {
@@ -862,6 +867,25 @@ void GamePerfForget()
     GamePerfProfile fresh;
     fresh.preset = g_presets.count(g_cur_id) ? 2 : 0;
     g_profiles[g_cur_id] = fresh;
+    GamePerfChanged();
+}
+
+int GamePerfSafeModeCount()
+{
+    Load();
+    int n = 0;
+    for (auto &[id, p] : g_profiles) {
+        n += p.safe ? 1 : 0;
+    }
+    return n;
+}
+
+void GamePerfLeaveSafeModeAll()
+{
+    Load();
+    for (auto &[id, p] : g_profiles) {
+        p.safe = false;
+    }
     GamePerfChanged();
 }
 

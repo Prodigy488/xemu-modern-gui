@@ -54,3 +54,8 @@ std::string GamePerfWhpxStatus();
 // What the last run of this game on the hardware CPU showed ("" = never
 // tried): worked, failed, or stopped unexpectedly, with a detail
 std::string GamePerfWhpxResult(uint32_t title_id);
+
+// Games that were put in safe mode (boosts off, 60 Hz) after xemu closed
+// unexpectedly, and a way to take them all out of it
+int GamePerfSafeModeCount();
+void GamePerfLeaveSafeModeAll();

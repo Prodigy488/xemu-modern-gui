@@ -759,13 +759,22 @@ static void add_final_stage_code(struct PixelShader *ps, struct FCInputInfo fina
     ps->varE = ps->varF = NULL;
 }
 
+/* A stage can name a lookup while its texture format register says no
+ * dimensionality (disabled texture, or a state rebuilt from a seed when the
+ * renderer is switched); that used to abort. Sample it as 2D. */
+static int psh_tex_dim(const struct PshState *state, int i)
+{
+    int dim = state->dim_tex[i];
+    return (dim == 2 || dim == 3) ? dim : 2;
+}
+
 static const char *get_sampler_type(struct PixelShader *ps, enum PS_TEXTUREMODES mode, int i)
 {
     const char *sampler2D = "sampler2D";
     const char *sampler3D = "sampler3D";
     const char *samplerCube = "samplerCube";
     const struct PshState *state = ps->state;
-    int dim = state->dim_tex[i];
+    int dim = psh_tex_dim(state, i);
 
     // FIXME: Cleanup
     switch (mode) {
@@ -921,7 +930,7 @@ static void apply_border_adjustment(const struct PixelShader *ps, MString *vars,
 
 static void apply_convolution_filter(const struct PixelShader *ps, MString *vars, int tex)
 {
-    assert(ps->state->dim_tex[tex] == 2);
+    assert(psh_tex_dim(ps->state, tex) == 2);
     // FIXME: Quincunx
 
     g_autofree gchar *normalize_tex_coords = g_strdup_printf("norm%d", tex);
@@ -1413,7 +1422,7 @@ static MString* psh_convert(struct PixelShader *ps)
                      (ps->state->conv_tex[i] == CONVOLUTION_FILTER_QUINCUNX))) {
                     apply_convolution_filter(ps, vars, i);
                 } else {
-                    if (ps->state->dim_tex[i] == 2) {
+                    if (psh_tex_dim(ps->state, i) == 2) {
                         if (ps->state->tex_cubemap[i]) {
                             mstring_append_fmt(
                                 vars,
@@ -1425,12 +1434,12 @@ static MString* psh_convert(struct PixelShader *ps)
                                 "vec4 t%d = textureProj(texSamp%d, %s(pT%d.xyw));\n",
                                 i, i, tex_remap, i);
                         }
-                    } else if (ps->state->dim_tex[i] == 3) {
+                    } else if (psh_tex_dim(ps->state, i) == 3) {
                         mstring_append_fmt(vars, "vec4 t%d = textureProj(texSamp%d, vec4(pT%d.xy, 0.0, pT%d.w));\n",
                                            i, i, i, i);
                     } else {
                         fprintf(stderr, "Unhandled texture dimensions in PROJECT2D: stage=%d dim_tex=%d cubemap=%d rect=%d\n",
-                                i, ps->state->dim_tex[i], ps->state->tex_cubemap[i], ps->state->rect_tex[i]);
+                                i, psh_tex_dim(ps->state, i), ps->state->tex_cubemap[i], ps->state->rect_tex[i]);
                         assert(!"Unhandled texture dimensions");
                     }
                 }
@@ -1486,16 +1495,16 @@ static MString* psh_convert(struct PixelShader *ps)
 
             mstring_append_fmt(vars, "dsdt%d = bumpMat[%d] * dsdt%d;\n", i, i, i);
 
-            if (ps->state->dim_tex[i] == 2) {
+            if (psh_tex_dim(ps->state, i) == 2) {
                 mstring_append_fmt(vars, "vec4 t%d = texture(texSamp%d, %s(pT%d.xy + dsdt%d));\n",
                     i, i, tex_remap, i, i);
-            } else if (ps->state->dim_tex[i] == 3) {
+            } else if (psh_tex_dim(ps->state, i) == 3) {
                 // FIXME: Does hardware pass through the r/z coordinate or is it 0?
                 mstring_append_fmt(vars, "vec4 t%d = texture(texSamp%d, vec3(pT%d.xy + dsdt%d, pT%d.z));\n",
                     i, i, i, i, i);
             } else {
                 fprintf(stderr,"Unhandled texture dimensions in BUMPENVMAP: stage=%d dim_tex=%d\n",
-                        i, ps->state->dim_tex[i]);
+                        i, psh_tex_dim(ps->state, i));
                 assert(!"Unhandled texture dimensions");
             }
             break;
@@ -1515,16 +1524,16 @@ static MString* psh_convert(struct PixelShader *ps)
             mstring_append_fmt(vars, "dsdtl%d.st = bumpMat[%d] * dsdtl%d.st;\n",
                                i, i, i);
 
-            if (ps->state->dim_tex[i] == 2) {
+            if (psh_tex_dim(ps->state, i) == 2) {
                 mstring_append_fmt(vars, "vec4 t%d = texture(texSamp%d, %s(pT%d.xy + dsdtl%d.st));\n",
                     i, i, tex_remap, i, i);
-            } else if (ps->state->dim_tex[i] == 3) {
+            } else if (psh_tex_dim(ps->state, i) == 3) {
                 // FIXME: Does hardware pass through the r/z coordinate or is it 0?
                 mstring_append_fmt(vars, "vec4 t%d = texture(texSamp%d, vec3(pT%d.xy + dsdtl%d.st, pT%d.z));\n",
                     i, i, i, i, i);
             } else {
                 fprintf(stderr, "Unhandled texture dimensions in BUMPENVMAP_LUM: stage=%d dim_tex=%d\n",
-                        i, ps->state->dim_tex[i]);
+                        i, psh_tex_dim(ps->state, i));
                 assert(!"Unhandled texture dimensions");
             }
 
@@ -1608,7 +1617,7 @@ static MString* psh_convert(struct PixelShader *ps)
             apply_border_adjustment(ps, vars, i, "dotSTR%d");
             mstring_append_fmt(vars,
                 "vec4 t%d = texture(texSamp%d, %s(dotSTR%d%s));\n",
-                i, i, tex_remap, i, ps->state->dim_tex[i] == 2 ? ".xy" : "");
+                i, i, tex_remap, i, psh_tex_dim(ps->state, i) == 2 ? ".xy" : "");
             break;
         case PS_TEXTUREMODES_DOT_STR_CUBE:
             assert(i == 3);

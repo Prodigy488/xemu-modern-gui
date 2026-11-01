@@ -1686,7 +1686,10 @@ static VkSampler create_sampler_for_state(PGRAPHState *pg,
                 custom_border_color_create_info.customBorderColor.float32);
         }
         sampler_next_struct = &custom_border_color_create_info;
-    } else {
+    } else if (!standard_border_color) {
+        /* No custom colour support: this colour has no enumerant. A standard
+         * colour keeps the one the switch above picked (this branch used to
+         * overwrite it with white, which drew boxes round sprites). */
         // FIXME: Handle custom color in shader
         vk_border_color = is_integer_type ? VK_BORDER_COLOR_INT_TRANSPARENT_BLACK :
                                             VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;

@@ -265,6 +265,18 @@ void pgraph_glsl_set_psh_state(PGRAPHState *pg, PshState *state)
 
         uint32_t tex_fmt = pgraph_reg_r(pg, NV_PGRAPH_TEXFMT0 + i * 4);
         state->dim_tex[i] = GET_MASK(tex_fmt, NV_PGRAPH_TEXFMT0_DIMENSIONALITY);
+        if (state->dim_tex[i] != 2 && state->dim_tex[i] != 3) {
+            /* A stage whose format register holds no dimensionality (seen
+             * after switching renderer mid-game) aborted the emulator in the
+             * shader generator. Treat it as 2D. */
+            static bool warned;
+            if (!warned) {
+                warned = true;
+                fprintf(stderr, "nv2a: texture stage %d has dimensionality %d, using 2D\n",
+                        i, state->dim_tex[i]);
+            }
+            state->dim_tex[i] = 2;
+        }
 
         unsigned int color_format = GET_MASK(tex_fmt, NV_PGRAPH_TEXFMT0_COLOR);
         BasicColorFormatInfo f = kelvin_color_format_info_map[color_format];

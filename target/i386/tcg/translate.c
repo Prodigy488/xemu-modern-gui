@@ -4407,7 +4407,9 @@ static void xemu_x87_switch_work(CPUState *cpu, run_on_cpu_data data)
 /* Called from the UI thread when a game with another x87 need is launched */
 void xemu_x87_set_mode(int exact)
 {
-    if (!first_cpu || exact == xemu_x87_exact) {
+    /* With the hardware CPU nothing is translated: there is nothing to
+     * rebuild, and flushing translated code would stop the program */
+    if (!first_cpu || exact == xemu_x87_exact || !tcg_enabled()) {
         xemu_x87_exact = exact;
         return;
     }

@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <map>
 #include <mutex>
 #include <string>
@@ -70,6 +71,8 @@ bool g_started = false;
 bool g_run_cpu = false, g_run_gpu = false; // read once at start-up
 bool g_run_whpx = false;
 int g_marker_whpx = 0;
+long long g_marker_start = 0;   // when this run began (seconds)
+long long g_marker_alive = 0;   // last time the marker was refreshed
 std::string g_notice;
 
 std::string File(const char *name)
@@ -484,8 +487,14 @@ void WriteMarker(uint32_t id)
         return;
     }
     g_marker_whpx = xemu_whpx_probe_active() ? 1 : 0;
-    fprintf(f, "%08X boosts=%d whpx=%d\n", id, (g_run_cpu || g_run_gpu) ? 1 : 0,
-            g_marker_whpx);
+    long long now = (long long)time(nullptr);
+    if (!g_marker_start) {
+        g_marker_start = now;
+    }
+    g_marker_alive = now;
+    fprintf(f, "%08X boosts=%d whpx=%d start=%lld alive=%lld\n", id,
+            (g_run_cpu || g_run_gpu) ? 1 : 0, g_marker_whpx, g_marker_start,
+            g_marker_alive);
     fclose(f);
 }
 
@@ -548,7 +557,19 @@ void xemu_game_perf_startup(const char *dvd_path)
         unsigned id = 0;
         int boosts = 0;
         int hw = 0;
-        int n = fscanf(m, "%x boosts=%d whpx=%d", &id, &boosts, &hw);
+        long long t_start = 0, t_alive = 0;
+        int n = fscanf(m, "%x boosts=%d whpx=%d start=%lld alive=%lld", &id,
+                       &boosts, &hw, &t_start, &t_alive);
+        // A run that went on for a while and then just ended (window closed,
+        // task killed, power) is not a boost crash: only a run that died
+        // soon after it started counts.
+        long long ran = (n >= 5 && t_alive > t_start) ? t_alive - t_start : 0;
+        if (ran >= 90 && !hw) {
+            fprintf(stderr,
+                    "game perf: last run of %08X ended without a clean exit "
+                    "after %lld s; not treating that as a crash\n", id, ran);
+            boosts = 0;
+        }
         if (n >= 3 && hw) {
             // The hardware CPU is the new part, so it is blamed first: this
             // game goes back to the normal CPU, and the boosts are not
@@ -693,6 +714,14 @@ void xemu_game_perf_disc_changed(const char *path)
 
 void xemu_game_perf_tick(void)
 {
+    // Keep the marker's "alive" time fresh so a later start can tell a long
+    // run that ended abruptly from a crash on start-up
+    if (g_started && g_cur_ok && g_marker_start) {
+        long long now = (long long)time(nullptr);
+        if (now - g_marker_alive >= 30) {
+            WriteMarker(g_cur_id);
+        }
+    }
     if (xemu_vk_bench_msg[0]) {
         xemu_queue_notification(xemu_vk_bench_msg);
         xemu_vk_bench_msg[0] = 0;

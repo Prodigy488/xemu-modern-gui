@@ -18,6 +18,7 @@ static struct {
     unsigned failures;
     uint64_t total;
     uint64_t exits[XEMU_WHPX_EXIT_KINDS];
+    uint64_t sync_tracked, sync_fallback, pages_total, pages_dirty;
     char start_note[200];
     char last_failure[260];
     void (*flush)(void);
@@ -45,6 +46,18 @@ void xemu_whpx_probe_exit(XemuWhpxExit kind)
 {
     g_probe.total++;
     g_probe.exits[kind < XEMU_WHPX_EXIT_KINDS ? kind : XEMU_WHPX_EXIT_OTHER]++;
+}
+
+void xemu_whpx_probe_dirty_sync(int tracked, uint64_t pages_total,
+                                uint64_t pages_dirty)
+{
+    if (tracked) {
+        g_probe.sync_tracked++;
+    } else {
+        g_probe.sync_fallback++;
+    }
+    g_probe.pages_total += pages_total;
+    g_probe.pages_dirty += pages_dirty;
 }
 
 void xemu_whpx_probe_set_flush(void (*flush)(void))
@@ -125,6 +138,16 @@ void xemu_whpx_probe_describe(char *buf, size_t size)
             n += snprintf(buf + n, size - n, "  %-34s %llu\n", exit_names[i],
                           (unsigned long long)g_probe.exits[i]);
         }
+    }
+    if ((g_probe.sync_tracked || g_probe.sync_fallback) && n < size) {
+        n += snprintf(buf + n, size - n,
+                      "memory change tracking: %llu syncs answered by the "
+                      "hypervisor, %llu marked everything changed; %llu of "
+                      "%llu pages changed\n",
+                      (unsigned long long)g_probe.sync_tracked,
+                      (unsigned long long)g_probe.sync_fallback,
+                      (unsigned long long)g_probe.pages_dirty,
+                      (unsigned long long)g_probe.pages_total);
     }
     if (g_probe.last_failure[0] && n < size) {
         n += snprintf(buf + n, size - n, "last failure: %s\n",

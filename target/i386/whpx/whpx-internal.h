@@ -76,6 +76,9 @@ void whpx_apic_get(APICCommonState *s);
  */
 #define LIST_WINHVPLATFORM_FUNCTIONS_SUPPLEMENTAL(X) \
   X(HRESULT, WHvSuspendPartitionTime, (WHV_PARTITION_HANDLE Partition)) \
+  X(HRESULT, WHvQueryGpaRangeDirtyBitmap, (WHV_PARTITION_HANDLE Partition, \
+        WHV_GUEST_PHYSICAL_ADDRESS GuestAddress, UINT64 RangeSizeInBytes, \
+        UINT64* Bitmap, UINT32 BitmapSizeInBytes)) \
   X(HRESULT, WHvRequestInterrupt, (WHV_PARTITION_HANDLE Partition, \
         WHV_INTERRUPT_CONTROL* Interrupt, UINT32 InterruptControlSize)) \
   X(HRESULT, WHvGetVirtualProcessorInterruptControllerState2, \

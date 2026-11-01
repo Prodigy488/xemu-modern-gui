@@ -10,6 +10,7 @@
 
 #include "qemu/osdep.h"
 #include "qemu/whpx-probe.h"
+#include "system/physmem.h"
 #include "cpu.h"
 #include "system/address-spaces.h"
 #include "system/ioport.h"
@@ -2338,6 +2339,21 @@ void whpx_vcpu_kick(CPUState *cpu)
  * Memory support.
  */
 
+/*
+ * Change tracking: the hypervisor can say which pages the guest wrote since
+ * the last time it was asked (WHvMapGpaRangeFlagTrackDirtyPages, bit 3, and
+ * WHvQueryGpaRangeDirtyBitmap). Without it every sync would report all of
+ * the memory as changed, and the graphics code would re-read every texture
+ * and surface each frame.
+ */
+static WHV_MAP_GPA_RANGE_FLAGS whpx_track_flag(void)
+{
+    if (!whp_dispatch.WHvQueryGpaRangeDirtyBitmap) {
+        return (WHV_MAP_GPA_RANGE_FLAGS)0;
+    }
+    return (WHV_MAP_GPA_RANGE_FLAGS)0x00000008;
+}
+
 static void whpx_update_mapping(hwaddr start_pa, ram_addr_t size,
                                 void *host_va, int add, int rom,
                                 const char *name)
@@ -2363,7 +2379,19 @@ static void whpx_update_mapping(hwaddr start_pa, ram_addr_t size,
                                          size,
                                          (WHvMapGpaRangeFlagRead |
                                           WHvMapGpaRangeFlagExecute |
-                                          (rom ? 0 : WHvMapGpaRangeFlagWrite)));
+                                          (rom ? 0 : WHvMapGpaRangeFlagWrite) |
+                                          (rom ? 0 : whpx_track_flag())));
+        if (FAILED(hr) && !rom && whpx_track_flag()) {
+            /* No change tracking for this range: map it plain; its syncs
+             * then report everything as changed */
+            hr = whp_dispatch.WHvMapGpaRange(whpx->partition,
+                                             host_va,
+                                             start_pa,
+                                             size,
+                                             (WHvMapGpaRangeFlagRead |
+                                              WHvMapGpaRangeFlagExecute |
+                                              WHvMapGpaRangeFlagWrite));
+        }
     } else {
         hr = whp_dispatch.WHvUnmapGpaRange(whpx->partition,
                                            start_pa,
@@ -2434,13 +2462,62 @@ static void whpx_transaction_commit(MemoryListener *listener)
 static void whpx_log_sync(MemoryListener *listener,
                          MemoryRegionSection *section)
 {
+    struct whpx_state *whpx = &whpx_global;
     MemoryRegion *mr = section->mr;
+    hwaddr start_pa = section->offset_within_address_space;
+    uint64_t size = int128_get64(section->size);
+    uint64_t delta;
+    uint64_t pages;
+    uint64_t *bitmap;
+    HRESULT hr;
 
     if (!memory_region_is_ram(mr)) {
         return;
     }
+    if (memory_region_is_rom(mr)) {
+        return;
+    }
 
-    memory_region_set_dirty(mr, 0, int128_get64(section->size));
+    if (whpx_track_flag()) {
+        /* The same page-aligned range that was mapped */
+        delta = (qemu_real_host_page_size() -
+                 (start_pa & ~qemu_real_host_page_mask())) &
+                ~qemu_real_host_page_mask();
+        if (delta < size) {
+            uint64_t sub = (size - delta) & qemu_real_host_page_mask();
+            if (sub && !((start_pa + delta) & ~qemu_real_host_page_mask())) {
+                pages = sub >> 12;
+                bitmap = g_new0(uint64_t, (pages + 63) / 64);
+                hr = whp_dispatch.WHvQueryGpaRangeDirtyBitmap(
+                    whpx->partition, start_pa + delta, sub, bitmap,
+                    (UINT32)(((pages + 63) / 64) * sizeof(uint64_t)));
+                if (SUCCEEDED(hr)) {
+                    uint64_t dirty = physical_memory_set_dirty_lebitmap(
+                        (unsigned long *)bitmap,
+                        memory_region_get_ram_addr(mr) +
+                            section->offset_within_region + delta,
+                        pages);
+                    xemu_whpx_probe_dirty_sync(1, pages, dirty);
+                    g_free(bitmap);
+                    /* the unaligned edges are not tracked */
+                    if (delta) {
+                        memory_region_set_dirty(
+                            mr, section->offset_within_region, delta);
+                    }
+                    if (size > delta + sub) {
+                        memory_region_set_dirty(
+                            mr, section->offset_within_region + delta + sub,
+                            size - delta - sub);
+                    }
+                    return;
+                }
+                g_free(bitmap);
+            }
+        }
+    }
+
+    xemu_whpx_probe_dirty_sync(0, size >> 12, size >> 12);
+    memory_region_set_dirty(mr, section->offset_within_region, size);
 }
 
 static MemoryListener whpx_memory_listener = {

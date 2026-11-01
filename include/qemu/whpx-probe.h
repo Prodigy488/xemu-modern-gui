@@ -48,6 +48,12 @@ void xemu_whpx_probe_exit(XemuWhpxExit kind);
  * function is called so the report reaches the disk before a crash. */
 void xemu_whpx_probe_failure(const char *what, uint64_t rip, uint64_t extra);
 
+/* Memory change tracking: one sync of a memory range. tracked says the
+ * hypervisor answered (pages changed since the last sync); otherwise the
+ * whole range was reported as changed. */
+void xemu_whpx_probe_dirty_sync(int tracked, uint64_t pages_total,
+                                uint64_t pages_dirty);
+
 /* A function the UI gives to write the report when a failure happens */
 void xemu_whpx_probe_set_flush(void (*flush)(void));
 

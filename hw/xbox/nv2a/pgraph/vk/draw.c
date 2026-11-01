@@ -3383,8 +3383,10 @@ void pgraph_vk_draw_end(NV2AState *d)
          * comparing against the one-submission-per-pass behaviour.
          * XEMU_VK_EAGER=N sets the number of draws between submissions. */
         const char *e = getenv("XEMU_VK_EAGER");
-        eager_cfg = e && e[0] ? (unsigned)atoi(e) :
-                    (unsigned)MAX(0, g_config.perf.vk_eager_draws);
+        /* Off unless XEMU_VK_EAGER is set: submitting every 128 draws in the
+         * middle of a pass drew black frames and warped geometry in FRWL
+         * (the config value, default 128, is ignored until that is fixed). */
+        eager_cfg = e && e[0] ? (unsigned)atoi(e) : 0;
         if (!pgraph_gpu_boost()) {
             eager_cfg = 0;
         }

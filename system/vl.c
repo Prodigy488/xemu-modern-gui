@@ -4080,6 +4080,12 @@ void qemu_init(int argc, char **argv)
 #endif
     fprintf(stderr, "accel: the emulated CPU is running on %s\n",
             current_accel_name());
+    if (xemu_whpx_probe_requested_flag() && !xemu_whpx_probe_active() &&
+        !xemu_whpx_probe_start_note()[0]) {
+        /* Asked for, but the accelerator never tried to start */
+        xemu_whpx_probe_started(0, "this build of xemu does not include the "
+                                "hardware CPU");
+    }
     phase_advance(PHASE_ACCEL_CREATED);
 
     /*

@@ -10,7 +10,6 @@
 
 #include "qemu/osdep.h"
 #include "qemu/whpx-probe.h"
-#include "system/physmem.h"
 #include "cpu.h"
 #include "system/address-spaces.h"
 #include "system/ioport.h"
@@ -20,6 +19,8 @@
 #include "system/whpx.h"
 #include "system/cpus.h"
 #include "system/runstate.h"
+#include "exec/cpu-common.h"
+#include "system/physmem.h"
 #include "qemu/main-loop.h"
 #include "hw/boards.h"
 #include "hw/intc/ioapic.h"

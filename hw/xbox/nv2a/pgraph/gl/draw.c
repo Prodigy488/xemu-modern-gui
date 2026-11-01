@@ -689,14 +689,44 @@ void pgraph_gl_flush_draw(NV2AState *d)
             pgraph_gl_bind_shaders(pg);
         }
 
+        /* Stream into per-attribute rings: fresh space each draw, orphaned
+         * only on wrap. All attributes share `first`, so pointers stay at
+         * offset 0. Larger than a ring: the old orphan-and-fill path. */
+        const unsigned int n = pg->inline_buffer_length;
+        const bool ring = n <= INLINE_BUFFER_RING_VERTS;
+        unsigned int first = 0;
+        if (ring) {
+            if (!r->inline_ring_gen ||
+                r->inline_ring_pos + n > INLINE_BUFFER_RING_VERTS) {
+                r->inline_ring_gen++;
+                r->inline_ring_pos = 0;
+            }
+            first = r->inline_ring_pos;
+            r->inline_ring_pos += n;
+        }
+
         for (int i = 0; i < NV2A_VERTEXSHADER_ATTRIBUTES; i++) {
             VertexAttribute *attr = &pg->vertex_attributes[i];
             if (attr->inline_buffer_populated) {
                 nv2a_profile_inc_counter(NV2A_PROF_GEOM_BUFFER_UPDATE_3);
                 glBindBuffer(GL_ARRAY_BUFFER, r->gl_inline_buffer[i]);
-                glBufferData(GL_ARRAY_BUFFER,
-                             pg->inline_buffer_length * sizeof(float) * 4,
-                             attr->inline_buffer, GL_STREAM_DRAW);
+                if (ring) {
+                    if (r->inline_ring_buf_gen[i] != r->inline_ring_gen) {
+                        glBufferData(GL_ARRAY_BUFFER,
+                                     (GLsizeiptr)INLINE_BUFFER_RING_VERTS *
+                                         sizeof(float) * 4,
+                                     NULL, GL_STREAM_DRAW);
+                        r->inline_ring_buf_gen[i] = r->inline_ring_gen;
+                    }
+                    glBufferSubData(GL_ARRAY_BUFFER,
+                                    (GLintptr)first * sizeof(float) * 4,
+                                    (GLsizeiptr)n * sizeof(float) * 4,
+                                    attr->inline_buffer);
+                } else {
+                    glBufferData(GL_ARRAY_BUFFER, n * sizeof(float) * 4,
+                                 attr->inline_buffer, GL_STREAM_DRAW);
+                    r->inline_ring_buf_gen[i] = 0; /* ring storage replaced */
+                }
                 pgraph_gl_attr_pointer(r, i, r->gl_inline_buffer[i], 4,
                                        GL_FLOAT, GL_FALSE, 0, 0, false);
                 pgraph_gl_attr_enable(r, i, true);
@@ -711,7 +741,7 @@ void pgraph_gl_flush_draw(NV2AState *d)
         }
 
         glDrawArrays(r->shader_binding->gl_primitive_mode,
-                     0, pg->inline_buffer_length);
+                     first, pg->inline_buffer_length);
         xemu_cost_add_verts(pg->inline_buffer_length, vcost_milli,
                             vbytes_milli);
     } else if (pg->inline_array_length) {
@@ -720,7 +750,7 @@ void pgraph_gl_flush_draw(NV2AState *d)
 
         unsigned int index_count = pgraph_gl_bind_inline_array(d);
         glDrawArrays(r->shader_binding->gl_primitive_mode,
-                     0, index_count);
+                     r->inline_array_first, index_count);
         xemu_cost_add_verts(index_count, vcost_milli, vbytes_milli);
     } else {
         NV2A_GL_DPRINTF(true, "EMPTY NV097_SET_BEGIN_END");

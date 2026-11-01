@@ -250,6 +250,10 @@ typedef struct QueryReport {
     GLuint *queries;
 } QueryReport;
 
+/* Inline vertex streaming rings (see PGRAPHGLState) */
+#define INLINE_BUFFER_RING_VERTS (128 * 1024)       /* per attribute, x16 B */
+#define INLINE_ARRAY_RING_BYTES  (8 * 1024 * 1024)
+
 typedef struct PGRAPHGLState {
     GLuint gl_framebuffer;
     /* Display-thread coordination for the scanout. The surface list is
@@ -286,6 +290,17 @@ typedef struct PGRAPHGLState {
     GLuint gl_memory_buffer;
     GLuint gl_vertex_array;
     GLuint gl_inline_buffer[NV2A_VERTEXSHADER_ATTRIBUTES];
+
+    /* Streaming rings for inline vertex data. A draw writes into fresh space
+     * (no per-draw buffer reallocation) and draws from `first`; the buffer
+     * is orphaned only when the ring wraps. Attribute pointers keep offset
+     * 0, so the attribute shadow still skips them. */
+    uint64_t inline_ring_gen;       /* bumped on wrap, never 0 */
+    unsigned int inline_ring_pos;   /* next free vertex */
+    uint64_t inline_ring_buf_gen[NV2A_VERTEXSHADER_ATTRIBUTES];
+    size_t inline_array_pos;        /* next free byte */
+    bool inline_array_ready;        /* ring storage allocated */
+    unsigned int inline_array_first; /* first vertex of the last bind */
 
     /* Shadow of each attribute slot's pointer, enable and current value,
      * to skip repeated GL calls: set only through pgraph_gl_attr_*. */

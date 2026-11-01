@@ -383,8 +383,26 @@ unsigned int pgraph_gl_bind_inline_array(NV2AState *d)
     nv2a_profile_inc_counter(NV2A_PROF_GEOM_BUFFER_UPDATE_2);
     glBindBuffer(GL_ARRAY_BUFFER, r->gl_inline_array_buffer);
     GLsizeiptr buffer_size = index_count * vertex_size;
-    glBufferData(GL_ARRAY_BUFFER, buffer_size, NULL, GL_STREAM_DRAW);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, buffer_size, pg->inline_array);
+    if (vertex_size && (size_t)buffer_size <= INLINE_ARRAY_RING_BYTES) {
+        /* Append to the ring at a vertex boundary, so the attribute offsets
+         * stay put and the draw starts at `first`. A wrap orphans. */
+        size_t pos = ROUND_UP(r->inline_array_pos, vertex_size);
+        if (!r->inline_array_ready ||
+            pos + (size_t)buffer_size > INLINE_ARRAY_RING_BYTES) {
+            glBufferData(GL_ARRAY_BUFFER, INLINE_ARRAY_RING_BYTES, NULL,
+                         GL_STREAM_DRAW);
+            r->inline_array_ready = true;
+            pos = 0;
+        }
+        glBufferSubData(GL_ARRAY_BUFFER, pos, buffer_size, pg->inline_array);
+        r->inline_array_first = pos / vertex_size;
+        r->inline_array_pos = pos + buffer_size;
+    } else {
+        glBufferData(GL_ARRAY_BUFFER, buffer_size, NULL, GL_STREAM_DRAW);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, buffer_size, pg->inline_array);
+        r->inline_array_ready = false; /* storage replaced: ring is gone */
+        r->inline_array_first = 0;
+    }
     pgraph_gl_bind_vertex_attributes(d, 0, index_count-1, true, vertex_size,
                                   index_count-1, false);
 
@@ -430,6 +448,12 @@ void pgraph_gl_init_buffers(NV2AState *d)
 
     glGenBuffers(NV2A_VERTEXSHADER_ATTRIBUTES, r->gl_inline_buffer);
     glGenBuffers(1, &r->gl_inline_array_buffer);
+    r->inline_ring_gen = 0;
+    r->inline_ring_pos = 0;
+    memset(r->inline_ring_buf_gen, 0, sizeof(r->inline_ring_buf_gen));
+    r->inline_array_pos = 0;
+    r->inline_array_ready = false;
+    r->inline_array_first = 0;
 
     glGenBuffers(1, &r->gl_memory_buffer);
     glBindBuffer(GL_ARRAY_BUFFER, r->gl_memory_buffer);

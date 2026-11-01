@@ -2639,11 +2639,13 @@ static void update_surface_part(NV2AState *d, bool upload, bool color)
 
     if (!upload && surface->draw_dirty) {
         if (!tcg_enabled()) {
-            /* FIXME: Cannot monitor for reads/writes; flush now */
-            surface_download(d,
-                             color ? r->color_binding :
-                                     r->zeta_binding,
-                             true);
+            /* FIXME: Cannot monitor for reads/writes; flush now. The
+             * binding may already be gone (unbound or evicted). */
+            SurfaceBinding *bound = color ? r->color_binding :
+                                            r->zeta_binding;
+            if (bound) {
+                surface_download(d, bound, true);
+            }
         }
 
         surface->write_enabled_cache = false;

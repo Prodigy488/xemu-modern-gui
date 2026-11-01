@@ -386,7 +386,7 @@ unsigned int pgraph_gl_bind_inline_array(NV2AState *d)
     if (vertex_size && (size_t)buffer_size <= INLINE_ARRAY_RING_BYTES) {
         /* Append to the ring at a vertex boundary, so the attribute offsets
          * stay put and the draw starts at `first`. A wrap orphans. */
-        size_t pos = ROUND_UP(r->inline_array_pos, vertex_size);
+        size_t pos = QEMU_ALIGN_UP(r->inline_array_pos, (size_t)vertex_size);
         if (!r->inline_array_ready ||
             pos + (size_t)buffer_size > INLINE_ARRAY_RING_BYTES) {
             glBufferData(GL_ARRAY_BUFFER, INLINE_ARRAY_RING_BYTES, NULL,

@@ -128,6 +128,11 @@ jobs:
 
         # Install the downloaded LLVM debs. apt will resolve any non-LLVM deps from Ubuntu repos.
         sudo apt-get install -y --no-install-recommends ./*.deb
+    - name: Install newer Vulkan headers
+      run: |
+        # Ubuntu 22.04's headers predate the extensions the Vulkan renderer uses
+        git clone --depth 1 --branch v1.3.275 https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/vkh
+        sudo cp -r /tmp/vkh/include/vulkan /tmp/vkh/include/vk_video /usr/local/include/
     - name: Setup ccache
       run: |
         echo "PATH=/usr/lib/ccache:$PATH" >> "$GITHUB_ENV"

@@ -2013,6 +2013,17 @@ const LibTheme &T()
                : kThemeNeon;
 }
 
+// std::clamp stops the program when the upper bound is below the lower one,
+// which happens when a window is squeezed very small (minimised, or while
+// the game window is changing size). This one just picks the lower bound.
+inline float SafeClamp(float v, float lo, float hi)
+{
+    if (hi < lo) {
+        return lo;
+    }
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
 // One value per theme: green, neon, tron red
 template <class V>
 V Pick3(V green, V neon, V red)
@@ -7161,7 +7172,7 @@ void DrawHomeTab(int &tex_budget)
     ImVec2 avail = ImGui::GetContentRegionAvail();
     float gap = 22 * s;
     float side_w = avail.x > 1000 * s ? std::floor(avail.x * 0.35f) : 0;
-    float hero_h = std::floor(std::clamp(avail.y * 0.52f, 230 * s, 440 * s));
+    float hero_h = std::floor(SafeClamp(avail.y * 0.52f, 230 * s, 440 * s));
     ImVec2 hero_a = ImGui::GetCursorScreenPos();
     DrawHomeHero(*hero, ImVec2(side_w ? avail.x - side_w - gap : avail.x, hero_h),
                  tex_budget, is_recent);
@@ -12309,7 +12320,7 @@ void DrawHoloFrame(int &tex_budget)
         // A pulse of light travelling along the header line
         float x0 = ga.x + 12 * s, x1 = gb.x - 12 * s, tail = 120 * s;
         float x = x0 + fmodf(tt * 460 * s, (x1 - x0) + 2 * tail) - tail;
-        float xa = std::clamp(x - tail, x0, x1), xb = std::clamp(x, x0, x1);
+        float xa = SafeClamp(x - tail, x0, x1), xb = SafeClamp(x, x0, x1);
         if (xb > xa) {
             float y = ga.y + hdr;
             dl->AddRectFilledMultiColor(ImVec2(xa, y - 1.5f * s), ImVec2(xb, y + 1.5f * s),
@@ -12319,7 +12330,7 @@ void DrawHoloFrame(int &tex_budget)
 
     const float top = ga.y + hdr + 12 * s, bottom = gb.y - hints_h - 2 * s;
     const float lx0 = ga.x + 14 * s;
-    const float lw = std::clamp(ws.x * 0.27f, 214.0f * s, 380.0f * s);
+    const float lw = SafeClamp(ws.x * 0.27f, 214.0f * s, 380.0f * s);
     const float gap = 10 * s;
 
     // Sections: a 3 x 3 grid of tiles

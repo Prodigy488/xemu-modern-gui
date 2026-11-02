@@ -16,7 +16,41 @@
 
 namespace {
 
-const ImU32 kGreen = IM_COL32(133, 204, 36, 255);
+// The theme colour: 0 keeps the original green; 1 turns every coloured
+// pixel to cyan, 2 to Tron red. Whites, greys and blacks stay as they are.
+int g_theme = 0;
+
+ImU32 Th(ImU32 c)
+{
+    if (g_theme == 0) {
+        return c;
+    }
+    float r = (float)((c >> IM_COL32_R_SHIFT) & 0xFF) / 255.0f;
+    float g = (float)((c >> IM_COL32_G_SHIFT) & 0xFF) / 255.0f;
+    float b = (float)((c >> IM_COL32_B_SHIFT) & 0xFF) / 255.0f;
+    float h, sat, v;
+    ImGui::ColorConvertRGBtoHSV(r, g, b, h, sat, v);
+    if (sat < 0.12f) {
+        return c;
+    }
+    // Green and lime (hue 60 to 130) move to the theme hue; yellower parts
+    // go a little further around, so the hot cores stay warmer than the rims
+    float hd = h * 360.0f;
+    float target = g_theme == 1 ? 188.0f : 5.0f;
+    float nh = target + (95.0f - hd) * 0.5f;
+    nh = nh - 360.0f * floorf(nh / 360.0f);
+    if (g_theme == 2) {
+        sat = std::min(1.0f, sat * 1.05f);
+    }
+    ImGui::ColorConvertHSVtoRGB(nh / 360.0f, sat, v, r, g, b);
+    return IM_COL32((int)(r * 255.0f + 0.5f), (int)(g * 255.0f + 0.5f),
+                         (int)(b * 255.0f + 0.5f), (c >> IM_COL32_A_SHIFT) & 0xFF);
+}
+
+#define XD_COL(R, G, B, A) Th(IM_COL32(R, G, B, A))
+#define kGreen XD_COL(133, 204, 36, 255)
+#define kLime XD_COL(150, 225, 40, 255)
+
 const float kPi = 3.14159265f;
 
 ImU32 A(ImU32 c, int alpha)
@@ -63,7 +97,7 @@ void XboxDashGlobe(ImDrawList *dl, ImVec2 c, float R, double t, float pulse, boo
         dl->AddCircleFilled(c, r, A(kGreen, alpha), 96);
     }
     // Glass body, lighter toward the lower left
-    dl->AddCircleFilled(c, R, IM_COL32(3, 16, 4, 244), 96);
+    dl->AddCircleFilled(c, R, XD_COL(3, 16, 4, 244), 96);
     for (int i = 0; i < 14; i++) {
         float rr = R * (0.96f - i * 0.058f);
         float off = R * 0.03f * i;
@@ -123,9 +157,9 @@ void XboxDashGlobe(ImDrawList *dl, ImVec2 c, float R, double t, float pulse, boo
     // Rim and shine
     dl->AddCircle(c, R, A(kGreen, 190), 96, std::max(1.5f, R * 0.014f));
     dl->AddCircleFilled(ImVec2(c.x - R * 0.36f, c.y - R * 0.42f), R * 0.16f,
-                        IM_COL32(255, 255, 255, 16), 40);
+                        XD_COL(255, 255, 255, 16), 40);
     dl->AddCircleFilled(ImVec2(c.x - R * 0.40f, c.y - R * 0.46f), R * 0.07f,
-                        IM_COL32(255, 255, 255, 34), 32);
+                        XD_COL(255, 255, 255, 34), 32);
 }
 
 void XboxDashBackground(ImDrawList *dl, ImVec2 a, ImVec2 b, float s, double t, bool menu_view,
@@ -133,9 +167,9 @@ void XboxDashBackground(ImDrawList *dl, ImVec2 a, ImVec2 b, float s, double t, b
 {
     float w = b.x - a.x, h = b.y - a.y;
     // Black, with green rising from the bottom
-    dl->AddRectFilledMultiColor(a, b, IM_COL32(0, 2, 0, 244), IM_COL32(0, 2, 0, 244),
-                                menu_view ? IM_COL32(6, 28, 6, 246) : IM_COL32(3, 14, 3, 246),
-                                menu_view ? IM_COL32(6, 28, 6, 246) : IM_COL32(3, 14, 3, 246));
+    dl->AddRectFilledMultiColor(a, b, XD_COL(0, 2, 0, 244), XD_COL(0, 2, 0, 244),
+                                menu_view ? XD_COL(6, 28, 6, 246) : XD_COL(3, 14, 3, 246),
+                                menu_view ? XD_COL(6, 28, 6, 246) : XD_COL(3, 14, 3, 246));
     // A soft pool of light behind the globe
     if (menu_view) {
         ImVec2 c;
@@ -266,7 +300,7 @@ int XboxDashMenu(const char *brand, const char *const *labels, int n, int &sel, 
         bool on = i == sel;
         std::string text = labels[i];
         dl->AddText(font, fs, ImVec2(p.x, p.y + (row_h - fs) / 2),
-                    on ? IM_COL32(255, 255, 255, 255) : IM_COL32(205, 225, 205, hov ? 190 : 130),
+                    on ? XD_COL(255, 255, 255, 255) : XD_COL(205, 225, 205, hov ? 190 : 130),
                     text.c_str());
         ImGui::PopID();
     }
@@ -285,13 +319,13 @@ XboxDashRect XboxDashWindow(const char *title, ImVec2 a, ImVec2 b, float s, ImFo
     ImVec2 p0(left + (1.0f - open_t) * 60 * s, a.y + 58 * s), p1(b.x - pad, b.y - bottom_margin);
 
     // Glass over the globe
-    dl->AddRectFilled(p0, p1, IM_COL32(3, 12, 4, 214 * fade / 255), 8 * s);
+    dl->AddRectFilled(p0, p1, XD_COL(3, 12, 4, 214 * fade / 255), 8 * s);
     dl->AddRect(p0, p1, A(kGreen, 130 * fade / 255), 8 * s, 0, 1.4f * s);
     dl->AddRectFilledMultiColor(p0, ImVec2(p1.x, p0.y + 3 * s), A(kGreen, 210 * fade / 255),
                                 A(kGreen, 60 * fade / 255), A(kGreen, 60 * fade / 255),
                                 A(kGreen, 210 * fade / 255));
     float tx = p0.x + 22 * s, ty = p0.y + 14 * s;
-    dl->AddText(font, font->FontSize, ImVec2(tx, ty), IM_COL32(255, 255, 255, fade), title);
+    dl->AddText(font, font->FontSize, ImVec2(tx, ty), XD_COL(255, 255, 255, fade), title);
     float ly = ty + font->FontSize + 8 * s;
     dl->AddRectFilledMultiColor(ImVec2(tx, ly), ImVec2(tx + (p1.x - p0.x) * 0.55f, ly + 2 * s),
                                 A(kGreen, fade), A(kGreen, 0), A(kGreen, 0), A(kGreen, fade));
@@ -311,7 +345,6 @@ XboxDashRect XboxDashWindow(const char *title, ImVec2 a, ImVec2 b, float s, ImFo
 
 namespace {
 
-const ImU32 kLime = IM_COL32(150, 225, 40, 255);
 
 ImU32 Mix(ImU32 c0, ImU32 c1, float f)
 {
@@ -358,8 +391,8 @@ void DrawSphere(ImDrawList *dl, ImVec2 c, float R, double t, float spin, float p
         dl->AddCircleFilled(c, r, A(kLime, (int)((11.0f - i * 0.6f) * (1.0f + pulse * 1.2f))), 96);
     }
     // Body: dark at the rim, lime toward the upper left
-    const ImU32 rim = IM_COL32(52, 104, 10, 255), mid = IM_COL32(150, 190, 22, 255),
-                core = IM_COL32(214, 226, 52, 255);
+    const ImU32 rim = XD_COL(52, 104, 10, 255), mid = XD_COL(150, 190, 22, 255),
+                core = XD_COL(214, 226, 52, 255);
     for (int i = 0; i < 20; i++) {
         float f = (float)i / 19;
         float rr = R * (1.0f - f * 0.82f);
@@ -369,13 +402,13 @@ void DrawSphere(ImDrawList *dl, ImVec2 c, float R, double t, float spin, float p
     }
     // Soft shine
     dl->AddCircleFilled(ImVec2(c.x - R * 0.38f, c.y - R * 0.5f), R * 0.12f,
-                        IM_COL32(255, 255, 220, 70), 32);
+                        XD_COL(255, 255, 220, 70), 32);
     dl->AddCircleFilled(ImVec2(c.x - R * 0.40f, c.y - R * 0.54f), R * 0.05f,
-                        IM_COL32(255, 255, 240, 140), 24);
-    dl->AddCircle(c, R, IM_COL32(190, 235, 80, 150), 96, std::max(1.2f, R * 0.012f));
+                        XD_COL(255, 255, 240, 140), 24);
+    dl->AddCircle(c, R, XD_COL(190, 235, 80, 150), 96, std::max(1.2f, R * 0.012f));
 
     // Fins turning round it
-    const ImU32 fin = IM_COL32(170, 235, 130, 62), edge = IM_COL32(200, 250, 160, 150);
+    const ImU32 fin = XD_COL(170, 235, 130, 62), edge = XD_COL(200, 250, 160, 150);
     float ln = std::max(1.0f, 1.3f * s);
     DrawFin(dl, c, R * 1.30f, R * 0.28f, tt * 0.30f + 2.2f, 2.5f, 1.0f, fin, edge, ln);
     DrawFin(dl, c, R * 1.46f, R * 0.22f, -tt * 0.21f + 0.4f, 2.1f, 1.0f, fin, edge, ln);
@@ -388,8 +421,8 @@ void DrawSphere(ImDrawList *dl, ImVec2 c, float R, double t, float spin, float p
     float sa = -0.30f + 0.06f * sinf(tm * 0.5f);
     ImVec2 d(cosf(sa), sinf(sa));
     ImVec2 s0(c.x - d.x * R * 2.0f, c.y - d.y * R * 2.0f), s1(c.x + d.x * R * 0.1f, c.y + d.y * R * 0.1f);
-    dl->AddLine(s0, s1, IM_COL32(190, 245, 150, 150), std::max(1.5f, R * 0.02f));
-    dl->AddLine(s0, s1, IM_COL32(255, 255, 220, 70), 1.0f);
+    dl->AddLine(s0, s1, XD_COL(190, 245, 150, 150), std::max(1.5f, R * 0.02f));
+    dl->AddLine(s0, s1, XD_COL(255, 255, 220, 70), 1.0f);
 }
 
 // A glass orb
@@ -401,20 +434,20 @@ void DrawOrb(ImDrawList *dl, ImVec2 c, float r, float lit, int fade, float beat)
     if (lit > 0.01f) {
         dl->AddCircle(c, r * (1.5f + 0.5f * beat), A(kLime, F((int)(70 * lit * (1.0f - beat)))), 40, 1.5f);
     }
-    dl->AddCircleFilled(c, r, A(IM_COL32(18, 70, 8, 255), F(235)), 40);
+    dl->AddCircleFilled(c, r, A(XD_COL(18, 70, 8, 255), F(235)), 40);
     for (int i = 0; i < 5; i++) {
         float f = (float)i / 4;
         dl->AddCircleFilled(ImVec2(c.x - r * 0.12f * f, c.y - r * 0.14f * f), r * (0.92f - 0.16f * i),
-                            A(Mix(IM_COL32(40, 120, 12, 255), IM_COL32(200, 235, 60, 255),
+                            A(Mix(XD_COL(40, 120, 12, 255), XD_COL(200, 235, 60, 255),
                                   0.15f + 0.8f * lit * f),
                               F(60 + (int)(60 * lit))),
                             32);
     }
-    dl->AddCircle(c, r, A(Mix(IM_COL32(120, 200, 40, 255), IM_COL32(230, 250, 120, 255), lit),
+    dl->AddCircle(c, r, A(Mix(XD_COL(120, 200, 40, 255), XD_COL(230, 250, 120, 255), lit),
                          F((int)(170 + 85 * lit))),
                   40, std::max(1.2f, r * 0.08f));
     dl->AddCircleFilled(ImVec2(c.x - r * 0.38f, c.y - r * 0.42f), r * 0.2f,
-                        IM_COL32(255, 255, 230, F(60)), 16);
+                        XD_COL(255, 255, 230, F(60)), 16);
 }
 
 } // namespace
@@ -423,8 +456,8 @@ void XboxDashSphereBackground(ImDrawList *dl, ImVec2 a, ImVec2 b, float s, doubl
                               bool animate)
 {
     float w = b.x - a.x, h = b.y - a.y;
-    dl->AddRectFilledMultiColor(a, b, IM_COL32(18, 76, 16, 250), IM_COL32(12, 58, 12, 250),
-                                IM_COL32(4, 34, 7, 252), IM_COL32(6, 42, 8, 252));
+    dl->AddRectFilledMultiColor(a, b, XD_COL(18, 76, 16, 250), XD_COL(12, 58, 12, 250),
+                                XD_COL(4, 34, 7, 252), XD_COL(6, 42, 8, 252));
     // The web: a jittered lattice, joined into triangles, slowly breathing
     const int cols = 22, rows = 13;
     float dx = w / (cols - 1), dy = h / (rows - 1);
@@ -439,7 +472,7 @@ void XboxDashSphereBackground(ImDrawList *dl, ImVec2 a, ImVec2 b, float s, doubl
             pts[j * cols + i] = ImVec2(x, y);
         }
     }
-    const ImU32 web = IM_COL32(120, 205, 44, 78);
+    const ImU32 web = XD_COL(120, 205, 44, 78);
     const float lw = std::max(1.0f, 1.2f * s);
     for (int j = 0; j < rows; j++) {
         for (int i = 0; i < cols; i++) {
@@ -463,12 +496,12 @@ void XboxDashSphereBackground(ImDrawList *dl, ImVec2 a, ImVec2 b, float s, doubl
         dl->AddCircle(ImVec2(cx, cy), h * (1.1f + 0.15f * i), A(kLime, 40), 128, lw);
     }
     // Dim the edges so the middle reads clearly
-    dl->AddRectFilledMultiColor(a, ImVec2(b.x, a.y + h * 0.14f), IM_COL32(0, 14, 2, 120),
-                                IM_COL32(0, 14, 2, 120), IM_COL32(0, 14, 2, 0),
-                                IM_COL32(0, 14, 2, 0));
-    dl->AddRectFilledMultiColor(ImVec2(a.x, b.y - h * 0.2f), b, IM_COL32(0, 14, 2, 0),
-                                IM_COL32(0, 14, 2, 0), IM_COL32(0, 14, 2, 150),
-                                IM_COL32(0, 14, 2, 150));
+    dl->AddRectFilledMultiColor(a, ImVec2(b.x, a.y + h * 0.14f), XD_COL(0, 14, 2, 120),
+                                XD_COL(0, 14, 2, 120), XD_COL(0, 14, 2, 0),
+                                XD_COL(0, 14, 2, 0));
+    dl->AddRectFilledMultiColor(ImVec2(a.x, b.y - h * 0.2f), b, XD_COL(0, 14, 2, 0),
+                                XD_COL(0, 14, 2, 0), XD_COL(0, 14, 2, 150),
+                                XD_COL(0, 14, 2, 150));
 }
 
 int XboxDashSphereMenu(const char *const *labels, int n, int &sel, ImVec2 a, ImVec2 b, float s,
@@ -559,13 +592,13 @@ int XboxDashSphereMenu(const char *const *labels, int n, int &sel, ImVec2 a, ImV
                                ImVec2(x0 + bar_h * 0.35f, y0 - bar_h * 0.16f),
                                ImVec2(x0 + bar_h * 1.4f, y0 - bar_h * 0.16f) };
             dl->AddPolyline(stub, 3, A(kLime, F(110)), 0, std::max(1.0f, 1.2f * s));
-            ImU32 fill = Mix(IM_COL32(40, 112, 16, 255), IM_COL32(168, 172, 14, 255), lit);
+            ImU32 fill = Mix(XD_COL(40, 112, 16, 255), XD_COL(168, 172, 14, 255), lit);
             dl->AddConvexPolyFilled(q, 5, A(fill, F((int)(150 + 80 * lit))));
             dl->AddRectFilledMultiColor(ImVec2(x0 + notch, y0), ImVec2(right, y0 + bar_h * 0.45f),
-                                        IM_COL32(255, 255, 255, F((int)(20 + 14 * lit))),
-                                        IM_COL32(255, 255, 255, F(4)),
-                                        IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 0));
-            dl->AddPolyline(q, 5, A(Mix(IM_COL32(110, 200, 40, 255), IM_COL32(225, 240, 90, 255), lit),
+                                        XD_COL(255, 255, 255, F((int)(20 + 14 * lit))),
+                                        XD_COL(255, 255, 255, F(4)),
+                                        XD_COL(255, 255, 255, 0), XD_COL(255, 255, 255, 0));
+            dl->AddPolyline(q, 5, A(Mix(XD_COL(110, 200, 40, 255), XD_COL(225, 240, 90, 255), lit),
                                     F((int)(130 + 120 * lit))),
                             ImDrawFlags_Closed, std::max(1.2f, 1.5f * s));
             if (lit > 0.5f && animate) {
@@ -574,8 +607,8 @@ int XboxDashSphereMenu(const char *const *labels, int n, int &sel, ImVec2 a, ImV
                 float bw = (right - x0) * 0.16f, bx = x0 + (right - x0) * cyc;
                 dl->PushClipRect(ImVec2(x0, y0), ImVec2(right, y1), true);
                 dl->AddRectFilledMultiColor(ImVec2(bx, y0), ImVec2(bx + bw, y1),
-                                            IM_COL32(255, 255, 220, 0), IM_COL32(255, 255, 220, F((int)(46 * lit))),
-                                            IM_COL32(255, 255, 220, F((int)(46 * lit))), IM_COL32(255, 255, 220, 0));
+                                            XD_COL(255, 255, 220, 0), XD_COL(255, 255, 220, F((int)(46 * lit))),
+                                            XD_COL(255, 255, 220, F((int)(46 * lit))), XD_COL(255, 255, 220, 0));
                 dl->PopClipRect();
             }
         }
@@ -602,7 +635,7 @@ int XboxDashSphereMenu(const char *const *labels, int n, int &sel, ImVec2 a, ImV
         }
         ImGui::PopID();
         if (fade > 0) {
-            ImU32 txt = Mix(IM_COL32(205, 240, 130, 255), IM_COL32(22, 40, 4, 255), lit);
+            ImU32 txt = Mix(XD_COL(205, 240, 130, 255), XD_COL(22, 40, 4, 255), lit);
             dl->AddText(f, f->FontSize, ImVec2(x0 + notch + 12 * s, oy - f->FontSize / 2),
                         A(txt, F(hov ? 255 : 235)), labels[i]);
         }
@@ -610,4 +643,9 @@ int XboxDashSphereMenu(const char *const *labels, int n, int &sel, ImVec2 a, ImV
     ImGui::PopStyleColor();
     focus_prev = focused_row;
     return picked;
+}
+
+void XboxDashSetTheme(int theme)
+{
+    g_theme = theme < 0 || theme > 2 ? 0 : theme;
 }

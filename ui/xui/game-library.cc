@@ -1925,12 +1925,13 @@ void ApplyOverridesFor(const std::string &path)
 // ---------------------------------------------------------------------------
 
 struct LibTheme {
-    bool neon;
+    bool neon;     // cut corners and HUD labels (Neon and Tron Red)
     ImU32 accent;  // selection, focus, highlights
     ImU32 accent2; // secondary highlights (Resume, ONLINE)
     ImU32 text, dim, panel, border, online;
     ImU32 ok, warn, bad; // status colors
     ImVec4 primary, on_primary, resume, glass, white;
+    int id; // 0 green, 1 neon, 2 tron red
 };
 
 const LibTheme kThemeGreen = {
@@ -1950,6 +1951,7 @@ const LibTheme kThemeGreen = {
     ImVec4(0.18f, 0.50f, 0.88f, 1),
     ImVec4(1, 1, 1, 0.10f),
     ImVec4(0.95f, 0.97f, 0.94f, 1),
+    0,
 };
 
 const LibTheme kThemeNeon = {
@@ -1969,6 +1971,29 @@ const LibTheme kThemeNeon = {
     ImVec4(1.0f, 0.18f, 0.53f, 0.10f), // Resume: outlined magenta
     ImVec4(0.0f, 0.898f, 1.0f, 0.06f),
     ImVec4(0.90f, 0.93f, 1.0f, 1),
+    1,
+};
+
+// Tron red (Ares): red-black with a hot red edge light and amber as the
+// second colour
+const LibTheme kThemeRed = {
+    true,
+    IM_COL32(255, 52, 40, 255),   // Ares red
+    IM_COL32(255, 150, 40, 255),  // amber
+    IM_COL32(245, 232, 228, 255),
+    IM_COL32(165, 126, 120, 255),
+    IM_COL32(26, 12, 12, 165),
+    IM_COL32(255, 52, 40, 46),
+    IM_COL32(255, 150, 40, 255),
+    IM_COL32(57, 255, 136, 255),
+    IM_COL32(255, 196, 0, 255),
+    IM_COL32(255, 90, 80, 255),
+    ImVec4(1.0f, 0.204f, 0.157f, 1),
+    ImVec4(0.05f, 0.01f, 0.01f, 1),
+    ImVec4(1.0f, 0.59f, 0.16f, 0.10f),
+    ImVec4(1.0f, 0.204f, 0.157f, 0.06f),
+    ImVec4(1.0f, 0.93f, 0.90f, 1),
+    2,
 };
 
 // Library style: the tabbed dashboard, or the classic single library window
@@ -1979,10 +2004,46 @@ bool ClassicStyle()
 
 const LibTheme &T()
 {
-    return (ClassicStyle() ||
-            g_config.general.library.theme == CONFIG_GENERAL_LIBRARY_THEME_GREEN)
-               ? kThemeGreen
+    if (ClassicStyle() ||
+        g_config.general.library.theme == CONFIG_GENERAL_LIBRARY_THEME_GREEN) {
+        return kThemeGreen;
+    }
+    return g_config.general.library.theme == CONFIG_GENERAL_LIBRARY_THEME_RED
+               ? kThemeRed
                : kThemeNeon;
+}
+
+// One value per theme: green, neon, tron red
+template <class V>
+V Pick3(V green, V neon, V red)
+{
+    switch (T().id) {
+    case 1:
+        return neon;
+    case 2:
+        return red;
+    default:
+        return green;
+    }
+}
+
+// A green colour turned to the chosen theme: cyan for Neon, red for Tron Red.
+// Whites, greys and blacks stay (used by styles that are drawn in green by
+// default, e.g. Glossy Blades).
+ImU32 GreenToTheme(int r, int g, int b, int a)
+{
+    if (T().id == 0) {
+        return IM_COL32(r, g, b, a);
+    }
+    float fr = r / 255.0f, fg = g / 255.0f, fb = b / 255.0f, h, sat, v;
+    ImGui::ColorConvertRGBtoHSV(fr, fg, fb, h, sat, v);
+    if (sat < 0.12f) {
+        return IM_COL32(r, g, b, a);
+    }
+    float nh = (T().id == 1 ? 188.0f : 5.0f) + (95.0f - h * 360.0f) * 0.5f;
+    nh -= 360.0f * floorf(nh / 360.0f);
+    ImGui::ColorConvertHSVtoRGB(nh / 360.0f, sat, v, fr, fg, fb);
+    return IM_COL32((int)(fr * 255 + 0.5f), (int)(fg * 255 + 0.5f), (int)(fb * 255 + 0.5f), a);
 }
 
 } // namespace
@@ -3384,9 +3445,182 @@ void TexQuad(ImDrawList *dl, ImTextureID tex, const ImVec2 p[4], const ImVec2 uv
 
 bool g_draw_3d = false; // Home: draw covers as 3D boxes
 
+// Home covers: 3D cases standing on a floor, or holograms floating over a projector
+bool HoloCovers()
+{
+    return g_config.general.library.home_covers == CONFIG_GENERAL_LIBRARY_HOME_COVERS_HOLO;
+}
+
 bool Home3DCovers()
 {
-    return g_config.general.library.home_covers == CONFIG_GENERAL_LIBRARY_HOME_COVERS_BOX3D;
+    return g_config.general.library.home_covers == CONFIG_GENERAL_LIBRARY_HOME_COVERS_BOX3D ||
+           HoloCovers();
+}
+
+// A cover as a hologram: the case floats above a projector ring, bobbing and
+// slowly turning, tinted with the theme colour. Scanlines, a sweep, a glitch
+// now and then, a light beam from the projector and rising motes.
+// Fits inside [a, b].
+void DrawHoloCase(ImDrawList *dl, ImVec2 a, ImVec2 b, const LibraryEntry &e)
+{
+    const float s = g_viewport_mgr.m_scale;
+    const LibTheme &th = T();
+    const float W = b.x - a.x, H = b.y - a.y;
+    const float floor_h = H * 0.16f;
+    const float stand_y = b.y - floor_h * 0.45f; // the projector
+    const float cx = (a.x + b.x) / 2;
+    const bool anim = Animations();
+    const float t = anim ? (float)fmod(ImGui::GetTime(), 3600.0) : 0.0f;
+    const float ph = (float)(std::hash<std::string>()(e.path) & 0xFFFF) / 65535.0f * 6.2832f;
+    const float lift = H * 0.075f + (anim ? sinf(t * 1.4f + ph) * H * 0.018f : 0.0f);
+    const float case_bot = stand_y - lift;
+    const ImU32 acc = th.accent;
+    const int acc_r = (acc >> IM_COL32_R_SHIFT) & 255, acc_g = (acc >> IM_COL32_G_SHIFT) & 255,
+              acc_b = (acc >> IM_COL32_B_SHIFT) & 255;
+    dl->PushClipRect(a, b, true);
+
+    // Projector: a glow, a ring and rings that spread and fade
+    const float rx = W * 0.36f, ry = floor_h * 0.30f;
+    dl->AddEllipseFilled(ImVec2(cx, stand_y), ImVec2(rx * 1.15f, ry * 1.5f), Alpha(acc, 22), 0, 40);
+    dl->AddEllipse(ImVec2(cx, stand_y), ImVec2(rx, ry), Alpha(acc, 210), 0, 40, 1.8f * s);
+    dl->AddEllipse(ImVec2(cx, stand_y), ImVec2(rx * 0.62f, ry * 0.62f), Alpha(acc, 120), 0, 32,
+                   1.2f * s);
+    if (anim) {
+        for (int i = 0; i < 2; i++) {
+            float k = fmodf(t * 0.45f + i * 0.5f + ph, 1.0f);
+            dl->AddEllipse(ImVec2(cx, stand_y), ImVec2(rx * (0.4f + 0.9f * k), ry * (0.4f + 0.9f * k)),
+                           Alpha(acc, (int)(150 * (1 - k))), 0, 40, 1.2f * s);
+        }
+    }
+    // Beam from the projector up to the case, stronger at the bottom
+    const int slices = 10;
+    for (int i = 0; i < slices; i++) {
+        float f0 = (float)i / slices, f1 = (float)(i + 1) / slices;
+        float y0 = stand_y + (case_bot - stand_y) * f0, y1 = stand_y + (case_bot - stand_y) * f1;
+        float h0 = rx * (0.92f + 0.18f * f0), h1 = rx * (0.92f + 0.18f * f1);
+        ImVec2 q[4] = { ImVec2(cx - h0, y0), ImVec2(cx + h0, y0), ImVec2(cx + h1, y1),
+                        ImVec2(cx - h1, y1) };
+        dl->AddConvexPolyFilled(q, 4, Alpha(acc, (int)(46 * (1 - f0))));
+    }
+    // Motes rising in the beam
+    if (anim) {
+        for (int i = 0; i < 7; i++) {
+            float f = fmodf(t * (0.12f + 0.03f * (i % 3)) + i * 0.143f + ph, 1.0f);
+            float x = cx + sinf(i * 2.1f + ph + t * 0.6f) * rx * 0.8f;
+            dl->AddCircleFilled(ImVec2(x, stand_y + (case_bot - stand_y) * f), (1.0f + (i % 2)) * s,
+                                Alpha(acc, (int)(170 * (1 - f))), 6);
+        }
+    }
+
+    const float avail_h = case_bot - a.y - 2 * s;
+    if (!e.tex || e.tex_w <= 0 || avail_h < 8 * s) {
+        float bh = std::max(8.0f * s, avail_h), bw = std::min(W * 0.8f, bh * 0.7f);
+        ImVec2 p0(cx - bw / 2, case_bot - bh), p1(cx + bw / 2, case_bot);
+        dl->AddRectFilled(p0, p1, Alpha(acc, 28));
+        dl->AddRect(p0, p1, Alpha(acc, 220), 0, 0, 1.6f * s);
+        ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(bw * 0.35f, FLT_MAX, 0, ICON_FA_COMPACT_DISC);
+        dl->AddText(ImGui::GetFont(), bw * 0.35f,
+                    ImVec2(cx - ts.x / 2, (p0.y + p1.y) / 2 - ts.y / 2), Alpha(acc, 170),
+                    ICON_FA_COMPACT_DISC);
+        dl->PopClipRect();
+        return;
+    }
+
+    // Box in 3D, turning slowly around the vertical axis (spine toward the viewer)
+    float aspect = (float)e.tex_w / e.tex_h;
+    float bh = 1.0f, bw = aspect, bd = bw * 0.13f;
+    float angle = 22.0f + (anim ? 17.0f * sinf(t * 0.7f + ph) : 0.0f);
+    float th_ = -angle * 3.14159265f / 180.0f;
+    float cam = 4.2f;
+    auto proj = [&](float x, float y, float z) {
+        float X = x * cosf(th_) + z * sinf(th_);
+        float Z = -x * sinf(th_) + z * cosf(th_);
+        float k = cam / (cam + Z);
+        return ImVec2(X * k, y * k);
+    };
+    ImVec2 fl_t = proj(-bw / 2, -bh / 2, 0), fr_t = proj(bw / 2, -bh / 2, 0);
+    ImVec2 fl_b = proj(-bw / 2, bh / 2, 0), fr_b = proj(bw / 2, bh / 2, 0);
+    ImVec2 bl_t = proj(-bw / 2, -bh / 2, bd), bl_b = proj(-bw / 2, bh / 2, bd);
+    float minx = std::min({ fl_t.x, fl_b.x, bl_t.x, bl_b.x });
+    float maxx = std::max(fr_t.x, fr_b.x);
+    float miny = std::min({ fl_t.y, fr_t.y, bl_t.y });
+    float maxy = std::max({ fl_b.y, fr_b.y, bl_b.y });
+    float k = std::min(W * 0.90f / (maxx - minx), avail_h * 0.98f / (maxy - miny));
+    float ox = cx - (minx + maxx) / 2 * k;
+    float oy = case_bot - maxy * k;
+    auto S = [&](ImVec2 p) { return ImVec2(ox + p.x * k, oy + p.y * k); };
+    ImTextureID tex = (ImTextureID)(intptr_t)e.tex;
+
+    // Flicker: steady most of the time, a quick dip now and then
+    float flick = 1.0f;
+    if (anim) {
+        int slot = (int)(t * 9.0f + ph * 3.0f);
+        uint32_t hh = (uint32_t)slot * 2654435761u;
+        if ((hh >> 8) % 23 == 0) {
+            flick = 0.55f;
+        }
+    }
+    auto tint = [&](int sh, int amt) { // white mixed toward the theme colour
+        int r = sh + (acc_r - sh) * amt / 100, g = sh + (acc_g - sh) * amt / 100,
+            bl = sh + (acc_b - sh) * amt / 100;
+        return IM_COL32(r, g, bl, (int)(215 * flick));
+    };
+
+    if (bl_t.x < fl_t.x) { // spine
+        ImVec2 p[4] = { S(bl_t), S(fl_t), S(fl_b), S(bl_b) };
+        ImVec2 uv[4] = { ImVec2(0.0f, 0), ImVec2(0.035f, 0), ImVec2(0.035f, 1), ImVec2(0.0f, 1) };
+        ImU32 c[4] = { tint(120, 70), tint(200, 50), tint(200, 50), tint(120, 70) };
+        TexQuad(dl, tex, p, uv, c);
+    }
+    const int n = 14;
+    const float sweep = fmodf(t * 0.35f + ph, 1.4f) - 0.2f; // 0..1 crosses the face
+    for (int i = 0; i < n; i++) {
+        float u0 = (float)i / n, u1 = (float)(i + 1) / n;
+        float x0 = -bw / 2 + bw * u0, x1 = -bw / 2 + bw * u1;
+        ImVec2 p[4] = { S(proj(x0, -bh / 2, 0)), S(proj(x1, -bh / 2, 0)),
+                        S(proj(x1, bh / 2, 0)), S(proj(x0, bh / 2, 0)) };
+        ImVec2 uv[4] = { ImVec2(u0, 0), ImVec2(u1, 0), ImVec2(u1, 1), ImVec2(u0, 1) };
+        int sh0 = 255 - (int)(40 * u0), sh1 = 255 - (int)(40 * u1);
+        ImU32 col[4] = { tint(sh0, 28), tint(sh1, 28), tint(sh1, 28), tint(sh0, 28) };
+        TexQuad(dl, tex, p, uv, col);
+        // Scanlines on this strip
+        for (int l = 1; l < 14; l++) {
+            float v = l / 14.0f;
+            ImVec2 l0(p[0].x + (p[3].x - p[0].x) * v, p[0].y + (p[3].y - p[0].y) * v);
+            ImVec2 l1(p[1].x + (p[2].x - p[1].x) * v, p[1].y + (p[2].y - p[1].y) * v);
+            dl->AddLine(l0, l1, IM_COL32(0, 0, 0, 38), 1.0f);
+        }
+    }
+    // Bright sweep band moving down the face
+    if (anim && sweep > 0 && sweep < 1) {
+        ImVec2 l0(S(proj(-bw / 2, -bh / 2 + bh * sweep, 0)));
+        ImVec2 l1(S(proj(bw / 2, -bh / 2 + bh * sweep, 0)));
+        dl->AddLine(l0, l1, Alpha(acc, 190), 2.0f * s);
+        dl->AddLine(ImVec2(l0.x, l0.y - 3 * s), ImVec2(l1.x, l1.y - 3 * s), Alpha(acc, 60), 3.0f * s);
+    }
+    // Glitch: a slice of the face jumps sideways with a bright edge
+    if (anim) {
+        int slot = (int)(t * 6.0f + ph * 5.0f);
+        uint32_t hh = (uint32_t)(slot + 7) * 2246822519u;
+        if ((hh >> 6) % 19 == 0) {
+            float v0 = ((hh >> 12) & 255) / 255.0f * 0.7f, v1 = v0 + 0.08f;
+            float off = (((hh >> 20) & 1) ? 1.0f : -1.0f) * 5 * s;
+            ImVec2 q0 = S(proj(-bw / 2, -bh / 2 + bh * v0, 0)), q1 = S(proj(bw / 2, -bh / 2 + bh * v0, 0));
+            ImVec2 q2 = S(proj(bw / 2, -bh / 2 + bh * v1, 0)), q3 = S(proj(-bw / 2, -bh / 2 + bh * v1, 0));
+            ImVec2 gq[4] = { ImVec2(q0.x + off, q0.y), ImVec2(q1.x + off, q1.y),
+                             ImVec2(q2.x + off, q2.y), ImVec2(q3.x + off, q3.y) };
+            dl->AddConvexPolyFilled(gq, 4, Alpha(acc, 90));
+        }
+    }
+    // Wireframe: a soft wide line, a crisp one on top, and the spine edge
+    ImVec2 fq[4] = { S(fl_t), S(fr_t), S(fr_b), S(fl_b) };
+    dl->AddPolyline(fq, 4, Alpha(acc, (int)(60 * flick)), ImDrawFlags_Closed, 4.0f * s);
+    dl->AddPolyline(fq, 4, Alpha(acc, (int)(230 * flick)), ImDrawFlags_Closed, 1.4f * s);
+    if (bl_t.x < fl_t.x) {
+        ImVec2 sq[4] = { S(bl_t), S(fl_t), S(fl_b), S(bl_b) };
+        dl->AddPolyline(sq, 4, Alpha(acc, (int)(170 * flick)), ImDrawFlags_Closed, 1.2f * s);
+    }
+    dl->PopClipRect();
 }
 
 // A cover as a 3D game case standing on a glossy floor: the flat cover is
@@ -3395,6 +3629,10 @@ bool Home3DCovers()
 // as-is (with its reflection) instead. Fits inside [a, b].
 void DrawCover3D(ImDrawList *dl, ImVec2 a, ImVec2 b, const LibraryEntry &e, float angle_deg)
 {
+    if (HoloCovers()) {
+        DrawHoloCase(dl, a, b, e);
+        return;
+    }
     const float s = g_viewport_mgr.m_scale;
     float W = b.x - a.x, H = b.y - a.y;
     float floor_h = H * 0.16f;            // room for the reflection
@@ -5382,13 +5620,15 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
                      tm);
         }
         std::string label = std::string(tr(ICON_FA_PLAY "  Resume")) + "  " + when;
-        const bool neon = T().neon;
-        ImGui::PushStyleColor(ImGuiCol_Button, neon ? ImVec4(0.75f, 0.10f, 0.42f, 1)
-                                                    : ImVec4(0.16f, 0.42f, 0.78f, 1));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, neon ? ImVec4(1.0f, 0.18f, 0.53f, 1)
-                                                           : ImVec4(0.22f, 0.5f, 0.88f, 1));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, neon ? ImVec4(0.6f, 0.08f, 0.33f, 1)
-                                                          : ImVec4(0.12f, 0.36f, 0.68f, 1));
+        ImGui::PushStyleColor(ImGuiCol_Button,
+                              Pick3(ImVec4(0.16f, 0.42f, 0.78f, 1), ImVec4(0.75f, 0.10f, 0.42f, 1),
+                                    ImVec4(0.80f, 0.40f, 0.06f, 1)));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                              Pick3(ImVec4(0.22f, 0.5f, 0.88f, 1), ImVec4(1.0f, 0.18f, 0.53f, 1),
+                                    ImVec4(1.0f, 0.55f, 0.12f, 1)));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                              Pick3(ImVec4(0.12f, 0.36f, 0.68f, 1), ImVec4(0.6f, 0.08f, 0.33f, 1),
+                                    ImVec4(0.62f, 0.30f, 0.04f, 1)));
         if (ImGui::Button(label.c_str(), ImVec2(w, 40 * s))) {
             ResumeGame(e, info.name);
         }
@@ -5396,10 +5636,12 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
         ImGui::SetItemTooltip(tr("Continue from where you left off"));
     }
     ImGui::PushStyleColor(ImGuiCol_Button, ImGui::ColorConvertU32ToFloat4(T().accent));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, T().neon ? ImVec4(0.45f, 0.94f, 1, 1)
-                                                           : ImVec4(0.45f, 0.86f, 0.16f, 1));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, T().neon ? ImVec4(0, 0.70f, 0.80f, 1)
-                                                          : ImVec4(0.32f, 0.70f, 0.06f, 1));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                          Pick3(ImVec4(0.45f, 0.86f, 0.16f, 1), ImVec4(0.45f, 0.94f, 1, 1),
+                                ImVec4(1.0f, 0.45f, 0.38f, 1)));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                          Pick3(ImVec4(0.32f, 0.70f, 0.06f, 1), ImVec4(0, 0.70f, 0.80f, 1),
+                                ImVec4(0.78f, 0.16f, 0.12f, 1)));
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0, 0, 0, 1));
     if (ImGui::Button(IsCurrentDisc(e) ? tr(ICON_FA_PLAY "  Playing - restart")
                                        : tr(ICON_FA_PLAY "  Play"),
@@ -5805,13 +6047,13 @@ void DrawDashMotion(ImDrawList *dl, ImVec2 a, ImVec2 b)
         for (int j = -14; j <= 14; j++) {
             float xb = cx + j * w * 0.075f;
             dl->AddLine(ImVec2(cx + j * w * 0.012f, horizon), ImVec2(xb, b.y),
-                        IM_COL32(255, 46, 136, 12), 1.0f);
+                        Alpha(th.accent2, 12), 1.0f);
         }
         for (int k = 0; k < 12; k++) {
             float z = (float)fmod(k / 12.0 + t * 0.045, 1.0);
             float y = horizon + (b.y - horizon) * z * z;
             dl->AddLine(ImVec2(a.x, y), ImVec2(b.x, y),
-                        IM_COL32(255, 46, 136, (int)(4 + 22 * z)), 1.0f);
+                        Alpha(th.accent2, (int)(4 + 22 * z)), 1.0f);
         }
         dl->AddRectFilledMultiColor(ImVec2(a.x, horizon - 2 * s), ImVec2(b.x, horizon + 30 * s),
                                     IM_COL32(4, 4, 9, 0), IM_COL32(4, 4, 9, 0),
@@ -5829,9 +6071,11 @@ void DrawDashMotion(ImDrawList *dl, ImVec2 a, ImVec2 b)
 
     // Flowing ribbons
     if (th.neon) {
-        DrawRibbon(dl, a, b, t, 0.60f, 0.07f, 0.9f, 0.22f, 0.08f, 0.0f, IM_COL32(0, 229, 255, 52));
-        DrawRibbon(dl, a, b, t, 0.68f, 0.06f, 1.2f, 0.17f, 0.06f, 2.1f, IM_COL32(255, 46, 136, 44));
-        DrawRibbon(dl, a, b, t, 0.52f, 0.05f, 0.7f, 0.12f, 0.04f, 4.0f, IM_COL32(140, 110, 255, 38));
+        DrawRibbon(dl, a, b, t, 0.60f, 0.07f, 0.9f, 0.22f, 0.08f, 0.0f, Alpha(th.accent, 52));
+        DrawRibbon(dl, a, b, t, 0.68f, 0.06f, 1.2f, 0.17f, 0.06f, 2.1f, Alpha(th.accent2, 44));
+        DrawRibbon(dl, a, b, t, 0.52f, 0.05f, 0.7f, 0.12f, 0.04f, 4.0f,
+                   Pick3(IM_COL32(140, 110, 255, 38), IM_COL32(140, 110, 255, 38),
+                         IM_COL32(255, 90, 60, 38)));
     } else {
         DrawRibbon(dl, a, b, t, 0.62f, 0.07f, 0.9f, 0.20f, 0.08f, 0.0f, IM_COL32(98, 202, 19, 50));
         DrawRibbon(dl, a, b, t, 0.70f, 0.06f, 1.2f, 0.15f, 0.06f, 2.1f, IM_COL32(170, 240, 90, 34));
@@ -5872,13 +6116,18 @@ void DrawDashBackground(ImDrawList *dl, ImVec2 a, ImVec2 b)
         }
         return;
     }
-    dl->AddRectFilledMultiColor(a, b, IM_COL32(9, 8, 18, 150), IM_COL32(6, 10, 20, 150),
-                                IM_COL32(4, 4, 9, 170), IM_COL32(12, 5, 16, 170));
+    if (T().id == 2) {
+        dl->AddRectFilledMultiColor(a, b, IM_COL32(20, 7, 8, 150), IM_COL32(16, 6, 6, 150),
+                                    IM_COL32(8, 3, 3, 170), IM_COL32(18, 5, 6, 170));
+    } else {
+        dl->AddRectFilledMultiColor(a, b, IM_COL32(9, 8, 18, 150), IM_COL32(6, 10, 20, 150),
+                                    IM_COL32(4, 4, 9, 170), IM_COL32(12, 5, 16, 170));
+    }
     for (int i = 0; i < 5; i++) {
         dl->AddCircleFilled(ImVec2(a.x + w * 0.86f, a.y + h * 0.02f),
-                            w * (0.10f + i * 0.055f), IM_COL32(0, 229, 255, 5), 64);
+                            w * (0.10f + i * 0.055f), Alpha(T().accent, 5), 64);
         dl->AddCircleFilled(ImVec2(a.x + w * 0.04f, b.y + h * 0.06f),
-                            w * (0.08f + i * 0.05f), IM_COL32(255, 46, 136, 5), 64);
+                            w * (0.08f + i * 0.05f), Alpha(T().accent2, 5), 64);
     }
     if (Animations()) {
         DrawDashMotion(dl, a, b);
@@ -6218,7 +6467,8 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
     }
     const float show = EaseSince(g_anim.hero_t, 0.40f); // 0 -> 1 on a new game
     // Backdrop: the cover, zoomed to fill and darkened
-    ShapeFill(dl, a, b, neon ? IM_COL32(10, 10, 22, 255) : IM_COL32(16, 34, 52, 255),
+    ShapeFill(dl, a, b,
+              Pick3(IM_COL32(16, 34, 52, 255), IM_COL32(10, 10, 22, 255), IM_COL32(22, 8, 9, 255)),
               round);
     if (e.tex && e.tex_w > 0 && e.tex_h > 0) {
         float ra = size.x / size.y, ri = (float)e.tex_w / e.tex_h;
@@ -6233,11 +6483,14 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
             uv1.y = 1 - uv0.y;
         }
         ShapeImage(dl, (ImTextureID)(intptr_t)e.tex, a, b, uv0, uv1,
-                   neon ? IM_COL32(150, 140, 255, (int)(70 * show))
-                        : IM_COL32(255, 255, 255, (int)(90 * show)),
+                   Pick3(IM_COL32(255, 255, 255, (int)(90 * show)),
+                         IM_COL32(150, 140, 255, (int)(70 * show)),
+                         IM_COL32(255, 150, 130, (int)(70 * show))),
                    round);
     }
-    ShapeFill(dl, a, b, neon ? IM_COL32(5, 5, 12, 170) : IM_COL32(6, 12, 9, 150), round);
+    ShapeFill(dl, a, b,
+              Pick3(IM_COL32(6, 12, 9, 150), IM_COL32(5, 5, 12, 170), IM_COL32(12, 4, 4, 170)),
+              round);
     if (neon) {
         // Left accent bar, a magenta-to-cyan rule and HUD brackets
         dl->AddRectFilledMultiColor(ImVec2(a.x, a.y + round), ImVec2(a.x + 3 * s, b.y),
@@ -10272,10 +10525,10 @@ void DrawDashSettingsTab()
                      "Glossy Blades (silver and green)\0Modern (side menu)\0Holo (hologram)\0Aurora (teal)\0"));
         label(tr("Dashboard theme"));
         ImGui::Combo("##theme", &g_config.general.library.theme,
-                     tr_items("Neon (dark, cyan and magenta)\0Green (xemu)\0"));
+                     tr_items("Neon (dark, cyan and magenta)\0Green (xemu)\0Tron Red (red and amber)\0"));
         label(tr("Home screen covers"));
         ImGui::Combo("##covers", &g_config.general.library.home_covers,
-                     tr_items("3D game cases\0Flat\0"));
+                     tr_items("3D game cases\0Flat\0Holographic (floating)\0"));
         ImGui::TextDisabled(tr("Your own 3D art: covers\\<title ID>-3d.png"));
         ImGui::Dummy(ImVec2(0, 10 * s));
         if (DashButton(tr(ICON_FA_FOLDER_OPEN "  Game folders..."), T().glass, T().white,
@@ -10552,9 +10805,10 @@ void DrawLibraryTab(int &tex_budget)
 
     if (show_panel) {
         ImGui::SameLine(0, gap);
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, T().neon
-                                                    ? ImVec4(0.05f, 0.05f, 0.10f, 0.90f)
-                                                    : ImVec4(0.11f, 0.11f, 0.12f, 0.88f));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg,
+                              Pick3(ImVec4(0.11f, 0.11f, 0.12f, 0.88f),
+                                    ImVec4(0.05f, 0.05f, 0.10f, 0.90f),
+                                    ImVec4(0.10f, 0.04f, 0.04f, 0.90f)));
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10 * s);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14 * s, 14 * s));
         // Always reserve the scrollbar, so content arriving (save states,
@@ -11089,8 +11343,15 @@ ImU32 SectionColor(int tab)
         IM_COL32(255, 160, 0, 255),  IM_COL32(255, 214, 10, 255),
         IM_COL32(110, 116, 150, 255),
     };
+    static const ImU32 red[kTabCount] = {
+        IM_COL32(255, 52, 40, 255),  IM_COL32(255, 96, 56, 255),
+        IM_COL32(255, 140, 40, 255), IM_COL32(230, 40, 80, 255),
+        IM_COL32(255, 70, 100, 255), IM_COL32(255, 112, 30, 255),
+        IM_COL32(255, 176, 40, 255), IM_COL32(255, 214, 80, 255),
+        IM_COL32(150, 112, 108, 255),
+    };
     int i = tab < 0 ? 0 : (tab >= kTabCount ? kTabCount - 1 : tab);
-    return (T().neon ? neon : green)[i];
+    return (T().id == 2 ? red : T().neon ? neon : green)[i];
 }
 
 // Ease a value toward a target, frame-rate independent
@@ -11263,6 +11524,7 @@ void DrawXboxFrame(int &tex_budget, bool sphere)
         focus_list = true;
     }
 
+    XboxDashSetTheme(T().id);
     if (sphere) {
         XboxDashSphereBackground(dl, wp, wb, s, now, anim);
     } else {
@@ -11282,7 +11544,9 @@ void DrawXboxFrame(int &tex_budget, bool sphere)
         picked = XboxDashSphereMenu(labels, kTabCount, sel, wp, ImVec2(wb.x, wb.y - hints_h), s,
                                     now, big, small_font, focus_list, open_t, &list_right, anim);
         dl->AddText(small_font, small_font->FontSize, ImVec2(wp.x + 28 * s, wp.y + 26 * s),
-                    IM_COL32(150, 225, 40, 235), "xemu");
+                    Pick3(IM_COL32(150, 225, 40, 235), IM_COL32(60, 225, 245, 235),
+                         IM_COL32(255, 96, 70, 235)),
+                    "xemu");
     } else {
         picked = XboxDashMenu("xemu", labels, kTabCount, sel, wp, ImVec2(wb.x, wb.y - hints_h),
                               s, now, big, small_font, focus_list, open_t, &list_right, anim);
@@ -11388,21 +11652,21 @@ void DrawGlossyFrame(int &tex_budget)
     ImFont *label_font = FontOr(g_font_mgr.m_menu_font_small);
 
     // Backdrop: bright green, with soft light drifting across it
-    dl->AddRectFilledMultiColor(wp, wb, IM_COL32(120, 204, 66, 255), IM_COL32(120, 204, 66, 255),
-                                IM_COL32(40, 128, 26, 255), IM_COL32(40, 128, 26, 255));
+    dl->AddRectFilledMultiColor(wp, wb, GreenToTheme(120, 204, 66, 255), GreenToTheme(120, 204, 66, 255),
+                                GreenToTheme(40, 128, 26, 255), GreenToTheme(40, 128, 26, 255));
     for (int k = 0; k < 6; k++) {
         ImVec2 c(wp.x + ws.x * (0.5f + 0.42f * sinf(tt * 0.06f + k * 1.9f)),
                  wp.y + ws.y * (0.45f + 0.3f * cosf(tt * 0.045f + k * 1.3f)));
         for (int j = 0; j < 6; j++) {
-            dl->AddCircleFilled(c, ws.y * (0.10f + 0.06f * j), IM_COL32(225, 255, 190, 6), 48);
+            dl->AddCircleFilled(c, ws.y * (0.10f + 0.06f * j), GreenToTheme(225, 255, 190, 6), 48);
         }
     }
     // Bottom bar, between the blades
     float by0 = wb.y - bar_h;
-    dl->AddRectFilledMultiColor(ImVec2(wp.x, by0), wb, IM_COL32(24, 92, 18, 240),
-                                IM_COL32(24, 92, 18, 240), IM_COL32(8, 52, 10, 248),
-                                IM_COL32(8, 52, 10, 248));
-    dl->AddLine(ImVec2(wp.x, by0), ImVec2(wb.x, by0), IM_COL32(220, 255, 190, 90), 1.5f * s);
+    dl->AddRectFilledMultiColor(ImVec2(wp.x, by0), wb, GreenToTheme(24, 92, 18, 240),
+                                GreenToTheme(24, 92, 18, 240), GreenToTheme(8, 52, 10, 248),
+                                GreenToTheme(8, 52, 10, 248));
+    dl->AddLine(ImVec2(wp.x, by0), ImVec2(wb.x, by0), GreenToTheme(220, 255, 190, 90), 1.5f * s);
 
     // The blades
     const int n = kTabCount;
@@ -11427,10 +11691,10 @@ void DrawGlossyFrame(int &tex_budget)
             hov = ImGui::IsItemHovered();
         }
         ImGui::PopID();
-        ImU32 c_edge = on ? IM_COL32(168, 236, 110, 255) : IM_COL32(250, 251, 250, 255);
-        ImU32 c_body = on ? IM_COL32(58, 150, 32, 255) : IM_COL32(168, 175, 170, 255);
+        ImU32 c_edge = on ? GreenToTheme(168, 236, 110, 255) : GreenToTheme(250, 251, 250, 255);
+        ImU32 c_body = on ? GreenToTheme(58, 150, 32, 255) : GreenToTheme(168, 175, 170, 255);
         if (hov) {
-            c_body = IM_COL32(196, 204, 198, 255);
+            c_body = GreenToTheme(196, 204, 198, 255);
         }
         ImVec2 curve[N + 1];
         for (int k = 0; k <= N; k++) {
@@ -11449,13 +11713,13 @@ void DrawGlossyFrame(int &tex_budget)
                          c_edge, c_body);
             }
         }
-        dl->AddPolyline(curve, N + 1, on ? IM_COL32(30, 100, 20, 200) : IM_COL32(110, 118, 112, 190),
+        dl->AddPolyline(curve, N + 1, on ? GreenToTheme(30, 100, 20, 200) : GreenToTheme(110, 118, 112, 190),
                         0, 1.3f * s);
         // Label, turned to read along the blade
         std::string name = XuiLower(tr(kTabNames[i]));
         float fs = label_font->FontSize;
         float len = label_font->CalcTextSizeA(fs, FLT_MAX, 0, name.c_str()).x;
-        ImU32 tc = on ? IM_COL32(255, 255, 255, 255) : IM_COL32(86, 94, 90, 255);
+        ImU32 tc = on ? GreenToTheme(255, 255, 255, 255) : GreenToTheme(86, 94, 90, 255);
         if (left) {
             AddTextVertical(dl, label_font, fs, ImVec2(x + (sw - fs) / 2, wp.y + 100 * s + len),
                             tc, name.c_str());
@@ -11480,18 +11744,18 @@ void DrawGlossyFrame(int &tex_budget)
     x1 = std::max(x1, x0 + 80 * s);
     std::string title = XuiLower(tr(kTabNames[act]));
     float ty = wp.y + 16 * s;
-    dl->AddText(big, big->FontSize, ImVec2(x0 + 1.5f * s, ty + 1.5f * s), IM_COL32(10, 70, 10, 140),
+    dl->AddText(big, big->FontSize, ImVec2(x0 + 1.5f * s, ty + 1.5f * s), GreenToTheme(10, 70, 10, 140),
                 title.c_str());
-    dl->AddText(big, big->FontSize, ImVec2(x0, ty), IM_COL32(255, 255, 255, 255), title.c_str());
+    dl->AddText(big, big->FontSize, ImVec2(x0, ty), GreenToTheme(255, 255, 255, 255), title.c_str());
     float ly = ty + big->FontSize + 8 * s;
-    dl->AddLine(ImVec2(x0, ly), ImVec2(x1, ly), IM_COL32(235, 255, 215, 120), 1.2f * s);
+    dl->AddLine(ImVec2(x0, ly), ImVec2(x1, ly), GreenToTheme(235, 255, 215, 120), 1.2f * s);
     DrawStyleStatus(x1, wp.y + 12 * s);
 
     float cy0 = ly + 14 * s, cy1 = by0 - 14 * s;
     dl->AddRectFilled(ImVec2(x0 - 8 * s, cy0 - 8 * s), ImVec2(x1 + 8 * s, cy1 + 8 * s),
-                      IM_COL32(6, 44, 8, 150), 12 * s);
+                      GreenToTheme(6, 44, 8, 150), 12 * s);
     dl->AddRect(ImVec2(x0 - 8 * s, cy0 - 8 * s), ImVec2(x1 + 8 * s, cy1 + 8 * s),
-                IM_COL32(220, 255, 200, 44), 12 * s, 0, 1.2f * s);
+                GreenToTheme(220, 255, 200, 44), 12 * s, 0, 1.2f * s);
     float slide = (1.0f - EaseSince(g_anim.tab_t, 0.30f)) * 30 * s;
     ImGui::SetCursorScreenPos(ImVec2(x0 + slide, cy0));
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
@@ -11674,7 +11938,8 @@ void DrawModernFrame(int &tex_budget)
 // beside it, and the section itself in a framed window.
 ImU32 HoloColor()
 {
-    return T().neon ? IM_COL32(72, 228, 242, 255) : IM_COL32(134, 228, 92, 255);
+    return Pick3(IM_COL32(134, 228, 92, 255), IM_COL32(72, 228, 242, 255),
+                 IM_COL32(255, 78, 60, 255));
 }
 
 // An outlined panel with a header strip: a label on the left, a quieter one on the right
@@ -11802,6 +12067,178 @@ int Utf8Length(const std::string &t)
     return n;
 }
 
+// ---- Holo: the light-cycle fight ----------------------------------------
+// Two programs run the outline from opposite ends and meet head-on. One is
+// wounded: a stretch of its trail breaks into drifting cubes of light, like an
+// arm coming apart, then the rest follows from the head back and it is gone.
+// The other runs on and fades. A new pair rezzes in after a pause. Everything
+// is a function of the time, so there is no state to keep.
+
+uint32_t HoloHash(uint32_t x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352dU;
+    x ^= x >> 15;
+    x *= 0x846ca68bU;
+    x ^= x >> 16;
+    return x;
+}
+
+float HoloRand(uint32_t x)
+{
+    return (float)(HoloHash(x) & 0xFFFF) / 65535.0f;
+}
+
+float Clamp01(float v)
+{
+    return v < 0 ? 0 : (v > 1 ? 1 : v);
+}
+
+// A tumbling cube of light (drawn as its face)
+void HoloVoxel(ImDrawList *dl, ImVec2 c, float size, float rot, ImU32 col)
+{
+    float cs = cosf(rot) * size, sn = sinf(rot) * size;
+    dl->AddQuadFilled(ImVec2(c.x - cs + sn, c.y - sn - cs), ImVec2(c.x + cs + sn, c.y + sn - cs),
+                      ImVec2(c.x + cs - sn, c.y + sn + cs), ImVec2(c.x - cs - sn, c.y - sn + cs),
+                      col);
+}
+
+// One light cycle on the outline of the box [a, b]. `head` is its distance
+// along the outline and `dir` (+1 or -1) the way it runs. wound (0..1)
+// breaks a stretch of the trail into cubes; derez (0..1) dissolves it from
+// the head back; rez (0..1) builds it up from cubes. seed varies the cubes.
+void HoloCycle(ImDrawList *dl, ImVec2 a, ImVec2 b, float head, float dir, float len, ImU32 col,
+               float wound, float derez, float rez, uint32_t seed)
+{
+    const float s = g_viewport_mgr.m_scale;
+    const int n = 44;
+    const float step = len / n;
+    const ImVec2 cen((a.x + b.x) / 2, (a.y + b.y) / 2);
+    const float flick = (wound > 0 && derez <= 0) ? (sinf(wound * 90.0f) > -0.2f ? 1.0f : 0.35f) : 1.0f;
+    ImVec2 prev = HoloPerimeter(a, b, head);
+    for (int i = 0; i < n; i++) {
+        float k = (float)i / n;
+        ImVec2 p = HoloPerimeter(a, b, head - dir * i * step);
+        ImVec2 q = HoloPerimeter(a, b, head - dir * (i + 1) * step);
+        float v = Clamp01((derez * 1.25f - k) * 4.0f); // 1 = gone to cubes
+        if (wound > 0) {
+            float arm = Clamp01((wound * 0.26f - fabsf(k - 0.42f)) * 12.0f);
+            v = std::max(v, arm);
+        }
+        if (rez < 1.0f) {
+            float r = (rez * 1.25f - k) * 4.0f;
+            if (r <= 0) {
+                continue;
+            }
+            v = std::max(v, 1.0f - Clamp01(r));
+        }
+        float fade = (1.0f - k) * (1.0f - k);
+        if (v < 0.04f) {
+            dl->AddLine(p, q, Alpha(col, (int)(235 * fade * flick)), (1.0f + 2.2f * (1.0f - k)) * s);
+        } else if (v < 0.999f) {
+            ImVec2 d(p.x - cen.x, p.y - cen.y);
+            float dl_ = sqrtf(d.x * d.x + d.y * d.y);
+            ImVec2 nrm = dl_ > 1 ? ImVec2(d.x / dl_, d.y / dl_) : ImVec2(0, -1);
+            for (int j = 0; j < 2; j++) {
+                uint32_t hs = seed * 131u + (uint32_t)i * 7u + (uint32_t)j * 3u;
+                float jx = HoloRand(hs) - 0.5f, jy = HoloRand(hs + 1) - 0.5f;
+                ImVec2 o(p.x + (jx * 80.0f * s + nrm.x * 46.0f * s) * v,
+                         p.y + (jy * 80.0f * s + nrm.y * 46.0f * s - 18.0f * s) * v);
+                float sz = (2.2f + 3.4f * HoloRand(hs + 2)) * s * (1.0f - 0.45f * v);
+                int al = (int)(230 * (0.35f + 0.65f * (1.0f - k)) * (1.0f - v * v));
+                HoloVoxel(dl, o, sz, HoloRand(hs + 3) * 6.28f + v * 4.0f, Alpha(col, al));
+            }
+        }
+        prev = p;
+    }
+    (void)prev;
+    // Head: a bright point; cubes round it while it dissolves or builds
+    ImVec2 h = HoloPerimeter(a, b, head);
+    if (derez < 0.08f && rez > 0.85f) {
+        dl->AddCircleFilled(h, 7 * s, Alpha(col, (int)(50 * flick)), 16);
+        dl->AddCircleFilled(h, 2.8f * s, IM_COL32(235, 255, 255, (int)(255 * flick)), 12);
+    } else {
+        float v = std::max(derez, 1.0f - rez);
+        for (int j = 0; j < 16; j++) {
+            uint32_t hs = seed * 977u + (uint32_t)j * 11u;
+            float ang = HoloRand(hs) * 6.2832f, rad = (4.0f + 30.0f * HoloRand(hs + 1)) * s * v;
+            ImVec2 o(h.x + cosf(ang) * rad, h.y + sinf(ang) * rad - 10.0f * s * v);
+            HoloVoxel(dl, o, (2.4f + 2.6f * HoloRand(hs + 2)) * s * (1.0f - 0.4f * v),
+                      HoloRand(hs + 3) * 6.28f + v * 5.0f,
+                      Alpha(col, (int)(235 * (1.0f - v * v))));
+        }
+    }
+}
+
+// The whole fight on the box [a, b] at time t. col_a and col_b are the two
+// programs' colours.
+void DrawHoloBattle(ImDrawList *dl, ImVec2 a, ImVec2 b, float t, ImU32 col_a, ImU32 col_b)
+{
+    const float s = g_viewport_mgr.m_scale;
+    const float P = 16.0f;
+    const uint32_t cyc = (uint32_t)floorf(t / P);
+    const float u = t - cyc * P;
+    const float per = 2 * ((b.x - a.x) + (b.y - a.y));
+    if (per <= 0) {
+        return;
+    }
+    const uint32_t hs = HoloHash(cyc * 977u + 13u);
+    const float L = per * (0.30f + 0.40f * ((hs & 0xFF) / 255.0f)); // from A forward to B
+    const float start_a = (((hs >> 8) & 0xFF) / 255.0f) * per;
+    const bool loser_b = ((hs >> 16) & 1) != 0;
+    const float t_run = 0.9f, t_clash = 5.9f, t_wound = 6.3f, t_derez = 7.3f, t_derez_end = 9.3f,
+                t_end = 14.5f;
+    const float v = (L * 0.5f) / (t_clash - t_run);
+    const float len = 260 * s;
+    const float rez = Clamp01(u / t_run);
+    const float run_u = Clamp01((u - t_run) / (t_clash - t_run)) * (t_clash - t_run);
+    const float after = std::max(0.0f, std::min(u, t_end) - t_clash);
+    const float mid = start_a + L * 0.5f;
+    const float wound = Clamp01((u - t_wound) / (t_derez - t_wound));
+    const float derez = Clamp01((u - t_derez) / (t_derez_end - t_derez));
+    const float exit_k = Clamp01((u - (t_end - 1.4f)) / 1.4f);
+    // Positions: A runs forward, B backward, meeting at `mid`
+    float head_a = u < t_clash ? start_a + v * run_u : mid + (loser_b ? v * after : 0.0f);
+    float head_b = u < t_clash ? start_a + L - v * run_u : mid - (loser_b ? 0.0f : v * after);
+    if (u >= t_end) {
+        return;
+    }
+    // Colour with the exit fade for the one that survives
+    auto faded = [&](ImU32 c, bool survivor) {
+        return survivor ? Alpha(c, (int)(255 * (1.0f - exit_k))) : c;
+    };
+    if (!(!loser_b && derez >= 1.0f)) {
+        HoloCycle(dl, a, b, head_a, 1.0f, len, faded(col_a, loser_b),
+                  !loser_b ? wound : 0.0f, !loser_b ? derez : 0.0f, rez, cyc * 2u);
+    }
+    if (!(loser_b && derez >= 1.0f)) {
+        HoloCycle(dl, a, b, head_b, -1.0f, len, faded(col_b, !loser_b),
+                  loser_b ? wound : 0.0f, loser_b ? derez : 0.0f, rez, cyc * 2u + 1u);
+    }
+    // The clash: a flash, a ring and sparks where they meet
+    const float dt = u - t_clash;
+    ImVec2 m = HoloPerimeter(a, b, mid);
+    if (dt > -0.5f && dt < 1.4f) {
+        float f = dt < 0 ? (dt + 0.5f) * 0.4f : std::max(0.0f, 1.0f - dt / 1.4f);
+        for (int g = 0; g < 4; g++) {
+            dl->AddCircleFilled(m, (8 + 26 * g + 50 * std::max(0.0f, dt)) * s,
+                                Alpha(IM_COL32(255, 255, 255, 255), (int)(30 * f)), 32);
+        }
+        dl->AddCircleFilled(m, 5 * s, IM_COL32(255, 255, 255, (int)(240 * f)), 16);
+        if (dt > 0) {
+            dl->AddCircle(m, (14 + 150 * dt) * s, Alpha(col_a, (int)(160 * f)), 48, 1.6f * s);
+            dl->AddCircle(m, (10 + 110 * dt) * s, Alpha(col_b, (int)(160 * f)), 48, 1.2f * s);
+            for (int i = 0; i < 14; i++) {
+                float ang = (i + HoloRand(hs + i)) * 6.2832f / 14.0f;
+                float r0 = (6 + 30 * dt) * s, r1 = (14 + 120 * dt * (0.6f + 0.4f * HoloRand(hs + 40 + i))) * s;
+                dl->AddLine(ImVec2(m.x + cosf(ang) * r0, m.y + sinf(ang) * r0),
+                            ImVec2(m.x + cosf(ang) * r1, m.y + sinf(ang) * r1),
+                            Alpha(i & 1 ? col_a : col_b, (int)(220 * f)), 1.4f * s);
+            }
+        }
+    }
+}
+
 void DrawHoloFrame(int &tex_budget)
 {
     const float s = g_viewport_mgr.m_scale;
@@ -11841,9 +12278,10 @@ void DrawHoloFrame(int &tex_budget)
     dl->AddRect(ga, gb, Alpha(cy, 120), 6 * s, 0, 1.0f * s);
     if (anim) {
         // Light cycles: one runs the outer outline, a shorter one the inner
-        HoloTrail(dl, fa, fb, tt * 280 * s, 260 * s, cy);
-        float half = (fb.x - fa.x) + (fb.y - fa.y);
-        HoloTrail(dl, fa, fb, tt * 280 * s + half, 150 * s, Alpha(cy, 190));
+        // The outline is an arena: two programs fight on it, one is derezzed
+        DrawHoloBattle(dl, fa, fb, tt, cy,
+                       Pick3(IM_COL32(255, 170, 60, 255), IM_COL32(255, 60, 150, 255),
+                             IM_COL32(110, 205, 255, 255)));
         HoloTrail(dl, ga, gb, tt * 170 * s + 400 * s, 110 * s, Alpha(cy, 150));
     }
 
@@ -12014,7 +12452,8 @@ void DrawHoloFrame(int &tex_budget)
 // are in opens out into its name), and the section sits in one rounded card.
 ImU32 AuroraColor()
 {
-    return T().neon ? IM_COL32(40, 224, 184, 255) : IM_COL32(112, 214, 62, 255);
+    return Pick3(IM_COL32(112, 214, 62, 255), IM_COL32(40, 224, 184, 255),
+                 IM_COL32(255, 96, 60, 255));
 }
 
 void DrawAuroraFrame(int &tex_budget)
@@ -12029,10 +12468,11 @@ void DrawAuroraFrame(int &tex_budget)
     ImFont *big = FontOr(g_font_mgr.m_menu_font);
     ImFont *label_font = FontOr(g_font_mgr.m_menu_font_small);
     ImFont *icon_font = FontOr(g_font_mgr.m_default_font);
-    const bool neon = T().neon;
     const ImU32 acc = AuroraColor();
-    const ImU32 deep = neon ? IM_COL32(4, 22, 24, 255) : IM_COL32(5, 22, 10, 255);
-    const ImU32 top_col = neon ? IM_COL32(8, 56, 54, 255) : IM_COL32(12, 54, 22, 255);
+    const ImU32 deep = Pick3(IM_COL32(5, 22, 10, 255), IM_COL32(4, 22, 24, 255),
+                             IM_COL32(26, 6, 6, 255));
+    const ImU32 top_col = Pick3(IM_COL32(12, 54, 22, 255), IM_COL32(8, 56, 54, 255),
+                                IM_COL32(64, 14, 12, 255));
 
     // Backdrop: teal gradient, the game's art under it, slow pools of light
     dl->AddRectFilledMultiColor(wp, wb, top_col, top_col, deep, deep);
@@ -12241,7 +12681,8 @@ void DrawMetroStart(int &tex_budget)
         dl->AddImage((ImTextureID)(intptr_t)cur->tex, ra, rb, uv0, uv1,
                      IM_COL32(255, 255, 255, 46));
         // Fade into the list on the left and the bar at the bottom
-        ImU32 bg = T().neon ? IM_COL32(8, 8, 14, 255) : IM_COL32(10, 14, 12, 255);
+        ImU32 bg = Pick3(IM_COL32(10, 14, 12, 255), IM_COL32(8, 8, 14, 255),
+                         IM_COL32(14, 7, 7, 255));
         dl->AddRectFilledMultiColor(ra, ImVec2(ra.x + (rb.x - ra.x) * 0.45f, rb.y), bg,
                                     Alpha(bg, 0), Alpha(bg, 0), bg);
         dl->AddRectFilledMultiColor(ImVec2(ra.x, rb.y - 80 * s), rb, Alpha(bg, 0),
@@ -12390,8 +12831,8 @@ void DrawMetroFrame(int &tex_budget)
     ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
     ImVec2 wb(wp.x + ws.x, wp.y + ws.y);
     // Flat backdrop
-    dl->AddRectFilled(wp, wb, T().neon ? IM_COL32(8, 8, 14, 236)
-                                       : IM_COL32(10, 14, 12, 236));
+    dl->AddRectFilled(wp, wb, Pick3(IM_COL32(10, 14, 12, 236), IM_COL32(8, 8, 14, 236),
+                                    IM_COL32(14, 7, 7, 236)));
     const float pad = 28 * s;
     DrawStyleStatus(wb.x - pad, wp.y + 12 * s);
 
@@ -12497,7 +12938,8 @@ void DrawCollapsedTab()
     }
     alpha *= in;
     float r = 10 * s;
-    ShapeFill(dl, a, b, Alpha(th.neon ? IM_COL32(10, 11, 24, 255) : IM_COL32(20, 26, 20, 255),
+    ShapeFill(dl, a, b, Alpha(Pick3(IM_COL32(20, 26, 20, 255), IM_COL32(10, 11, 24, 255),
+                                    IM_COL32(26, 10, 10, 255)),
                               (int)(235 * alpha)),
               r);
     ShapeStroke(dl, a, b, Alpha(th.accent, (int)((hov ? 255 : 160) * alpha)), r, 1.5f * s);
@@ -12599,10 +13041,37 @@ void GameLibraryWindow::Draw()
         { ImGuiCol_TextSelectedBg, ImVec4(0, 0.898f, 1, 0.30f) },
         { ImGuiCol_ModalWindowDimBg, ImVec4(0.02f, 0.01f, 0.05f, 0.60f) },
     };
+    static const ThemeColor red_theme[] = {
+        { ImGuiCol_Text, ImVec4(0.96f, 0.91f, 0.89f, 1) },
+        { ImGuiCol_TextDisabled, ImVec4(0.64f, 0.50f, 0.46f, 1) },
+        { ImGuiCol_Button, ImVec4(1, 0.204f, 0.157f, 0.06f) },
+        { ImGuiCol_ButtonHovered, ImVec4(1, 0.204f, 0.157f, 0.18f) },
+        { ImGuiCol_ButtonActive, ImVec4(1, 0.204f, 0.157f, 0.34f) },
+        { ImGuiCol_FrameBg, ImVec4(0.10f, 0.04f, 0.04f, 0.85f) },
+        { ImGuiCol_FrameBgHovered, ImVec4(1, 0.204f, 0.157f, 0.10f) },
+        { ImGuiCol_FrameBgActive, ImVec4(1, 0.204f, 0.157f, 0.18f) },
+        { ImGuiCol_Border, ImVec4(1, 0.204f, 0.157f, 0.22f) },
+        { ImGuiCol_CheckMark, ImVec4(1, 0.204f, 0.157f, 1) },
+        { ImGuiCol_SliderGrab, ImVec4(1, 0.204f, 0.157f, 1) },
+        { ImGuiCol_SliderGrabActive, ImVec4(1, 0.55f, 0.12f, 1) },
+        { ImGuiCol_Header, ImVec4(1, 0.204f, 0.157f, 0.16f) },
+        { ImGuiCol_HeaderHovered, ImVec4(1, 1, 1, 0.06f) },
+        { ImGuiCol_HeaderActive, ImVec4(1, 0.204f, 0.157f, 0.28f) },
+        { ImGuiCol_PopupBg, ImVec4(0.09f, 0.03f, 0.03f, 0.98f) },
+        { ImGuiCol_TitleBgActive, ImVec4(0.16f, 0.06f, 0.05f, 1) },
+        { ImGuiCol_ScrollbarBg, ImVec4(0, 0, 0, 0) },
+        { ImGuiCol_ScrollbarGrab, ImVec4(1, 0.204f, 0.157f, 0.22f) },
+        { ImGuiCol_ScrollbarGrabHovered, ImVec4(1, 0.204f, 0.157f, 0.40f) },
+        { ImGuiCol_Separator, ImVec4(1, 0.204f, 0.157f, 0.16f) },
+        { ImGuiCol_NavCursor, ImVec4(1, 0.204f, 0.157f, 1) },
+        { ImGuiCol_TextSelectedBg, ImVec4(1, 0.204f, 0.157f, 0.30f) },
+        { ImGuiCol_ModalWindowDimBg, ImVec4(0.05f, 0.01f, 0.01f, 0.60f) },
+    };
     const bool classic = ClassicStyle();
-    const ThemeColor *theme = T().neon ? neon_theme : green_theme;
+    const ThemeColor *theme = T().id == 2 ? red_theme : T().neon ? neon_theme : green_theme;
     const int theme_count =
         classic ? 0
+        : T().id == 2 ? (int)(sizeof(red_theme) / sizeof(red_theme[0]))
         : T().neon ? (int)(sizeof(neon_theme) / sizeof(neon_theme[0]))
                    : (int)(sizeof(green_theme) / sizeof(green_theme[0]));
     for (int i = 0; i < theme_count; i++) {
@@ -12611,6 +13080,7 @@ void GameLibraryWindow::Draw()
     // Slightly see-through so the boot animation or game shows behind it
     ImGui::PushStyleColor(ImGuiCol_WindowBg,
                           classic    ? ImVec4(0.06f, 0.06f, 0.07f, 0.80f)
+                          : T().id == 2 ? ImVec4(0.05f, 0.016f, 0.016f, 0.86f)
                           : T().neon ? ImVec4(0.025f, 0.022f, 0.05f, 0.86f)
                                      : ImVec4(0.04f, 0.06f, 0.05f, 0.82f));
     bool visible = ImGui::Begin(

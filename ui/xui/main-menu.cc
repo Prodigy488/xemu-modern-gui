@@ -93,7 +93,7 @@ void MainMenuGeneralView::Draw()
               "(requires restart). Turn off if a game misbehaves"));
 #endif
 
-#if defined(_WIN32) && defined(__x86_64__)
+#if defined(_WIN32) && defined(__x86_64__) && defined(XEMU_ENABLE_WHPX)
     Toggle("Hardware virtualization (experimental)", &g_config.perf.whpx,
            "Run the emulated CPU with the Windows Hypervisor Platform instead of "
            "translating its code. Can be much faster; some games may not work. "
@@ -193,7 +193,7 @@ void MainMenuGeneralView::Draw()
                              tr("Use the CPU boost for this game only, or follow the global setting. Applies the next time this game starts"))) {
                 gp.cpu = v - 1; changed = true;
             }
-#if defined(_WIN32) && defined(__x86_64__)
+#if defined(_WIN32) && defined(__x86_64__) && defined(XEMU_ENABLE_WHPX)
             v = gp.whpx + 1;
             if (ChevronCombo("Hardware CPU (this game)", &v, tri,
                              "Run this game on the Windows Hypervisor Platform, "
@@ -298,11 +298,11 @@ void MainMenuGeneralView::Draw()
                  tr_items("Dashboard\0Classic\0Blades\0Metro\0Original Xbox\0Original Blades\0Glossy Blades\0Modern\0Holo\0Aurora\0"),
                  tr("Tabbed dashboard, classic window, sliding blades, live tiles, the Original Xbox or Original Blades look, glossy silver blades, a modern side menu, a hologram terminal, or teal glass with a top bar"));
     ChevronCombo(tr("Dashboard theme"), &g_config.general.library.theme,
-                 tr_items("Neon\0Green\0"),
-                 tr("Dark with cyan and magenta, or xemu green"));
+                 tr_items("Neon\0Green\0Tron Red\0"),
+                 tr("Dark with cyan and magenta, xemu green, or Tron red and amber"));
     ChevronCombo(tr("Home screen covers"), &g_config.general.library.home_covers,
-                 tr_items("3D cases\0Flat\0"),
-                 tr("Show covers on the Home screen as 3D game cases"));
+                 tr_items("3D cases\0Flat\0Holographic\0"),
+                 tr("Show covers on the Home screen as 3D game cases, flat, or as floating holograms"));
     FilePicker(tr("Screenshot output directory"), g_config.general.screenshot_dir,
                nullptr, 0, true, [](const char *path) {
                    xemu_settings_set_string(&g_config.general.screenshot_dir, path);

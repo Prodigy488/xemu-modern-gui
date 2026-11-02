@@ -17,6 +17,11 @@
 #pragma once
 #include <imgui.h>
 
+// The colour theme for everything below: 0 the original green, 1 cyan (Neon),
+// 2 Tron red. Call it before drawing; the sphere, fins, web, orbs, bars and
+// the globe all follow it.
+void XboxDashSetTheme(int theme);
+
 // The black-and-green backdrop with slow light ribbons and drifting specks.
 // menu_view: the main menu (brighter, with the globe's glow) or a section.
 void XboxDashBackground(ImDrawList *dl, ImVec2 a, ImVec2 b, float scale, double time,

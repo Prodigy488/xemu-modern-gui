@@ -51,8 +51,10 @@ struct Eff {
     bool whpx;
 };
 
-// The hardware CPU only exists on Windows builds
-#ifdef _WIN32
+// The hardware CPU (Windows Hypervisor Platform) is switched off in normal
+// builds: testing showed more crashes and lag than speed. The code stays
+// behind XEMU_ENABLE_WHPX for anyone who builds it on purpose.
+#if defined(_WIN32) && defined(XEMU_ENABLE_WHPX)
 constexpr bool kWhpxPossible = true;
 #else
 constexpr bool kWhpxPossible = false;

@@ -216,6 +216,12 @@ void ShowMainMenu()
                     style = CONFIG_GENERAL_LIBRARY_STYLE_DASHBOARD;
                     game_library_window.Open();
                 }
+                if (ImGui::MenuItem(tr("Tron Red"), NULL,
+                                    theme == CONFIG_GENERAL_LIBRARY_THEME_RED)) {
+                    theme = CONFIG_GENERAL_LIBRARY_THEME_RED;
+                    style = CONFIG_GENERAL_LIBRARY_STYLE_DASHBOARD;
+                    game_library_window.Open();
+                }
                 ImGui::EndMenu();
             }
             ImGui::Separator();

@@ -61,7 +61,7 @@ std::string DiagnosticsText()
     static const char *const filters[] = { "linear", "nearest", "fsr",  "bicubic",  "lanczos",
                                            "sgsr",   "nis",     "rtx",  "crt",      "scanlines" };
     static const char *const styles[] = { "dashboard", "classic",         "blades",        "metro",
-                                          "xbox",      "original-blades", "glossy-blades", "modern" };
+                                          "xbox",      "original-blades", "glossy-blades", "modern", "holo", "aurora" };
     static const char *const backends[] = { "nat", "udp", "pcap" };
 
     std::string t;
@@ -121,8 +121,8 @@ std::string DiagnosticsText()
         Pick(backends, 3, g_config.net.backend));
     const char *lang = XuiLanguageCode();
     add("Dashboard: style %s, theme %s, animations %s, language %s\n",
-        Pick(styles, 8, g_config.general.library.style),
-        g_config.general.library.theme == 0 ? "neon" : "green", OnOff(g_config.display.ui.use_animations),
+        Pick(styles, 10, g_config.general.library.style),
+        g_config.general.library.theme == 0 ? "neon" : g_config.general.library.theme == 1 ? "green" : "red", OnOff(g_config.display.ui.use_animations),
         (lang && *lang) ? lang : "auto");
     add("Input: stick dead zone left %d%% right %d%%, pause on focus loss %s\n",
         (int)(g_config.input.stick_deadzone_left * 100 + 0.5),

@@ -34,15 +34,19 @@ tab (v2.1), four more dashboard styles, achievements that can unlock from the
 game's memory and stick drift tools (v2.2), performance settings in v2.3 (CPU
 boost, GPU boost and per-game settings with an automatic safe mode, plus a fix
 that lets NFL Fever 2004 run), a faster game library with a "Clear library"
-button and a 1.4 GHz CPU option in v2.4, and, new in v2.5, two more dashboard
-styles (Holo and Aurora) and sturdier audio.
+button and a 1.4 GHz CPU option in v2.4, and, new in v2.5, a third theme
+(Tron Red), two more dashboard styles (Holo and Aurora), holographic floating
+game covers, the sphere-and-fins dashboard as the default (now with an X
+emblem on the sphere), sturdier audio, a Linux AppImage again and a fix for
+colours going wrong in some games with GPU boost on.
 
 ## Highlights
 
 - **Console-style dashboard** with Home, Library, Insignia, Media, Drive,
   Homebrew, Patches and Settings tabs, ten styles (v2.2 adds Original Xbox,
-  Original Blades, Glossy Blades and Modern; v2.5 adds Holo and Aurora) and two themes. Everything works
-  from a controller.
+  Original Blades, Glossy Blades and Modern; v2.5 adds Holo and Aurora) and three
+  themes (Neon, Green and, new in v2.5, Tron Red). Everything works from a
+  controller.
 - **Game library** with cover art, play time, per-game settings, preview
   videos, save states and resume.
 - **One-click 60 FPS, widescreen and HD patches** without touching your disc
@@ -61,12 +65,11 @@ styles (Holo and Aurora) and sturdier audio.
   focus and a bug-report diagnostics button** (v2.2).
 - **CPU boost and GPU boost, per-game settings and safe mode** (v2.3), and a
   floating-point fix that lets NFL Fever 2004 run.
-- **Hardware CPU test build** (v2.5.1, Windows): the experimental hardware
-  virtualization setting now keeps notes on how each game does, can be set for
-  one game, and a game that fails on it goes back to the normal CPU by itself.
-  See "Hardware CPU test" below.
-- **Holo and Aurora dashboard styles** (v2.5), and an audio chip that skips
-  bad data from a game instead of stopping the emulator.
+- **Tron Red, a light-cycle fight in Holo, holographic floating covers and an
+  X emblem on the sphere** (v2.5), plus Holo and Aurora dashboard styles and an
+  audio chip that skips bad data from a game instead of stopping the emulator.
+- **No hardware virtualization:** the experimental Windows Hypervisor Platform
+  CPU caused crashes and lag in testing, so it is gone from v2.5.
 - **Faster library scanning and Clear library** (v2.4): games appear as they
   are found, and Library > Folders > Clear library empties the list so you can
   add your folders again. The version is shown in the window title.
@@ -101,7 +104,7 @@ Windows builds are on the [Releases](../../releases) page. Unzip and run
 `xemu.exe`. It uses the same settings folder as official xemu, so existing
 settings, EEPROM and hard disk images carry over.
 
-A Linux x86_64 AppImage (and a tarball) is also on the Releases page, for
+A Linux x86_64 AppImage is also on the Releases page, for
 testing: make the AppImage executable and run it. It has had very little
 testing and needs glibc 2.35 or newer (Ubuntu 22.04+, Fedora 36+, Debian 12+).
 
@@ -127,8 +130,14 @@ see the [Releases](../../releases) page.
 - **Ten styles**, switchable any time: the tabbed **Dashboard**, **Blades**
   (sliding side-by-side panels), **Metro** (slim XBMC4Gamers-style lists), **Original Xbox** (a from-scratch homage to the first Xbox's menu with a glowing wireframe globe; no Microsoft artwork), **Original Blades** (a bright green web, a glowing sphere with fins and an arc of orbs, one per section), **Glossy Blades** (silver blades on glossy green, in the spirit of the Xbox 360's first dashboard) **Modern** (a side menu with icons, and one calm card), **Holo** (v2.5: a hologram terminal, thin outlines on black, the nine sections as a grid of tiles beside a live data stream and wave) and **Aurora** (v2.5: teal glass, the game you last played behind it, and a top bar with section pills)
   and the **Classic** single library window.
-- **Two themes:** **Neon** (near-black with cyan and magenta, cut-corner
-  panels and HUD labels) and **Green** (the rounded look in xemu green).
+- **Three themes:** **Neon** (near-black with cyan and magenta, cut-corner
+  panels and HUD labels), **Green** (the rounded look in xemu green) and
+  **Tron Red** (v2.5: red and amber, on every dashboard style). The sphere,
+  fins, web and orbs of Original Blades follow the theme colour, and Original
+  Blades in Green is the default.
+- **Holographic covers (v2.5):** Settings > Home screen covers can show game
+  cases as floating holograms over a projector ring, with scanlines, a sweep
+  of light and an occasional glitch, in the theme colour.
 - **Motion:** flowing light ribbons, a turning wireframe orb, drifting
   specks, tab transitions and a gliding selection glow. Can be turned off.
 - **Tabs**, switched with LB / RB: **Home** (continue your last game),
@@ -371,23 +380,13 @@ see the [Releases](../../releases) page.
   from the xemu project's pull request #2951 (by Korze Warrior). That mode is
   only used for games that need it, because it slows others down, so the
   game gets it automatically and every other game keeps the faster path.
-- **Hardware virtualization (experimental, Windows):** runs the emulated CPU
-  on the Windows Hypervisor Platform. Off by default; some games may not
-  work with it.
 - **Debug mode:** start xemu with the environment variable `XEMU_DEBUG_MODE=1`
   to get detailed timing and crash reports in `xemu.log`. For bug reports.
-- **Hardware CPU test (v2.5.1, Windows):** turn on Settings > General >
-  Hardware virtualization, restart, and play. xemu writes `whpx_report.txt`
-  and `whpx_compat.txt` in the settings folder: for every game, whether it
-  worked (ran at least 90 seconds), failed (with the guest address and device
-  address where it stopped) or closed xemu unexpectedly, plus how many times
-  the CPU stopped for each reason. A game that fails gets "Hardware CPU: Off"
-  in its own settings and runs on the normal CPU from then on; each game also
-  has its own Hardware CPU setting under "This game". If the hypervisor cannot
-  start, the reason is shown and xemu uses the normal CPU. Games can also get
-  a first-time setup from a preset: put lines in `game_presets.txt` (the same
-  format as `game_perf.txt`) in the settings folder; a game that already has
-  settings is left alone.
+- **GPU boost keeps the picture right (v2.5):** with GPU boost on, the
+  lighting in some games came out wrong (Dead or Alive 3 looked washed out).
+  The boost path now draws the same picture as with boost off; checked
+  against the normal path on 486 lighting setups and 60 texture-coordinate
+  setups.
 - **Sturdier audio (v2.5):** the audio chip no longer stops the emulator when
   a game hands it a bad voice number, a bad DSP transfer list, or an audio
   block outside memory. The bad piece is skipped (silence for a bad block) and

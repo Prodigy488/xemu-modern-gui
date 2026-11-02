@@ -39,6 +39,7 @@
 #include "game-perf.hh"
 #include "ui-prof.hh"
 #include "game-library-scan.hh"
+#include "xenia.hh"
 #include "rtx-video.hh"
 #include "xbox-drive-explorer.hh"
 #include "perf-capture.hh"
@@ -96,6 +97,7 @@ struct LibraryEntry {
     uint32_t version = 0;
     uint32_t disc_number = 0;
     bool has_icon = false;
+    bool x360 = false; // an Xbox 360 game, started in Xenia
 
     // Display texture (main thread only)
     GLuint tex = 0;
@@ -114,7 +116,7 @@ bool IsInsigniaTitle(uint32_t title_id)
 
 bool SupportsOnline(const LibraryEntry &e)
 {
-    return e.valid && IsInsigniaTitle(e.title_id);
+    return e.valid && !e.x360 && IsInsigniaTitle(e.title_id);
 }
 
 struct GameStats {
@@ -215,6 +217,7 @@ std::string FolderSignature()
     for (auto &f : AllFolders()) {
         sig += f.path + (f.recursive ? "|r\n" : "|n\n");
     }
+    sig += g_xenia.enabled ? "x360\n" : "";
     for (auto &f : g_extra_files) {
         sig += "file:" + f + "\n";
     }
@@ -359,6 +362,7 @@ bool g_online_only = false;
 int g_filter_compat = 0; // 0 any, 1 Playable or better, 2 with problems, 3 not rated
 int g_filter_played = 0; // 0 any, 1 played, 2 never played
 bool g_filter_60 = false; // only games with a 60 FPS patch
+int g_filter_platform = 0; // 0 all, 1 Xbox, 2 Xbox 360
 bool g_open_insignia_popup = false;
 
 // Insignia website status: checked on demand (when its panel is shown), at
@@ -410,6 +414,17 @@ std::string TitleIdHex(uint32_t id)
     char buf[16];
     snprintf(buf, sizeof(buf), "%08X", id);
     return buf;
+}
+
+// How a game's ID and region read in the UI: Xbox 360 games show their hex
+// title ID and the console, not an Xbox-style ID and region
+std::string EntryId(const LibraryEntry &e)
+{
+    return e.x360 ? TitleIdHex(e.title_id) : FormatTitleId(e.title_id);
+}
+std::string EntryRegion(const LibraryEntry &e)
+{
+    return e.x360 ? std::string("Xbox 360") : FormatRegion(e.region);
 }
 
 std::string Lower(std::string s)
@@ -568,6 +583,14 @@ void LoadLibrary()
         json stats = j.value("stats", json::object());
         json overrides = j.value("overrides", json::object());
         g_primary_recursive = j.value("primary_recursive", true);
+        if (j.contains("xenia") && j["xenia"].is_object()) {
+            const json &x = j["xenia"];
+            g_xenia.enabled = x.value("enabled", false);
+            g_xenia.exe = x.value("exe", "");
+            g_xenia.fullscreen = x.value("fullscreen", true);
+            g_xenia.extra_args = x.value("args", "");
+            g_xenia.pause_xemu = x.value("pause_xemu", true);
+        }
         g_drive_changes.clear();
         for (auto &c : j.value("drive_changes", json::array())) {
             if (c.is_array() && c.size() == 2 && c[0].is_number() && c[1].is_string()) {
@@ -650,6 +673,7 @@ void LoadLibrary()
             e.version = g.value("version", (uint32_t)0);
             e.disc_number = g.value("disc", (uint32_t)0);
             e.has_icon = g.value("has_icon", false);
+            e.x360 = g.value("x360", false);
             g_entries.push_back(std::move(e));
         }
         for (auto &[path, s] : stats.items()) {
@@ -725,9 +749,15 @@ void SaveLibrary(bool async = false)
                           { "region", e.region },
                           { "version", e.version },
                           { "disc", e.disc_number },
-                          { "has_icon", e.has_icon } });
+                          { "has_icon", e.has_icon },
+                          { "x360", e.x360 } });
     }
     j["games"] = games;
+    j["xenia"] = { { "enabled", g_xenia.enabled },
+                   { "exe", g_xenia.exe },
+                   { "fullscreen", g_xenia.fullscreen },
+                   { "args", g_xenia.extra_args },
+                   { "pause_xemu", g_xenia.pause_xemu } };
     json stats = json::object();
     for (auto &[path, s] : g_stats) {
         if (!s.favorite && s.play_seconds <= 0 && s.last_played <= 0 &&
@@ -877,7 +907,7 @@ std::string ScanKeyFor(const fs::directory_entry &de,
 void ScanWorker(std::vector<LibraryFolder> folders,
                 std::vector<std::string> extra_files,
                 std::set<std::string> hidden,
-                std::map<std::string, LibraryEntry> cache)
+                std::map<std::string, LibraryEntry> cache, bool want360)
 {
     std::error_code ec;
     fs::create_directories(IconCacheDir(), ec);
@@ -903,7 +933,7 @@ void ScanWorker(std::vector<LibraryFolder> folders,
 
         auto c = cache.find(e.path);
         if (c != cache.end() && c->second.file_size == e.file_size &&
-            c->second.mtime == e.mtime) {
+            c->second.mtime == e.mtime && (c->second.valid || !want360)) {
             e = c->second;
         } else {
             DiscTitleInfo info;
@@ -927,10 +957,26 @@ void ScanWorker(std::vector<LibraryFolder> folders,
                         e.has_icon = (bool)f;
                     }
                 }
+            } else if (want360) {
+                X360TitleInfo x;
+                if (X360ReadTitleInfo(e.path, x)) {
+                    e.valid = true;
+                    e.x360 = true;
+                    e.title_id = x.title_id;
+                    e.title = x.title_name;
+                    if (!x.icon_png.empty()) {
+                        std::lock_guard<std::mutex> il(icon_mutex);
+                        std::ofstream f(IconCacheDir() /
+                                            ("x360-" + TitleIdHex(e.title_id) + ".png"),
+                                        std::ios::binary | std::ios::trunc);
+                        f.write((const char *)x.icon_png.data(), x.icon_png.size());
+                        e.has_icon = (bool)f;
+                    }
+                }
             }
         }
         std::lock_guard<std::mutex> lock(g_scan_mutex);
-        if (e.valid) {
+        if (e.valid && !e.x360) { // 360 discs of one game can be the same size
             std::string disc_key = string_format(
                 "%08X/%08X/%08X/%u/%llu", e.title_id, e.region, e.version,
                 e.disc_number, (unsigned long long)e.file_size);
@@ -986,7 +1032,15 @@ void ScanWorker(std::vector<LibraryFolder> folders,
             return;
         }
         std::string ext = Lower(de.path().extension().u8string());
-        if (ext != ".iso" && ext != ".xiso") {
+        bool wanted = ext == ".iso" || ext == ".xiso";
+        if (!wanted && want360) {
+            // .xex, or a Games on Demand header (a long name with no extension)
+            wanted = ext == ".xex" ||
+                     (ext.empty() && de.file_size(fec) >= 0x6000 &&
+                      X360LooksLikeCandidate(de.path().filename().u8string()));
+            fec.clear();
+        }
+        if (!wanted) {
             return;
         }
         std::string key = ScanKeyFor(de, dir_keys);
@@ -1024,6 +1078,7 @@ void ScanWorker(std::vector<LibraryFolder> folders,
             fs::directory_iterator it(
                 dir, fs::directory_options::skip_permission_denied, wec);
             std::vector<fs::path> subdirs;
+            std::vector<fs::directory_entry> xex_files;
             bool game_dir = false;
             for (; !wec && it != fs::directory_iterator(); it.increment(wec)) {
                 if (g_scan_cancel) {
@@ -1041,12 +1096,29 @@ void ScanWorker(std::vector<LibraryFolder> folders,
                     }
                     continue;
                 }
-                if (Lower(de.path().filename().u8string()) == "default.xbe") {
+                std::string lname = Lower(de.path().filename().u8string());
+                if (lname == "default.xbe") {
                     game_dir = true;
+                }
+                if (want360 && lname.size() > 4 &&
+                    lname.compare(lname.size() - 4, 4, ".xex") == 0) {
+                    // an extracted 360 game is its default.xex; other .xex
+                    // files in that folder belong to it
+                    xex_files.push_back(de);
+                    continue;
                 }
                 consider(de);
             }
-            if (game_dir) {
+            bool xex_game = false;
+            for (auto &x : xex_files) {
+                xex_game |= Lower(x.path().filename().u8string()) == "default.xex";
+            }
+            for (auto &x : xex_files) {
+                if (!xex_game || Lower(x.path().filename().u8string()) == "default.xex") {
+                    consider(x);
+                }
+            }
+            if (game_dir || xex_game) {
                 return;
             }
             for (auto &sub : subdirs) {
@@ -1112,7 +1184,7 @@ void StartScan()
     g_scan_total = 0;
     g_scan_running = true;
     g_scan_thread = std::thread(ScanWorker, std::move(folders), g_extra_files,
-                                g_hidden, std::move(cache));
+                                g_hidden, std::move(cache), g_xenia.enabled);
 }
 
 void MergeScanResults()
@@ -1217,7 +1289,7 @@ std::vector<fs::path> ArtworkCandidates(const LibraryEntry &e)
         for (const char *ext : exts) {
             if (e.valid) {
                 out.push_back(covers / (TitleIdHex(e.title_id) + ext));
-                out.push_back(covers / (FormatTitleId(e.title_id) + ext));
+                out.push_back(covers / (EntryId(e) + ext));
             }
             out.push_back(covers / (img.stem().u8string() + ext));
         }
@@ -1225,11 +1297,12 @@ std::vector<fs::path> ArtworkCandidates(const LibraryEntry &e)
     for (const char *ext : exts) {
         out.push_back(img.parent_path() / (img.stem().u8string() + ext));
     }
-    if (e.valid) {
+    if (e.valid && !e.x360) {
         out.push_back(IconCacheDir() / "covers" / (TitleIdHex(e.title_id) + ".jpg"));
     }
     if (e.has_icon) {
-        out.push_back(IconCacheDir() / (TitleIdHex(e.title_id) + ".png"));
+        out.push_back(IconCacheDir() /
+                      ((e.x360 ? "x360-" : "") + TitleIdHex(e.title_id) + ".png"));
     }
     return out;
 }
@@ -1436,7 +1509,7 @@ std::vector<fs::path> Box3DCandidates(const LibraryEntry &e)
     std::vector<std::string> names;
     if (e.valid) {
         names.push_back(TitleIdHex(e.title_id));
-        names.push_back(FormatTitleId(e.title_id));
+        names.push_back(EntryId(e));
     }
     names.push_back(img.stem().u8string());
     for (auto &folder : AllFolders()) {
@@ -2218,6 +2291,9 @@ void SortedFiltered(std::vector<LibraryEntry *> &out)
         if (g_filter_60 && !Has60Fps(e)) {
             continue;
         }
+        if ((g_filter_platform == 1 && e.x360) || (g_filter_platform == 2 && !e.x360)) {
+            continue;
+        }
         if (g_filter_played) {
             const GameStats &st = g_stats[e.path];
             bool played = st.last_played > 0 || st.play_seconds > 0;
@@ -2229,7 +2305,7 @@ void SortedFiltered(std::vector<LibraryEntry *> &out)
             Lower(e.DisplayName()).find(needle) == std::string::npos &&
             Lower(e.file_stem).find(needle) == std::string::npos &&
             (!e.valid ||
-             Lower(FormatTitleId(e.title_id)).find(needle) == std::string::npos)) {
+             Lower(EntryId(e)).find(needle) == std::string::npos)) {
             continue;
         }
         out.push_back(&e);
@@ -2560,7 +2636,8 @@ void SixtyAfterDownload()
 
 bool Has60Fps(const LibraryEntry &e)
 {
-    return e.valid && (Online60Fps(e.title_id) || SixtyFor(e.title_id).installed);
+    return e.valid && !e.x360 &&
+           (Online60Fps(e.title_id) || SixtyFor(e.title_id).installed);
 }
 
 // The 60 FPS line in a game's details, with its switch
@@ -3354,7 +3431,7 @@ void DrawContextMenu(LibraryEntry &e)
     }
     ImGui::Separator();
     if (ImGui::MenuItem(tr("Copy title ID"), NULL, false, e.valid)) {
-        ImGui::SetClipboardText(FormatTitleId(e.title_id).c_str());
+        ImGui::SetClipboardText(EntryId(e).c_str());
     }
     if (ImGui::MenuItem(tr(ICON_FA_FOLDER_OPEN "  Show file location"))) {
         std::string url =
@@ -3837,7 +3914,7 @@ void StartCompatRefresh()
 
 CompatStatus CompatFor(const LibraryEntry &e)
 {
-    if (!e.valid || g_compat.empty()) {
+    if (!e.valid || e.x360 || g_compat.empty()) {
         return CompatStatus::None;
     }
     return CompatLookup(g_compat, e.title_id);
@@ -3928,9 +4005,9 @@ void DrawTile(LibraryEntry &e, float tile_w, int &tex_budget)
         CompatStatus cs = CompatFor(e);
         ImGui::SetItemTooltip(tr("%s\n%s%s%s\nPlay time: %s\nLast played: %s%s%s"),
                               e.DisplayName().c_str(),
-                              e.valid ? FormatTitleId(e.title_id).c_str() : "",
+                              e.valid ? EntryId(e).c_str() : "",
                               e.valid ? "  -  " : "",
-                              e.valid ? FormatRegion(e.region).c_str()
+                              e.valid ? EntryRegion(e).c_str()
                                       : tr("Unrecognized image"),
                               FormatPlayTime(st.play_seconds).c_str(),
                               FormatLastPlayed(st.last_played).c_str(),
@@ -3992,6 +4069,23 @@ void DrawTile(LibraryEntry &e, float tile_w, int &tex_budget)
                 dl->AddText(bf, fs, p, IM_COL32(255, 255, 255, 255), badge);
             }
         }
+        if (e.x360) {
+            // Xbox 360 game (opens in Xenia): badge in the top right corner
+            const char *badge = "360";
+            ImFont *bf = ImGui::GetFont();
+            float fs = font_h * 0.75f;
+            ImVec2 ts = bf->CalcTextSizeA(fs, FLT_MAX, 0, badge);
+            ImVec2 p(art_b.x - ts.x - 6 * s, a.y + 6 * s);
+            ImVec2 b0(p.x - 3 * s, p.y - 2 * s), b1(p.x + ts.x + 3 * s, p.y + ts.y + 2 * s);
+            if (T().neon) {
+                ShapeFill(dl, b0, b1, IM_COL32(10, 6, 16, 220), 4 * s);
+                ShapeStroke(dl, b0, b1, T().accent2, 4 * s, 1.0f * s);
+                dl->AddText(bf, fs, p, T().accent2, badge);
+            } else {
+                dl->AddRectFilled(b0, b1, IM_COL32(110, 160, 20, 235), 3 * s);
+                dl->AddText(bf, fs, p, IM_COL32(255, 255, 255, 255), badge);
+            }
+        }
         if (Has60Fps(e)) {
             // "60 FPS" under the ONLINE badge: bright when on
             bool on = SixtyFor(e.title_id).on;
@@ -4049,8 +4143,8 @@ void DrawTile(LibraryEntry &e, float tile_w, int &tex_budget)
         dl->AddText(ImGui::GetFont(), font_h, ImVec2(a.x + 2 * s, art_b.y + 8 * s),
                     ImGui::GetColorU32(ImGuiCol_Text),
                     e.DisplayName().c_str(), NULL, tile_w - 4 * s, &clip);
-        std::string sub = e.valid ? FormatTitleId(e.title_id) + "  " +
-                                        FormatRegion(e.region)
+        std::string sub = e.valid ? EntryId(e) + "  " +
+                                        EntryRegion(e)
                                   : tr("Unrecognized image");
         ImVec4 clip2(a.x, a.y, a.x + tile_w, a.y + tile_h);
         dl->AddText(ImGui::GetFont(), font_h * 0.85f,
@@ -4147,8 +4241,8 @@ void DrawList(std::vector<LibraryEntry *> &items, int &tex_budget)
             }
         };
         cell((st.favorite ? ICON_FA_STAR " " : "") + e.DisplayName(), false);
-        cell(e.valid ? FormatTitleId(e.title_id) : "-", true);
-        cell(e.valid ? FormatRegion(e.region) : tr("Unrecognized"), true);
+        cell(e.valid ? EntryId(e) : "-", true);
+        cell(e.valid ? EntryRegion(e) : tr("Unrecognized"), true);
         cell(FormatPlayTime(st.play_seconds), true);
         cell(IsCurrentDisc(e) ? tr("Playing now") : FormatLastPlayed(st.last_played),
              !IsCurrentDisc(e));
@@ -4361,8 +4455,8 @@ void DrawSettingsPopup()
         return;
     }
     ImGui::TextUnformatted(e->DisplayName().c_str());
-    ImGui::TextDisabled("%s  -  %s", FormatTitleId(e->title_id).c_str(),
-                        FormatRegion(e->region).c_str());
+    ImGui::TextDisabled("%s  -  %s", EntryId(*e).c_str(),
+                        EntryRegion(*e).c_str());
     ImGui::Separator();
     if (Has60Fps(*e)) {
         bool sixty = SixtyFor(e->title_id).on;
@@ -4633,7 +4727,7 @@ void StartCoverDownload()
     std::set<uint32_t> seen;
     std::error_code ec;
     for (auto &e : g_entries) {
-        if (!e.valid || seen.count(e.title_id) ||
+        if (!e.valid || e.x360 || seen.count(e.title_id) ||
             g_covers_missing.count(e.title_id) || CoverUrl(e.title_id).empty() ||
             fs::exists(DownloadedCoverPath(e.title_id), ec)) {
             continue;
@@ -5131,6 +5225,64 @@ void DrawFoldersPopup()
         SaveLibrary();
     }
 
+    ImGui::Dummy(ImVec2(0, 6 * s));
+    ImGui::Separator();
+    ImGui::TextUnformatted(tr("Xbox 360 games (Xenia)"));
+    ImGui::PushTextWrapPos(600 * s);
+    ImGui::TextDisabled(tr("xemu does not emulate the Xbox 360. With this on, 360 games "
+                        "in your folders (.iso, extracted games with a default.xex, "
+                        ".xex files, Games on Demand and Arcade packages) are listed "
+                        "and open in your own copy of Xenia or Xenia Canary."));
+    ImGui::PopTextWrapPos();
+    if (ImGui::Checkbox(tr("Show Xbox 360 games"), &g_xenia.enabled)) {
+        g_dirty = true; // the folders are scanned again on their own
+    }
+    if (g_xenia.enabled) {
+        char exe[1024];
+        snprintf(exe, sizeof(exe), "%s", g_xenia.exe.c_str());
+        ImGui::SetNextItemWidth(430 * s);
+        if (ImGui::InputTextWithHint("##xeniaexe", tr("Path to xenia.exe / xenia_canary"),
+                                     exe, sizeof(exe))) {
+            g_xenia.exe = exe;
+            g_dirty = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(tr("Browse..."))) {
+            static const SDL_DialogFileFilter xf[] = {
+                { "Programs (*.exe)", "exe" },
+                { "All Files", "*" },
+            };
+            std::string start = g_xenia.exe.empty()
+                                    ? ""
+                                    : fs::u8path(g_xenia.exe).parent_path().u8string();
+            ShowOpenFileDialog(xf, 2, start.c_str(), [](const char *path) {
+                g_xenia.exe = path;
+                g_dirty = true;
+            });
+        }
+        if (XeniaConfigured()) {
+            ImGui::TextColored(ImVec4(0.35f, 0.85f, 0.4f, 1), "%s", tr("Xenia found"));
+        } else {
+            ImGui::TextColored(ImVec4(0.95f, 0.6f, 0.3f, 1), "%s",
+                               g_xenia.exe.empty() ? tr("Choose your Xenia to play 360 games")
+                                                   : tr("That file was not found"));
+        }
+        if (ImGui::Checkbox(tr("Start Xenia fullscreen"), &g_xenia.fullscreen)) {
+            g_dirty = true;
+        }
+        if (ImGui::Checkbox(tr("Pause the Xbox game while Xenia runs"), &g_xenia.pause_xemu)) {
+            g_dirty = true;
+        }
+        char args[512];
+        snprintf(args, sizeof(args), "%s", g_xenia.extra_args.c_str());
+        ImGui::SetNextItemWidth(430 * s);
+        if (ImGui::InputTextWithHint("##xeniaargs", tr("Extra options for Xenia (optional)"),
+                                     args, sizeof(args))) {
+            g_xenia.extra_args = args;
+            g_dirty = true;
+        }
+    }
+    ImGui::Separator();
     ImGui::Dummy(ImVec2(0, 4 * s));
     if (ImGui::Button(tr(ICON_FA_FOLDER_OPEN "  Add folder..."))) {
         AddGameFolder();
@@ -5611,8 +5763,8 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
     ImGui::PopTextWrapPos();
     ImGui::PopFont();
     if (e.valid) {
-        ImGui::TextDisabled("%s  -  %s", FormatTitleId(e.title_id).c_str(),
-                            FormatRegion(e.region).c_str());
+        ImGui::TextDisabled("%s  -  %s", EntryId(e).c_str(),
+                            EntryRegion(e).c_str());
     } else {
         ImGui::TextDisabled(tr("Unrecognized disc image"));
     }
@@ -5765,7 +5917,7 @@ DiscordActivity CurrentPresence()
     }
     std::string name = e ? e->DisplayName() : fs::u8path(cur).stem().u8string();
     a.details = name;
-    a.state = e && e->valid ? FormatTitleId(e->title_id) : "Original Xbox";
+    a.state = e && e->valid ? EntryId(*e) : "Original Xbox";
     if (!runstate_is_running()) {
         a.state += "  -  Paused";
     }
@@ -6572,7 +6724,7 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
         ImGui::TextUnformatted(t.c_str());
     };
     if (e.valid) {
-        meta(FormatTitleId(e.title_id));
+        meta(EntryId(e));
     }
     meta(string_format(tr("%s played"), FormatPlayTime(st.play_seconds).c_str()));
     if (!IsCurrentDisc(e) && st.last_played > 0) {
@@ -7482,7 +7634,7 @@ void DrawInsigniaTab(int &tex_budget)
     float w = ImGui::GetContentRegionAvail().x;
     for (LibraryEntry *e : mine) {
         GameStats &gs = g_stats[e->path];
-        std::string sub = FormatTitleId(e->title_id) + "  -  " +
+        std::string sub = EntryId(*e) + "  -  " +
                           (IsCurrentDisc(*e)   ? std::string(tr("Playing now"))
                            : gs.last_played > 0 ? string_format(tr("Played %s"),
                                                     FormatLastPlayed(gs.last_played).c_str())
@@ -9415,7 +9567,7 @@ void DrawPatchesTab(int &tex_budget)
         int installed = it == g_patches.end() ? 0 : (int)it->second.size();
         int on = EnabledPatchCount(e->title_id);
         int online = OnlinePatchCount(e->title_id);
-        std::string sub = FormatTitleId(e->title_id) + "  -  " +
+        std::string sub = EntryId(*e) + "  -  " +
                           string_format(tr("%d installed, %d available online"),
                                         installed, online);
         std::string note = on ? string_format(tr(ICON_FA_WRENCH "  %d on"), on)
@@ -10697,7 +10849,7 @@ void DrawLibraryTab(int &tex_budget)
             ImGui::Checkbox(tr("Has a 60 FPS patch"), &g_filter_60);
             ImGui::Separator();
             if (ImGui::Button(tr("Clear filters"))) {
-                g_filter_compat = g_filter_played = 0;
+                g_filter_compat = g_filter_played = g_filter_platform = 0;
                 g_filter_60 = false;
                 ImGui::CloseCurrentPopup();
             }
@@ -10774,6 +10926,34 @@ void DrawLibraryTab(int &tex_budget)
     }
     ImGui::Dummy(ImVec2(0, 4 * s));
 
+    // Console tabs: All / Xbox / Xbox 360 (only when 360 games are turned on)
+    if (!g_xenia.enabled) {
+        g_filter_platform = 0;
+    } else {
+        int n360 = 0;
+        for (auto &e : g_entries) {
+            n360 += e.x360 ? 1 : 0;
+        }
+        int nxbox = (int)g_entries.size() - n360;
+        const std::string tabs[3] = {
+            string_format(tr("All  %d"), (int)g_entries.size()),
+            string_format(tr("Xbox  %d"), nxbox),
+            string_format(tr("Xbox 360  %d"), n360),
+        };
+        const char *tips[3] = { tr("Show Xbox and Xbox 360 games"),
+                                tr("Show only original Xbox games"),
+                                tr("Show only Xbox 360 games (they open in Xenia)") };
+        for (int i = 0; i < 3; i++) {
+            if (i) {
+                ImGui::SameLine(0, 2 * s);
+            }
+            if (toggle(tabs[i].c_str(), g_filter_platform == i, tips[i])) {
+                g_filter_platform = i;
+            }
+        }
+        ImGui::Dummy(ImVec2(0, 4 * s));
+    }
+
     std::vector<LibraryEntry *> items;
     SortedFiltered(items);
     LibraryEntry *selected = FindEntry(g_selected_path);
@@ -10797,15 +10977,15 @@ void DrawLibraryTab(int &tex_budget)
         ImGui::TextDisabled(g_entries.empty() && !g_scan_running
                                 ? tr("No disc images found in your game folders.")
                                 : tr("No games match."));
-        if ((g_filter_compat || g_filter_played || g_filter_60) && !g_entries.empty() &&
-            ImGui::Button(tr("Clear filters"))) {
-            g_filter_compat = g_filter_played = 0;
+        if ((g_filter_compat || g_filter_played || g_filter_60 || g_filter_platform) &&
+            !g_entries.empty() && ImGui::Button(tr("Clear filters"))) {
+            g_filter_compat = g_filter_played = g_filter_platform = 0;
             g_filter_60 = false;
         }
     }
     if (grid) {
         if (g_search.empty() && !g_favorites_only && !g_filter_compat &&
-            !g_filter_played && !g_filter_60) {
+            !g_filter_played && !g_filter_60 && !g_filter_platform) {
             DrawRecentRow(tex_budget);
         }
         DrawGrid(items, tex_budget);
@@ -11027,11 +11207,88 @@ void LaunchNow(const std::string &path)
     game_library_window.is_open = false;
 }
 
+// ---- Xbox 360 games, started in the user's Xenia ---------------------------
+
+bool g_xenia_vm_paused = false;   // we paused the Xbox while Xenia runs
+bool g_xenia_was_open = false;    // the library was open when Xenia started
+
+void LaunchXenia(const std::string &path)
+{
+    LibraryEntry *e = FindEntry(path);
+    std::string name = e ? e->DisplayName() : fs::u8path(path).stem().u8string();
+    if (!XeniaConfigured()) {
+        xemu_queue_notification(tr("Choose your Xenia first to play Xbox 360 games"));
+        g_open_folders_popup = true;
+        return;
+    }
+    std::string err;
+    if (!XeniaLaunch(path, &err)) {
+        xemu_queue_error_message(err.c_str());
+        return;
+    }
+    g_stats[path].last_played = (int64_t)time(NULL);
+    g_dirty = true;
+    RequestPreviewStop();
+    // The Xbox would keep running behind Xenia; hold it, and don't let the
+    // controller you are playing with in Xenia also move the dashboard
+    g_xenia_vm_paused = false;
+    if (g_xenia.pause_xemu && runstate_is_running()) {
+        vm_stop(RUN_STATE_PAUSED);
+        g_xenia_vm_paused = true;
+    }
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "0");
+    g_xenia_was_open = game_library_window.is_open;
+    game_library_window.is_open = false;
+    std::string msg = string_format(tr("Starting %s in Xenia"), name.c_str());
+    xemu_queue_notification(msg.c_str());
+}
+
+// Every frame: notices when Xenia was closed and gives the dashboard back
+void XeniaTick()
+{
+    if (!XeniaIsRunning()) {
+        return;
+    }
+    std::string path;
+    double seconds = 0;
+    if (!XeniaPoll(&path, &seconds)) {
+        return;
+    }
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+    if (g_xenia_vm_paused) {
+        g_xenia_vm_paused = false;
+        if (!runstate_is_running()) {
+            vm_start();
+        }
+    }
+    GameStats &st = g_stats[path];
+    st.play_seconds += seconds;
+    st.last_played = (int64_t)time(NULL);
+    g_dirty = true;
+    LibraryEntry *e = FindEntry(path);
+    std::string name = e ? e->DisplayName() : fs::u8path(path).stem().u8string();
+    int mins = (int)(seconds / 60.0);
+    std::string msg = mins > 0 ? string_format(tr("Xenia closed: %s (%d min)"),
+                                               name.c_str(), mins)
+                               : string_format(tr("Xenia closed: %s"), name.c_str());
+    xemu_queue_notification(msg.c_str());
+    if (g_xenia_was_open) {
+        game_library_window.is_open = true;
+    }
+}
+
 } // namespace
 
 
 void GameLibraryWindow::Launch(const std::string &path)
 {
+    {
+        LibraryEntry *x = FindEntry(path);
+        if (x && x->x360) {
+            LaunchXenia(path);
+            return;
+        }
+    }
     LibraryEntry *cur = CurrentGame();
     if (ShouldSaveResumePoint() && cur && cur->path != path) {
         // Leaving a running game: save its resume point first (in Update)
@@ -11138,6 +11395,8 @@ void GameLibraryWindow::Update()
     UiProfMark("image upload");
     UpdateDiscordPresence();
     UiProfMark("discord");
+
+    XeniaTick();
 
     // Track disc changes: last played + per-game settings
     const char *dvd = g_config.sys.files.dvd_path;
@@ -12800,8 +13059,8 @@ void DrawMetroStart(int &tex_budget)
         y += fh + 6 * s;
     };
     if (cur->valid) {
-        line(tr("Title ID"), FormatTitleId(cur->title_id));
-        line(tr("Region"), FormatRegion(cur->region));
+        line(tr("Title ID"), EntryId(*cur));
+        line(tr("Region"), EntryRegion(*cur));
     }
     line(tr("Play time"), FormatPlayTime(st.play_seconds));
     line(tr("Last played"), FormatLastPlayed(st.last_played));

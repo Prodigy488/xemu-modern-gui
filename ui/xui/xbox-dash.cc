@@ -380,6 +380,55 @@ void DrawFin(ImDrawList *dl, ImVec2 c, float r, float thick, float ang0, float s
     dl->AddPolyline(inner, n + 1, A(edge, (edge >> IM_COL32_A_SHIFT & 0xFF) / 2), 0, line);
 }
 
+// A stylised "X" worn by the sphere: four arms that start narrow at the middle
+// and flare toward the rim, with concave edges, so it reads as the console's
+// emblem without copying any official artwork. Drawn from scratch.
+void DrawSphereEmblem(ImDrawList *dl, ImVec2 c, float R, float glow, float s)
+{
+    const int n = 20;
+    const float len = R * 0.86f;
+    const float ln = std::max(1.0f, 1.2f * s);
+    const ImU32 fill = XD_COL(236, 255, 205, std::clamp((int)(200 + 30 * glow), 0, 255));
+    const ImU32 edge = XD_COL(255, 255, 238, 235);
+    const ImU32 shade = XD_COL(14, 64, 6, 95);
+    for (int k = 0; k < 4; k++) {
+        float ang = kPi * 0.25f + k * kPi * 0.5f;
+        ImVec2 d(cosf(ang), sinf(ang)), p(-d.y, d.x);
+        ImVec2 L[n + 1], Rr[n + 1];
+        for (int i = 0; i <= n; i++) {
+            float u = (float)i / n;
+            // Narrow in the middle, flaring out: concave edges
+            float hw = R * (0.030f + 0.125f * powf(u, 1.7f));
+            // Pull the arms very slightly toward the centre-line of the ball
+            float along = len * u;
+            L[i] = ImVec2(c.x + d.x * along + p.x * hw, c.y + d.y * along + p.y * hw);
+            Rr[i] = ImVec2(c.x + d.x * along - p.x * hw, c.y + d.y * along - p.y * hw);
+        }
+        // Adjacent segments share edges; without AA on the fill they don't
+        // leave hairline seams
+        const ImDrawListFlags saved_flags = dl->Flags;
+        dl->Flags &= ~ImDrawListFlags_AntiAliasedFill;
+        // Soft shadow under the arm
+        float so = R * 0.025f;
+        for (int i = 0; i < n; i++) {
+            ImVec2 q[4] = { ImVec2(L[i].x + so, L[i].y + so), ImVec2(L[i + 1].x + so, L[i + 1].y + so),
+                            ImVec2(Rr[i + 1].x + so, Rr[i + 1].y + so), ImVec2(Rr[i].x + so, Rr[i].y + so) };
+            dl->AddConvexPolyFilled(q, 4, shade);
+        }
+        for (int i = 0; i < n; i++) {
+            ImVec2 q[4] = { L[i], L[i + 1], Rr[i + 1], Rr[i] };
+            dl->AddConvexPolyFilled(q, 4, fill);
+        }
+        dl->Flags = saved_flags;
+        dl->AddPolyline(L, n + 1, edge, 0, ln);
+        dl->AddPolyline(Rr, n + 1, edge, 0, ln);
+        dl->AddLine(L[n], Rr[n], edge, ln);
+    }
+    // The hub where the arms meet
+    dl->AddCircleFilled(c, R * 0.075f, fill, 24);
+    dl->AddCircle(c, R * 0.075f, edge, 24, ln);
+}
+
 void DrawSphere(ImDrawList *dl, ImVec2 c, float R, double t, float spin, float pulse,
                 float s, bool animate)
 {
@@ -406,6 +455,9 @@ void DrawSphere(ImDrawList *dl, ImVec2 c, float R, double t, float spin, float p
     dl->AddCircleFilled(ImVec2(c.x - R * 0.40f, c.y - R * 0.54f), R * 0.05f,
                         XD_COL(255, 255, 240, 140), 24);
     dl->AddCircle(c, R, XD_COL(190, 235, 80, 150), 96, std::max(1.2f, R * 0.012f));
+
+    // The emblem on its face (under the fins, so they sweep across it)
+    DrawSphereEmblem(dl, c, R, animate ? 0.5f + 0.5f * sinf(tm * 1.6f) + pulse : 0.5f, s);
 
     // Fins turning round it
     const ImU32 fin = XD_COL(170, 235, 130, 62), edge = XD_COL(200, 250, 160, 150);

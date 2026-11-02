@@ -12,10 +12,13 @@ jobs:
   build:
     name: Build for Windows (${{ matrix.arch }}, ${{ matrix.configuration }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     strategy:
+      fail-fast: false
       matrix:
-        arch: [x86_64, arm64]
-        configuration: [debug, release]
+        arch: [x86_64]
+        configuration: [release]
     container:
       image: ghcr.io/xemu-project/xemu-win64-toolchain${{ matrix.arch == 'x86_64' && '-gcc:sha-2881edd' || ':sha-0d06ce8' }}
     defaults:
@@ -65,6 +68,7 @@ jobs:
             --extra-cflags="-flto-incremental=${LTO_CACHE_DIR} -flto-partition=cache"
             -Db_lto=true
             -Dx86_version=3
+            --enable-whpx
           )
           mkdir -p ${LTO_CACHE_DIR}
         elif [[ "${{ matrix.arch }}" == "arm64" ]]; then
@@ -84,6 +88,26 @@ jobs:
       with:
         name: xemu-windows-${{ matrix.arch }}-${{ matrix.configuration }}
         path: dist
+    - name: Publish the zip to the builds branch
+      if: ${{ matrix.arch == 'x86_64' && matrix.configuration == 'release' }}
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SHA: ${{ github.sha }}
+      run: |
+        apt-get install -qy zip git
+        short=${SHA:0:7}
+        name=xemu-windows-x86_64-release-${short}.zip
+        (cd dist && zip -qr "../${name}" .)
+        work=$(mktemp -d)
+        cp "${name}" "${work}/"
+        cd "${work}"
+        git init -q
+        git checkout -q --orphan builds
+        git config user.name "build"
+        git config user.email "build@users.noreply.github.com"
+        git add .
+        git commit -qm "Windows build ${short}"
+        git push -q --force "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" HEAD:refs/heads/builds
 
   # Generate a symbols package for Windows. Use cv2pdb to generate PDBs from
   # DWARF and update + strip the executable. Re-package the original release
@@ -93,9 +117,10 @@ jobs:
     runs-on: windows-latest
     needs: build
     strategy:
+      fail-fast: false
       matrix:
-        arch: [x86_64, arm64]
-        configuration: [debug, release]
+        arch: [x86_64]
+        configuration: [release]
     steps:
     - name: Download artifacts
       uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v4

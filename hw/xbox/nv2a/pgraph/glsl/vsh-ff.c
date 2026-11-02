@@ -115,42 +115,87 @@ static void gen_dynamic_lights(MString *body, const VshState *state)
         "    nDotHV = max(0.0, nDotHVraw);\n",
         half_infinite, eye);
 
-    /* Spot: the cooked vector, as in the unrolled LIGHT_SPOT case (cooking
-     * decompiled from D3DDevice_SetLight and the lighting flush of the HOTD3
-     * D3D8 runtime; real hardware renders its hard cones, so it does not
-     * renormalize). The Falloff curve (L0_K) is not modelled. */
+    /* Spot: the same rational falloff as the unrolled LIGHT_SPOT case, so the
+     * picture does not change with GPU boost (s = dot(spotDir.xyz, VP) +
+     * spotDir.w, factor (s + L) / (M * s + N), clamped; see there). */
     mstring_append(
         body,
         "    if (lmode == 3u) {\n"
         "      vec4 spotDir = lightSpotDirection(i);\n"
-        "      attenuation *=\n"
-        "          clamp(dot(spotDir.xyz, VP) + spotDir.w, 0.0, 1.0);\n"
+        "      float s = dot(spotDir.xyz, VP) + spotDir.w;\n"
+        "      if (s <= 0.0) {\n"
+        "        attenuation = 0.0;\n"
+        "      } else if (s < 1.0) {\n"
+        "        vec3 spotFalloff = lightSpotFalloff(i);\n"
+        "        float spotFactor = 0.0;\n"
+        "        if (s > -spotFalloff.x) {\n"
+        "          float denom = spotFalloff.y * s + spotFalloff.z;\n"
+        "          if (denom == 0.0) {\n"
+        "            spotFactor = 1.0;\n"
+        "          } else if (denom > 0.0) {\n"
+        "            spotFactor = clamp((s + spotFalloff.x) / denom, 0.0, 1.0);\n"
+        "          }\n"
+        "        }\n"
+        "        attenuation *= spotFactor;\n"
+        "      }\n"
         "    }\n"
         "  }\n");
 
     mstring_append(
         body,
-        "  float pf;\n"
-        "  if (nDotVP == 0.0 || nDotHV == 0.0) {\n"
-        "    pf = 0.0;\n"
-        "  } else {\n"
-        "    pf = pow(nDotHV, specularPower);\n"
+        /* The hardware's rational approximation of the specular power
+         * (x + L) / (M x + N), from specularParams, as in the unrolled code */
+        "  float pf = 0.0;\n"
+        "  if (nDotVP > 0.0 && nDotHV > -specularParams.x) {\n"
+        "    float denom = specularParams.y * nDotHV + specularParams.z;\n"
+        "    if (denom == 0.0) {\n"
+        "      pf = 10000.0;\n"
+        "    } else if (denom > 0.0) {\n"
+        "      pf = clamp((nDotHV + specularParams.x) / denom, 0.0, 10000.0);\n"
+        "    }\n"
         "  }\n"
         "  vec3 lightAmbient = lightAmbientColor(i) * attenuation;\n"
         "  vec3 lightDiffuse = lightDiffuseColor(i) * attenuation * nDotVP;\n"
         "  vec3 lightSpecular = lightSpecularColor(i) * attenuation * pf;\n"
-        "  oD0.xyz += lightAmbient;\n"
         /* Two-sided lighting: the back face is lit with the negated
          * normal and the back light registers. */
         "  if ((csv0cCtl & 32768u) != 0u) {\n"
         "    float bDotVP = max(0.0, -nDotVPraw);\n"
         "    float bDotHV = max(0.0, -nDotHVraw);\n"
-        "    float bpf = (bDotVP == 0.0 || bDotHV == 0.0)"
-        " ? 0.0 : pow(bDotHV, specularPower);\n"
+        "    float bpf = 0.0;\n"
+        "    if (bDotVP > 0.0 && bDotHV > -specularParamsBack.x) {\n"
+        "      float bdenom = specularParamsBack.y * bDotHV + specularParamsBack.z;\n"
+        "      if (bdenom == 0.0) {\n"
+        "        bpf = 10000.0;\n"
+        "      } else if (bdenom > 0.0) {\n"
+        "        bpf = clamp((bDotHV + specularParamsBack.x) / bdenom, 0.0, 10000.0);\n"
+        "      }\n"
+        "    }\n"
         "    oB0.xyz += lightBackAmbientColor(i) * attenuation;\n"
         "    oB0.xyz += lightBackDiffuseColor(i) * attenuation * bDotVP;\n"
         "    oB1.xyz += lightBackSpecularColor(i) * attenuation * bpf;\n"
         "  }\n");
+
+    /* The light's ambient goes through the ambient colour source, as in the
+     * unrolled code */
+    if (state->fixed_function.csv0c_dynamic) {
+        mstring_append(body,
+            "  uint lasrc = (csv0cCtl >> 6) & 3u;\n"
+            "  oD0.xyz += (lasrc == 1u ? diffuse.xyz : lasrc == 2u ?"
+            " specular.xyz : vec3(1.0)) * lightAmbient;\n");
+    } else {
+        switch (state->fixed_function.ambient_src) {
+        case MATERIAL_COLOR_SRC_MATERIAL:
+            mstring_append(body, "  oD0.xyz += lightAmbient;\n");
+            break;
+        case MATERIAL_COLOR_SRC_DIFFUSE:
+            mstring_append(body, "  oD0.xyz += diffuse.xyz * lightAmbient;\n");
+            break;
+        case MATERIAL_COLOR_SRC_SPECULAR:
+            mstring_append(body, "  oD0.xyz += specular.xyz * lightAmbient;\n");
+            break;
+        }
+    }
 
     if (state->fixed_function.csv0c_dynamic) {
         mstring_append(body,
@@ -320,7 +365,12 @@ GLSL_DEFINE(materialEmissionColor, GLSL_LTCTXA(NV_IGRAPH_XF_LTCTXA_CM_COL) ".rgb
          * uniform: every candidate source is computed and the mode selects. */
         mstring_append(body,
             "/* Dynamic texgen */\n"
-            "vec3 tgU = normalize(tPosition.xyz);\n"
+            "/* Same view vector as the unrolled code */\n");
+        mstring_append(body,
+            state->fixed_function.texgen_infinite_viewer ?
+                "vec3 tgU = vec3(0.0, 0.0, 1.0);\n" :
+                "vec3 tgU = normalize(tPosition.xyz);\n");
+        mstring_append(body,
             "vec3 tgR = reflect(tgU, tNormal);\n"
             "float tgInvM = 1.0 / (2.0 * length(tgR + vec3(0.0, 0.0, 1.0)));\n"
             "vec3 tgSph = tgR * tgInvM + 0.5;\n");
@@ -450,13 +500,26 @@ GLSL_DEFINE(materialEmissionColor, GLSL_LTCTXA(NV_IGRAPH_XF_LTCTXA_CM_COL) ".rgb
             "  uint dsrc = (csv0cCtl >> 8) & 3u;\n"
             "  float alphaSrc = dsrc == 0u ? material_alpha\n"
             "                 : dsrc == 2u ? specular.a : diffuse.a;\n"
+            /* The same combinations as the unrolled code below: a source
+             * that is the material takes the scene ambient; a vertex colour
+             * source is scaled by materialEmissionColor (the ambient one when
+             * both are vertex colours, else the one that is) */
             "  uint asrc = (csv0cCtl >> 6) & 3u;\n"
-            "  oD0 = vec4(asrc == 0u ? sceneAmbientColor\n"
-            "           : asrc == 2u ? specular.rgb : diffuse.rgb, alphaSrc);\n"
-            "  oD0.rgb *= materialEmissionColor.rgb;\n"
             "  uint esrc = (csv0cCtl >> 4) & 3u;\n"
-            "  oD0.rgb += esrc == 0u ? sceneAmbientColor\n"
-            "           : esrc == 2u ? specular.rgb : diffuse.rgb;\n"
+            "  vec3 emV = esrc == 1u ? diffuse.rgb : specular.rgb;\n"
+            "  vec3 amV = asrc == 1u ? diffuse.rgb : specular.rgb;\n"
+            "  vec3 baseCol;\n"
+            "  if (esrc == 0u || asrc == 0u) {\n"
+            "    baseCol = sceneAmbientColor;\n"
+            "    if (esrc != 0u) {\n"
+            "      baseCol += emV * materialEmissionColor.rgb;\n"
+            "    } else if (asrc != 0u) {\n"
+            "      baseCol += amV * materialEmissionColor.rgb;\n"
+            "    }\n"
+            "  } else {\n"
+            "    baseCol = emV + amV * materialEmissionColor.rgb;\n"
+            "  }\n"
+            "  oD0 = vec4(baseCol, alphaSrc);\n"
             "  oD1 = vec4(0.0, 0.0, 0.0, specular.a);\n"
             "  if ((csv0cCtl & 32768u) != 0u) {\n"
             "    oB0 = vec4(sceneBackAmbientColor, oD0.a);\n"

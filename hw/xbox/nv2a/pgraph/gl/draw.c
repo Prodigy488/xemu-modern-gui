@@ -619,10 +619,17 @@ void pgraph_gl_flush_draw(NV2AState *d)
         assert(pg->inline_buffer_length == 0);
         assert(pg->inline_array_length == 0);
 
+        /* The vertex whose attributes stay behind is the last one drawn, which
+         * is not the highest index when the ranges come out of order */
+        unsigned int last_drawn =
+            pg->draw_arrays_count[pg->draw_arrays_length - 1] > 0
+                ? pg->draw_arrays_start[pg->draw_arrays_length - 1] +
+                      pg->draw_arrays_count[pg->draw_arrays_length - 1] - 1
+                : pg->draw_arrays_start[pg->draw_arrays_length - 1];
         pgraph_gl_bind_vertex_attributes(d, pg->draw_arrays_min_start,
                                       pg->draw_arrays_max_count - 1,
                                       false, 0,
-                                      pg->draw_arrays_max_count - 1, false);
+                                      last_drawn, false);
         glMultiDrawArrays(r->shader_binding->gl_primitive_mode,
                           pg->draw_arrays_start,
                           pg->draw_arrays_count,

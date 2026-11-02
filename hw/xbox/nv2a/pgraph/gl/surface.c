@@ -33,6 +33,16 @@ static bool check_surface_compatibility(SurfaceBinding *s1, SurfaceBinding *s2,
 static void surface_download_to_buffer(NV2AState *d, SurfaceBinding *surface,
                                        bool swizzle, bool flip, bool downscale,
                                        uint8_t *pixels);
+
+/* How many pixels of a row can be read back: a surface whose clip is wider
+ * than its pitch (seen on a zeta surface in Enter the Matrix) has to stop at
+ * the pitch, or a scaled read writes past the end of its buffer and the
+ * size checks below stop the emulator. */
+static inline unsigned int surface_dl_width(const SurfaceBinding *surface)
+{
+    unsigned int fit = surface->pitch / surface->fmt.bytes_per_pixel;
+    return surface->width < fit ? surface->width : fit;
+}
 static void surface_get_dimensions(PGRAPHState *pg, unsigned int *width, unsigned int *height);
 static void fb_cache_drop_tex(PGRAPHGLState *r, GLuint tex);
 static void fb_multi_drop_tex(PGRAPHGLState *r, GLuint tex);
@@ -1765,14 +1775,13 @@ static void surface_download_to_buffer(NV2AState *d, SurfaceBinding *surface,
     glo_readpixels(
         surface->fmt.gl_format, surface->fmt.gl_type, surface->fmt.bytes_per_pixel,
         rd_scale * surface->pitch,
-        rd_scale * surface->width,
+        rd_scale * surface_dl_width(surface),
         rd_scale * surface->height, flip, gl_read_buf);
 
     if (downscale && !gpu_shrink) {
-        assert(surface->pitch >= (surface->width * surface->fmt.bytes_per_pixel));
         uint8_t *out = swizzle_buf, *in = pg->scale_buf;
         for (unsigned int y = 0; y < surface->height; y++) {
-            surface_copy_shrink_row(out, in, surface->width,
+            surface_copy_shrink_row(out, in, surface_dl_width(surface),
                                     surface->fmt.bytes_per_pixel,
                                     pg->surface_scale_factor);
             in += surface->pitch * pg->surface_scale_factor *
@@ -1828,7 +1837,7 @@ static void surface_download_issue(NV2AState *d, SurfaceBinding *surface)
     unsigned int rs = surface->dl_native ? 1 : sf;
     glo_readpixels(surface->fmt.gl_format, surface->fmt.gl_type,
                    surface->fmt.bytes_per_pixel, rs * surface->pitch,
-                   rs * surface->width, rs * surface->height, false, NULL);
+                   rs * surface_dl_width(surface), rs * surface->height, false, NULL);
     if (surface->dl_native) {
         glBindFramebuffer(GL_FRAMEBUFFER, r->gl_fb_util);
         r->fb_bound = r->gl_fb_util;
@@ -1874,10 +1883,9 @@ static bool surface_download_harvest(NV2AState *d, SurfaceBinding *surface)
         dst = swizzle_buf;
     }
     if (sf != 1 && !surface->dl_native) {
-        assert(surface->pitch >= (surface->width * surface->fmt.bytes_per_pixel));
         uint8_t *out = dst, *in = raw;
         for (unsigned int y = 0; y < surface->height; y++) {
-            surface_copy_shrink_row(out, in, surface->width,
+            surface_copy_shrink_row(out, in, surface_dl_width(surface),
                                     surface->fmt.bytes_per_pixel, sf);
             in += surface->pitch * sf * sf;
             out += surface->pitch;

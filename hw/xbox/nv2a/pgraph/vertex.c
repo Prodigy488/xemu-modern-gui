@@ -33,6 +33,15 @@ void pgraph_update_inline_value(VertexAttribute *attr, const uint8_t *data)
 
     switch (attr->format) {
         case NV097_SET_VERTEX_DATA_ARRAY_FORMAT_TYPE_UB_D3D:
+            /* D3D colours are stored B, G, R, A. The array paths read them
+             * that way (BGRA in GL, a swizzle in Vulkan), so the value a draw
+             * leaves behind has to be swapped the same way */
+            assert(attr->count == 4);
+            attr->inline_value[0] = (float)data[2] / 255.0f;
+            attr->inline_value[1] = (float)data[1] / 255.0f;
+            attr->inline_value[2] = (float)data[0] / 255.0f;
+            attr->inline_value[3] = (float)data[3] / 255.0f;
+            break;
         case NV097_SET_VERTEX_DATA_ARRAY_FORMAT_TYPE_UB_OGL:
             for (uint32_t i = 0; i < attr->count; ++i) {
                 attr->inline_value[i] = (float)data[i] / 255.0f;

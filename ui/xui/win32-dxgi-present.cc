@@ -31,6 +31,7 @@
 #include <epoxy/gl.h>
 #include <epoxy/wgl.h>
 #include <stdio.h>
+#include <string.h>
 #include <atomic>
 
 using Microsoft::WRL::ComPtr;
@@ -396,6 +397,47 @@ bool Win32DxgiPresenter::Init(SDL_Window *window)
         dxgi_factory->EnumAdapters1(0, &selected_adapter);
         fprintf(stderr, "win32_dxgi_present: Target monitor output not matched "
                         "to specific adapter, fallback to Adapter[0]\n");
+    }
+
+    // On a laptop with two GPUs the screen is usually wired to the integrated
+    // one while the game renders on the discrete one. The OpenGL/DirectX
+    // sharing only works on one GPU, so a Direct3D device on the screen's
+    // GPU fails with an incomplete framebuffer and the presenter gives up.
+    // Use the GPU whose maker matches OpenGL's; Windows copies the finished
+    // frame to the screen's GPU by itself.
+    if (selected_adapter) {
+        UINT want = 0;
+        const char *gl_vendor = (const char *)glGetString(GL_VENDOR);
+        if (gl_vendor) {
+            if (strstr(gl_vendor, "NVIDIA")) {
+                want = 0x10DE;
+            } else if (strstr(gl_vendor, "ATI") || strstr(gl_vendor, "AMD")) {
+                want = 0x1002;
+            } else if (strstr(gl_vendor, "Intel")) {
+                want = 0x8086;
+            }
+        }
+        DXGI_ADAPTER_DESC1 cur = {};
+        if (want && SUCCEEDED(selected_adapter->GetDesc1(&cur)) &&
+            cur.VendorId != want) {
+            ComPtr<IDXGIAdapter1> alt;
+            for (UINT i = 0;
+                 dxgi_factory->EnumAdapters1(i, &alt) != DXGI_ERROR_NOT_FOUND;
+                 i++) {
+                DXGI_ADAPTER_DESC1 d = {};
+                if (SUCCEEDED(alt->GetDesc1(&d)) && d.VendorId == want &&
+                    !(d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) {
+                    fprintf(stderr,
+                            "win32_dxgi_present: the screen is on another GPU "
+                            "than OpenGL (vendor 0x%X vs 0x%X); using the "
+                            "OpenGL GPU\n",
+                            cur.VendorId, want);
+                    selected_adapter = alt;
+                    break;
+                }
+                alt.Reset();
+            }
+        }
     }
 
     UINT create_device_flags = 0;

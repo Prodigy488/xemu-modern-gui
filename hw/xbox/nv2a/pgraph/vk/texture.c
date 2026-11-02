@@ -2161,8 +2161,17 @@ void pgraph_vk_bind_textures(NV2AState *d)
          * lookup (stage mode NONE) is never sampled. Games leave such
          * textures bound, and when one is a render target it triggers a
          * full surface copy on every draw. Bind the dummy instead. */
+        static int bind_all = -1; /* XEMU_VK_BINDALL=1: test switch */
+        if (bind_all < 0) {
+            const char *e = getenv("XEMU_VK_BINDALL");
+            bind_all = e && e[0] == '1';
+            if (bind_all) {
+                fprintf(stderr, "nv2a: vk binds every enabled texture (XEMU_VK_BINDALL)\n");
+            }
+        }
         if (!pgraph_is_texture_enabled(pg, i) ||
-            ((pgraph_reg_r(pg, NV_PGRAPH_SHADERPROG) >> (i * 5)) & 0x1F) == 0) {
+            (!bind_all &&
+             ((pgraph_reg_r(pg, NV_PGRAPH_SHADERPROG) >> (i * 5)) & 0x1F) == 0)) {
             r->texture_bindings[i] = &r->dummy_texture;
             r->texture_unit_sampler[i] = r->dummy_texture.sampler;
             /* Cleared so a unit left off does not rerun this loop. */

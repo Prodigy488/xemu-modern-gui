@@ -20,6 +20,21 @@
 #include "hw/xbox/nv2a/nv2a_int.h"
 #include "writeback.h"
 
+/* XEMU_WB=eager: write every surface back before it goes (the old behaviour),
+ * for finding out whether the lazy writeback is behind a rendering problem. */
+static bool writeback_eager_forced(void)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("XEMU_WB");
+        v = (e && !strcmp(e, "eager")) ? 1 : 0;
+        if (v) {
+            fprintf(stderr, "nv2a: lazy surface writeback off (XEMU_WB=eager)\n");
+        }
+    }
+    return v;
+}
+
 static bool wb_range_overlaps(const PGRAPHWritebackRange *r, hwaddr addr,
                               size_t size)
 {
@@ -39,7 +54,7 @@ static bool writeback_range_is_live(PGRAPHState *pg, hwaddr addr, size_t size)
 bool pgraph_writeback_dead(NV2AState *d, hwaddr addr, size_t size,
                            unsigned int cpu_reads)
 {
-    if (cpu_reads != 0) {
+    if (cpu_reads != 0 || writeback_eager_forced()) {
         return false;
     }
     if (writeback_range_is_live(&d->pgraph, addr, size)) {
@@ -79,6 +94,9 @@ void pgraph_writeback_record_discard(PGRAPHState *pg, hwaddr addr,
 
 bool pgraph_writeback_discarded(PGRAPHState *pg, hwaddr addr, size_t size)
 {
+    if (writeback_eager_forced()) {
+        return false;
+    }
     for (unsigned int i = 0; i < PGRAPH_WB_DISCARD_SPANS; i++) {
         const PGRAPHWritebackRange *s = &pg->writeback.discarded[i];
         if (s->size && addr >= s->addr && addr + size <= s->addr + s->size) {

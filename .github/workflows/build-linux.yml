@@ -11,14 +11,11 @@ on:
 jobs:
   build:
     name: Build for Ubuntu (${{matrix.arch}}, ${{ matrix.configuration }})
-    permissions:
-      contents: write
     runs-on: ubuntu-22.04${{ matrix.arch == 'aarch64' && '-arm' || '' }}
     strategy:
-      fail-fast: false
       matrix:
-        arch: [x86_64]
-        configuration: [release]
+        arch: [x86_64, aarch64]
+        configuration: [debug, release]
     env:
       ARTIFACT_NAME: xemu-ubuntu-${{ matrix.arch }}-${{ matrix.configuration }}
       CCACHE_DIR: /tmp/xemu-ccache
@@ -128,11 +125,6 @@ jobs:
 
         # Install the downloaded LLVM debs. apt will resolve any non-LLVM deps from Ubuntu repos.
         sudo apt-get install -y --no-install-recommends ./*.deb
-    - name: Install newer Vulkan headers
-      run: |
-        # Ubuntu 22.04's headers predate the extensions the Vulkan renderer uses
-        git clone --depth 1 --branch v1.3.275 https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/vkh
-        sudo cp -r /tmp/vkh/include/vulkan /tmp/vkh/include/vk_video /usr/local/include/
     - name: Setup ccache
       run: |
         echo "PATH=/usr/lib/ccache:$PATH" >> "$GITHUB_ENV"
@@ -181,22 +173,3 @@ jobs:
         name: ${{ env.ARTIFACT_NAME }}
         path: dist
         compression-level: 0
-    - name: Publish the AppImage to the builds-linux branch
-      if: ${{ matrix.arch == 'x86_64' && matrix.configuration == 'release' }}
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        SHA: ${{ github.sha }}
-      run: |
-        short=${SHA:0:7}
-        name=xemu-linux-x86_64-release-${short}.AppImage
-        work=$(mktemp -d)
-        cp dist/xemu-*.AppImage "${work}/${name}"
-        ls -l "${work}"
-        cd "${work}"
-        git init -q
-        git checkout -q --orphan builds-linux
-        git config user.name "build"
-        git config user.email "build@users.noreply.github.com"
-        git add .
-        git commit -qm "Linux build ${short}"
-        git push -q --force "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" HEAD:refs/heads/builds-linux

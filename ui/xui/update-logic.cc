@@ -67,8 +67,10 @@ bool UpdateParseRelease(const std::string &text, const char *arch,
     }
     out->url = j.value("html_url", std::string());
     // xemu-<xemu version>-custom-windows-<arch>.zip (GitHub may add ".1" to
-    // a re-uploaded name)
+    // a re-uploaded name), or xemu-windows-<arch>-<build>.zip from v2.5 on.
+    // Builds before v2.5 only know the first form, so keep publishing that name.
     std::string want = std::string("-custom-windows-") + arch;
+    std::string want2 = std::string("xemu-windows-") + arch;
     if (j.contains("assets") && j["assets"].is_array()) {
         for (auto &a : j["assets"]) {
             if (!a.is_object() || !a.contains("name") || !a["name"].is_string() ||
@@ -77,8 +79,11 @@ bool UpdateParseRelease(const std::string &text, const char *arch,
                 continue;
             }
             std::string name = a["name"].get<std::string>();
-            if (name.rfind("xemu-", 0) == 0 && name.find(want) != std::string::npos &&
-                name.size() > 4 && name.compare(name.size() - 4, 4, ".zip") == 0) {
+            bool match = name.rfind("xemu-", 0) == 0 &&
+                         (name.find(want) != std::string::npos ||
+                          name.rfind(want2, 0) == 0);
+            if (match && name.size() > 4 &&
+                name.compare(name.size() - 4, 4, ".zip") == 0) {
                 out->package_url = a["browser_download_url"].get<std::string>();
                 break;
             }

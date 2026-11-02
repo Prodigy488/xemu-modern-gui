@@ -4168,8 +4168,9 @@ void pgraph_vk_flush_draw(NV2AState *d)
 
         /* The vertex whose attributes stay behind is the last one drawn, which
          * is not the highest index when the ranges come out of order */
-        unsigned int last_drawn =
-            pg->draw_arrays_count[pg->draw_arrays_length - 1] > 0
+        unsigned int last_drawn = !pgraph_carry_fixes()
+            ? pg->draw_arrays_max_count - 1
+            : pg->draw_arrays_count[pg->draw_arrays_length - 1] > 0
                 ? pg->draw_arrays_start[pg->draw_arrays_length - 1] +
                       pg->draw_arrays_count[pg->draw_arrays_length - 1] - 1
                 : pg->draw_arrays_start[pg->draw_arrays_length - 1];

@@ -23,6 +23,23 @@
 #include "nv2a_vsh_emulator.h"
 #include "nv2a_vsh_disassembler.h"
 
+/* XEMU_CARRY=old: go back to how the attributes a draw leaves behind were
+ * worked out before v2.5.1 (no colour swap for D3D bytes, highest index rather
+ * than the last vertex drawn), to find out whether those changes are behind a
+ * colour problem in a game. */
+bool pgraph_carry_fixes(void)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("XEMU_CARRY");
+        v = (e && !strcmp(e, "old")) ? 0 : 1;
+        if (!v) {
+            fprintf(stderr, "nv2a: attribute carry-over fixes off (XEMU_CARRY=old)\n");
+        }
+    }
+    return v;
+}
+
 void pgraph_update_inline_value(VertexAttribute *attr, const uint8_t *data)
 {
     assert(attr->count <= 4);
@@ -33,6 +50,12 @@ void pgraph_update_inline_value(VertexAttribute *attr, const uint8_t *data)
 
     switch (attr->format) {
         case NV097_SET_VERTEX_DATA_ARRAY_FORMAT_TYPE_UB_D3D:
+            if (!pgraph_carry_fixes()) {
+                for (uint32_t i = 0; i < attr->count; ++i) {
+                    attr->inline_value[i] = (float)data[i] / 255.0f;
+                }
+                break;
+            }
             /* D3D colours are stored B, G, R, A. The array paths read them
              * that way (BGRA in GL, a swizzle in Vulkan), so the value a draw
              * leaves behind has to be swapped the same way */

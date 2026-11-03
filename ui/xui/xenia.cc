@@ -383,6 +383,57 @@ HWND g_embed_parent = NULL;
 LONG_PTR g_parent_style = 0;
 int g_embed_tries = 0;
 RECT g_embed_rect = { 0, 0, 0, 0 };
+int g_embed_top = 0;
+ULONGLONG g_stop_deadline = 0;   // after a polite close request, end it here
+ULONGLONG g_pad_hold = 0;        // when Back + Start were pressed together
+
+typedef struct {
+    DWORD packet;
+    WORD buttons;
+    BYTE lt, rt;
+    SHORT lx, ly, rx, ry;
+} PadState;
+typedef DWORD(WINAPI *PadGetState)(DWORD, PadState *);
+
+// Back + Start on any Xbox controller, read straight from Windows so it works
+// while the game window has the focus
+bool PadComboHeld()
+{
+    static PadGetState get = nullptr;
+    static bool tried = false;
+    if (!tried) {
+        tried = true;
+        HMODULE m = LoadLibraryA("xinput1_4.dll");
+        if (!m) {
+            m = LoadLibraryA("xinput9_1_0.dll");
+        }
+        if (m) {
+            get = (PadGetState)GetProcAddress(m, "XInputGetState");
+        }
+    }
+    if (!get) {
+        return false;
+    }
+    for (DWORD i = 0; i < 4; i++) {
+        PadState st;
+        memset(&st, 0, sizeof(st));
+        if (get(i, &st) == 0 && (st.buttons & 0x30) == 0x30) { // Back and Start
+            return true;
+        }
+    }
+    return false;
+}
+
+bool OurProcessHasFocus()
+{
+    HWND fg = GetForegroundWindow();
+    if (!fg) {
+        return false;
+    }
+    DWORD pid = 0;
+    GetWindowThreadProcessId(fg, &pid);
+    return pid == GetCurrentProcessId() || pid == g_pid_win;
+}
 
 struct FindCtx {
     DWORD pid;
@@ -605,6 +656,15 @@ bool XeniaLaunch(const std::string &game_path, std::string *err,
     return true;
 }
 
+bool XeniaEmbedActive()
+{
+#ifdef _WIN32
+    return g_running && g_embed_wnd && IsWindow(g_embed_wnd);
+#else
+    return false;
+#endif
+}
+
 bool XeniaEmbedSupported()
 {
 #ifdef _WIN32
@@ -614,7 +674,7 @@ bool XeniaEmbedSupported()
 #endif
 }
 
-void XeniaEmbedTick(void *parent_hwnd)
+void XeniaEmbedTick(void *parent_hwnd, float top_units, float display_w)
 {
 #ifdef _WIN32
     HWND parent = (HWND)parent_hwnd;
@@ -626,6 +686,10 @@ void XeniaEmbedTick(void *parent_hwnd)
     int w = pc.right - pc.left, h = pc.bottom - pc.top;
     if (w < 16 || h < 16) {
         return; // minimised
+    }
+    int top = display_w > 1 ? (int)(top_units * (float)w / display_w + 0.5f) : 0;
+    if (top < 0 || top > h / 3) {
+        top = 0;
     }
     if (g_embed_wnd && !IsWindow(g_embed_wnd)) {
         g_embed_wnd = NULL;
@@ -662,13 +726,34 @@ void XeniaEmbedTick(void *parent_hwnd)
         g_embed_parent = parent;
         g_embed_rect = { 0, 0, 0, 0 };
     }
-    if (pc.right != g_embed_rect.right || pc.bottom != g_embed_rect.bottom) {
-        SetWindowPos(g_embed_wnd, HWND_TOP, 0, 0, w, h,
+    if (pc.right != g_embed_rect.right || pc.bottom != g_embed_rect.bottom ||
+        top != g_embed_top) {
+        SetWindowPos(g_embed_wnd, HWND_TOP, 0, top, w, h - top,
                      SWP_FRAMECHANGED | SWP_SHOWWINDOW);
         if (g_embed_rect.right == 0) {
             SetFocus(g_embed_wnd);
         }
         g_embed_rect = pc;
+        g_embed_top = top;
+    }
+    // Ways out that work while Xenia has the keyboard and the controller:
+    // Ctrl+Shift+Q, or Back and Start together for a second
+    if (OurProcessHasFocus()) {
+        bool keys = (GetAsyncKeyState(VK_CONTROL) & 0x8000) &&
+                    (GetAsyncKeyState(VK_SHIFT) & 0x8000) &&
+                    (GetAsyncKeyState('Q') & 0x8000);
+        bool pad = PadComboHeld();
+        if (pad) {
+            if (!g_pad_hold) {
+                g_pad_hold = GetTickCount64();
+            }
+        } else {
+            g_pad_hold = 0;
+        }
+        if (keys || (g_pad_hold && GetTickCount64() - g_pad_hold > 1000)) {
+            g_pad_hold = 0;
+            XeniaStop();
+        }
     }
 #else
     (void)parent_hwnd;
@@ -683,7 +768,12 @@ bool XeniaPoll(std::string *path, double *seconds)
     bool done = false;
 #ifdef _WIN32
     done = WaitForSingleObject(g_proc, 0) != WAIT_TIMEOUT;
+    if (!done && g_stop_deadline && GetTickCount64() > g_stop_deadline) {
+        TerminateProcess(g_proc, 0);
+        g_stop_deadline = 0;
+    }
     if (done) {
+        g_stop_deadline = 0;
         CloseHandle(g_proc);
         g_proc = NULL;
         EmbedRelease();
@@ -717,7 +807,19 @@ void XeniaStop()
         return;
     }
 #ifdef _WIN32
-    TerminateProcess(g_proc, 0);
+    // Ask Xenia to close like its own close button would; end it if it hangs
+    HWND w = g_embed_wnd;
+    if (!w) {
+        FindCtx c = { g_pid_win, NULL };
+        EnumWindows(FindXeniaWindow, (LPARAM)&c);
+        w = c.found;
+    }
+    if (w) {
+        PostMessageW(w, WM_CLOSE, 0, 0);
+        g_stop_deadline = GetTickCount64() + 5000;
+    } else {
+        TerminateProcess(g_proc, 0);
+    }
 #else
     kill(g_pid, SIGTERM);
 #endif

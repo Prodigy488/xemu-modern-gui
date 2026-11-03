@@ -11627,6 +11627,55 @@ void LaunchXenia(const std::string &path)
     xemu_queue_notification(msg.c_str());
 }
 
+// While Xenia is inside our window: a strip across the top with a way out
+void DrawXeniaBar()
+{
+    if (!XeniaEmbedActive()) {
+        return;
+    }
+    const float s = g_viewport_mgr.m_scale;
+    ImGuiIO &io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, 34 * s));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10 * s, 3 * s));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.06f, 0.05f, 1));
+    ImGui::Begin("##xeniabar", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                     ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoBringToFrontOnFocus);
+    static bool confirm = false;
+    static double confirm_at = 0;
+    if (confirm && ImGui::GetTime() - confirm_at > 4.0) {
+        confirm = false;
+    }
+    ImGui::AlignTextToFramePadding();
+    LibraryEntry *e = FindEntry(XeniaRunningPath());
+    std::string name = e ? e->DisplayName() : fs::u8path(XeniaRunningPath()).stem().u8string();
+    ImGui::TextColored(ImVec4(0.55f, 0.9f, 0.4f, 1), "%s", tr("XENIA"));
+    ImGui::SameLine();
+    ImGui::TextUnformatted(name.c_str());
+    float bw = 150 * s;
+    ImGui::SameLine(io.DisplaySize.x - bw - 10 * s);
+    if (ImGui::Button(confirm ? tr("Click again to exit") : tr(ICON_FA_POWER_OFF "  Exit Xenia"),
+                      ImVec2(bw, 0))) {
+        if (confirm) {
+            XeniaStop();
+            confirm = false;
+        } else {
+            confirm = true;
+            confirm_at = ImGui::GetTime();
+        }
+    }
+    ImGui::SetItemTooltip("%s", tr("Closes Xenia and brings back the dashboard. "
+                                   "Also: Ctrl+Shift+Q, or hold Back + Start on a "
+                                   "controller for a second."));
+    ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(3);
+}
+
 // Every frame: notices when Xenia was closed and gives the dashboard back
 void XeniaTick()
 {
@@ -11636,8 +11685,10 @@ void XeniaTick()
     if (g_xenia.embed && XeniaEmbedSupported()) {
         void *hwnd = SDL_GetPointerProperty(SDL_GetWindowProperties(xemu_get_window()),
                                             SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
-        XeniaEmbedTick(hwnd);
+        ImGuiIO &eio = ImGui::GetIO();
+        XeniaEmbedTick(hwnd, 34 * g_viewport_mgr.m_scale, eio.DisplaySize.x);
     }
+    DrawXeniaBar();
     std::string path;
     double seconds = 0;
     if (!XeniaPoll(&path, &seconds)) {

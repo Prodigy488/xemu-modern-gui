@@ -87,4 +87,8 @@ bool XeniaEmbedSupported();
 // Call every frame with xemu's window handle (HWND) while Xenia runs and the
 // embed option is on. Finds Xenia's window once it opens, turns it into a
 // child of xemu's window and keeps it filling it.
-void XeniaEmbedTick(void *parent_hwnd);
+// A strip of top_units (in the same units as display_w, the width of xemu's
+// window) is left free at the top for xemu's own buttons.
+void XeniaEmbedTick(void *parent_hwnd, float top_units, float display_w);
+// True while Xenia's window is inside xemu's
+bool XeniaEmbedActive();

@@ -595,7 +595,7 @@ void LoadLibrary()
             g_xenia.fullscreen = x.value("fullscreen", true);
             g_xenia.extra_args = x.value("args", "");
             g_xenia.pause_xemu = x.value("pause_xemu", true);
-            g_xenia.embed = x.value("embed", false);
+            g_xenia.embed = x.value("embed", true);
             g_xenia.res_scale = std::clamp(x.value("res_scale", 0), 0, 8);
             g_xenia.gpu = std::clamp(x.value("gpu", 0), 0, 2);
             g_xenia.vsync = std::clamp(x.value("vsync", -1), -1, 1);

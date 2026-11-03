@@ -37,8 +37,10 @@ that lets NFL Fever 2004 run), a faster game library with a "Clear library"
 button and a 1.4 GHz CPU option in v2.4, a third theme (Tron Red), two more
 dashboard styles (Holo and Aurora), holographic floating game covers, the
 sphere-and-fins dashboard as the default and a fix for colours going wrong in
-some games with GPU boost on in v2.5, and, new in v2.6, **Xbox 360 games
-through Xenia** with Xbox and Xenia settings tabs.
+some games with GPU boost on in v2.5, **Xbox 360 games through Xenia** with
+Xbox and Xenia settings tabs in v2.6, and, new in v2.6.1, **custom
+soundtracks** (add your own mp3s to the Xbox dashboard) and cover art for
+Xbox 360 games.
 
 ## Highlights
 
@@ -65,6 +67,12 @@ through Xenia** with Xbox and Xenia settings tabs.
   focus and a bug-report diagnostics button** (v2.2).
 - **CPU boost and GPU boost, per-game settings and safe mode** (v2.3), and a
   floating-point fix that lets NFL Fever 2004 run.
+- **Custom soundtracks and 360 cover art** (v2.6.1): Games > Custom
+  Soundtracks (or the Xbox tab's Audio section) turns mp3, flac, ogg, m4a, wav
+  and wma files into the WMA the Xbox dashboard plays and adds them to the
+  emulated hard drive as a new soundtrack, or to one you already have. Get
+  covers now also fetches box art for Xbox 360 games, and starting a 360 game
+  closes the Xbox game so the two never overlap.
 - **Xbox 360 games through your own Xenia** (v2.6): the library lists 360
   games next to Xbox ones, with All / Xbox / Xbox 360 filters, per-game
   settings, presets and notes, and starts them in Xenia, optionally inside the

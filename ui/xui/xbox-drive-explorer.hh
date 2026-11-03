@@ -60,6 +60,21 @@ struct XboxHomebrewApp {
 };
 bool XboxExplorerFindHomebrew(std::vector<XboxHomebrewApp> *out, std::string *err);
 
+// Read a whole file (the name's case doesn't matter). *exists is false if there
+// is no such file (and it returns true). The Xbox keeps running.
+bool XboxExplorerReadFile(char vol, const std::string &path, std::vector<uint8_t> *out,
+                          bool *exists, std::string *err);
+
+// Copy host files to <vol>:<xpath>, making any missing folders and replacing
+// files that are there. Starts right away: the Xbox pauses and restarts when
+// done. Files are written in the order given.
+struct XboxPutFile {
+    std::string host;  // UTF-8 path
+    std::string xpath; // "/TDATA/fffe0000/music/ST.DB"
+};
+bool XboxExplorerPutFiles(char vol, const std::vector<XboxPutFile> &files,
+                          const std::string &title, std::string *err);
+
 // Delete <vol>:<dir> and everything in it (the Xbox pauses and restarts)
 bool XboxExplorerDeleteFolder(char vol, const std::string &dir,
                               const std::string &title, std::string *err);

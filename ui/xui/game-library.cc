@@ -42,6 +42,7 @@
 #include "xenia.hh"
 #include "rtx-video.hh"
 #include "xbox-drive-explorer.hh"
+#include "soundtracks.hh"
 #include "perf-capture.hh"
 #include "shader-cache.hh"
 #include "dynamic-res.hh"
@@ -10977,6 +10978,10 @@ void DrawDashSettingsTab()
         label(tr("When xemu is in the background"));
         ImGui::Combo("##bgaudio", &g_config.audio.background,
                      tr_items("Keep playing\0" "Quieter\0" "Mute\0"));
+        label(tr("Music on the Xbox"));
+        if (ImGui::Button(tr(ICON_FA_VOLUME_HIGH "  Add custom soundtracks..."), ImVec2(-FLT_MIN, 0))) {
+            SoundtracksOpenWindow();
+        }
         ImGui::Dummy(ImVec2(0, 14 * s));
         DashLabel(tr("Controller"));
         DashTitle(tr("Controller ports"));

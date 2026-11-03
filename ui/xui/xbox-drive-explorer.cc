@@ -17,6 +17,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <set>
 
 #include "common.hh"
 #include "osk.hh"
@@ -1641,6 +1642,171 @@ bool XboxExplorerDeleteFolder(char vol, const std::string &dir,
     job->vol = vol;
     job->title = string_format(tr("Deleting %s"), title.c_str());
     if (!DeleteSteps(vol, dir, fi, job.get(), err)) {
+        return false;
+    }
+    StartJob(std::move(job));
+    if (!g_job) {
+        *err = g_status;
+        return false;
+    }
+    return true;
+}
+
+// The Xbox ignores case but libfatx doesn't: give each folder and file in
+// path the case it has on the disk (parts that aren't there stay as given)
+static std::string ResolveCase(char vol, const std::string &path)
+{
+    std::string out = "/";
+    size_t pos = 0;
+    bool exists = true;
+    while (pos < path.size()) {
+        while (pos < path.size() && path[pos] == '/') {
+            pos++;
+        }
+        size_t end = path.find('/', pos);
+        if (end == std::string::npos) {
+            end = path.size();
+        }
+        std::string part = path.substr(pos, end - pos);
+        pos = end;
+        if (part.empty()) {
+            continue;
+        }
+        if (exists) {
+            std::vector<XboxFileInfo> list;
+            std::string e, want = part;
+            std::transform(want.begin(), want.end(), want.begin(), ::tolower);
+            exists = false;
+            if (g_drive.List(vol, out, &list, &e)) {
+                for (auto &f : list) {
+                    std::string n = f.name;
+                    std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+                    if (n == want) {
+                        part = f.name;
+                        exists = true;
+                        break;
+                    }
+                }
+            }
+        }
+        out = XboxJoin(out, part);
+    }
+    return out;
+}
+
+bool XboxExplorerReadFile(char vol, const std::string &path, std::vector<uint8_t> *out,
+                          bool *exists, std::string *err)
+{
+    out->clear();
+    *exists = false;
+    if (g_job) {
+        *err = tr("The Xbox hard drive is busy");
+        return false;
+    }
+    if (XboxIsRunning() && g_drive.IsOpen()) {
+        Reopen(); // the running Xbox may have changed the disk
+    }
+    if (!EnsureOpen()) {
+        *err = g_open_err.empty() ? std::string(tr("Can't open the Xbox hard drive")) : g_open_err;
+        return false;
+    }
+    if (!g_drive.Volume(vol)) {
+        *err = string_format(tr("This hard disk image has no %c: drive"), vol);
+        return false;
+    }
+    std::string real = ResolveCase(vol, path);
+    XboxFileInfo fi;
+    if (!g_drive.Stat(vol, real, &fi) || fi.dir) {
+        return true; // not there (a folder is not a file either)
+    }
+    *exists = true;
+    if (fi.size > (64u << 20)) {
+        *err = tr("The file is too large to read here");
+        return false;
+    }
+    out->resize((size_t)fi.size);
+    size_t got = 0;
+    while (got < out->size()) {
+        int64_t n = g_drive.ReadAt(vol, real, got, out->data() + got, out->size() - got);
+        if (n <= 0) {
+            *err = string_format(tr("Couldn't read %s"), real.c_str());
+            return false;
+        }
+        got += (size_t)n;
+    }
+    return true;
+}
+
+bool XboxExplorerPutFiles(char vol, const std::vector<XboxPutFile> &files,
+                          const std::string &title, std::string *err)
+{
+    if (g_job) {
+        *err = tr("Another copy to the Xbox is still running");
+        return false;
+    }
+    if (files.empty()) {
+        *err = tr("There's nothing to copy");
+        return false;
+    }
+    if (!EnsureOpen()) {
+        *err = g_open_err.empty() ? std::string(tr("Can't open the Xbox hard drive")) : g_open_err;
+        return false;
+    }
+    if (!g_drive.Volume(vol)) {
+        *err = string_format(tr("This hard disk image has no %c: drive"), vol);
+        return false;
+    }
+    if (!XboxDiskEmulatedWritable()) {
+        *err = tr("The hard disk image is read-only");
+        return false;
+    }
+    auto job = std::make_unique<Job>();
+    job->writes = true;
+    job->vol = vol;
+    job->title = title;
+    std::set<std::string> made;
+    for (const XboxPutFile &pf : files) {
+        std::string real = ResolveCase(vol, pf.xpath);
+        // Folders on the way, outermost first
+        std::string dir = XboxParent(real);
+        std::vector<std::string> chain;
+        while (dir != "/" && !dir.empty()) {
+            chain.push_back(dir);
+            dir = XboxParent(dir);
+        }
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+            XboxFileInfo fi;
+            if (made.count(*it)) {
+                continue;
+            }
+            if (g_drive.Stat(vol, *it, &fi)) {
+                if (!fi.dir) {
+                    *err = string_format(tr("%s on %c: is a file"), it->c_str(), vol);
+                    return false;
+                }
+                continue;
+            }
+            made.insert(*it);
+            job->steps.push_back({ Step::XMkDir, "", *it, 0 });
+        }
+        std::error_code ec;
+        uint64_t size = fs::file_size(fs::u8path(pf.host), ec);
+        if (ec) {
+            *err = string_format(tr("Can't read \"%s\""), pf.host.c_str());
+            return false;
+        }
+        job->steps.push_back({ Step::XFile, pf.host, real, size });
+        job->total += size;
+        job->files++;
+    }
+    const XboxVolume *v = g_drive.Volume(vol);
+    if (v && !v->free_known) {
+        g_drive.UpdateFreeSpace(vol);
+        v = g_drive.Volume(vol);
+    }
+    if (v && v->free_known && job->total > v->free) {
+        *err = string_format(tr("Not enough space on %c: (%s needed, %s free)"), vol,
+                             FormatSize(job->total).c_str(), FormatSize(v->free).c_str());
         return false;
     }
     StartJob(std::move(job));

@@ -63,6 +63,7 @@
 #include "compat.hh"
 #include "game-shortcut.hh"
 #include "xbox-drive-explorer.hh"
+#include "soundtracks.hh"
 #include "perf-capture.hh"
 #include "dynamic-res.hh"
 #include "game-library.hh"
@@ -243,6 +244,7 @@ void xemu_hud_update(void)
     game_library_window.Update();
     UiProfMark("library update");
     XboxExplorerUpdate();
+    SoundtracksUpdate();
     UiProfMark("explorer");
     PerfCaptureUpdate();
     UiProfMark("perf capture");
@@ -386,6 +388,7 @@ void xemu_hud_update(void)
     game_library_window.Draw();
     UiProfMark("library draw");
     XboxExplorerWindowDraw();
+    SoundtracksWindowDraw();
     PerfCaptureDraw();
 #if defined(_WIN32)
     update_window.Draw();

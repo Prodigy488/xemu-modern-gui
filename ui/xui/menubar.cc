@@ -28,6 +28,7 @@
 #include "actions.hh"
 #include "compat.hh"
 #include "xbox-drive-explorer.hh"
+#include "soundtracks.hh"
 #include "game-library.hh"
 #include "github-issue.hh"
 #include "diagnostics.hh"
@@ -136,6 +137,9 @@ void ShowMainMenu()
             }
             if (ImGui::MenuItem(tr("Xbox Hard Drive..."))) {
                 XboxExplorerOpenWindow();
+            }
+            if (ImGui::MenuItem(tr("Custom Soundtracks..."))) {
+                SoundtracksOpenWindow();
             }
             if (ImGui::MenuItem(tr("Download Patches"))) {
                 game_library_window.DownloadPatches();

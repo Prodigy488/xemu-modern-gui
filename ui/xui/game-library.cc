@@ -10883,36 +10883,49 @@ void DrawLibraryTab(int &tex_budget)
     ImGui::Combo("##sort", &g_config.general.library.sort,
                  tr_items("Sort: Title\0Sort: Last played\0Sort: Play time\0"
                  "Sort: Compatibility\0"));
+    // Carry on from the next line when the next control would run off the
+    // edge (the sphere and fins dashboard has a narrow panel)
+    auto place = [&](float w, float spacing) {
+        float right = ImGui::GetWindowPos().x + ImGui::GetContentRegionMax().x;
+        if (ImGui::GetItemRectMax().x + spacing + w <= right) {
+            ImGui::SameLine(0, spacing);
+        }
+    };
+    auto btn_w = [&](const char *label) {
+        return ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2;
+    };
+    const float gap_def = ImGui::GetStyle().ItemSpacing.x;
     if (grid) {
-        ImGui::SameLine();
+        place(110 * s, gap_def);
         ImGui::SetNextItemWidth(110 * s);
         ImGui::SliderFloat("##size", &g_config.general.library.tile_size, 0.0f,
                            1.0f, "");
         ImGui::SetItemTooltip(tr("Tile size"));
     }
-    ImGui::SameLine();
+    const std::string covers_label =
+        g_covers_running ? string_format(tr("Covers %d/%d"), (int)g_covers_done,
+                                         (int)g_covers_total)
+                         : std::string(tr("Get covers"));
+    place(btn_w(covers_label.c_str()), gap_def);
     ImGui::BeginDisabled(g_covers_running);
-    if (ImGui::Button(g_covers_running
-                          ? string_format(tr("Covers %d/%d"), (int)g_covers_done,
-                                          (int)g_covers_total).c_str()
-                          : tr("Get covers"))) {
+    if (ImGui::Button(covers_label.c_str())) {
         StartCoverDownload();
     }
     ImGui::EndDisabled();
     ImGui::SetItemTooltip(tr("Download box art for games without a cover, from "
                           "xemu's game database (xemu-project/xdb on GitHub). "
                           "Your own covers always take priority."));
-    ImGui::SameLine(0, 2 * s);
+    place(btn_w(tr("+ Add game")), 2 * s);
     if (ImGui::Button(tr("+ Add game"))) {
         AddGameFile();
     }
     ImGui::SetItemTooltip(tr("Add a single disc image to the library"));
-    ImGui::SameLine(0, 2 * s);
+    place(btn_w(tr(ICON_FA_FOLDER_OPEN "  Folders")), 2 * s);
     if (ImGui::Button(tr(ICON_FA_FOLDER_OPEN "  Folders"))) {
         g_open_folders_popup = true;
     }
     ImGui::SetItemTooltip(tr("Game folders: %d"), (int)folders.size());
-    ImGui::SameLine(0, 2 * s);
+    place(btn_w(tr(ICON_FA_ARROWS_ROTATE "  Scan folders")), 2 * s);
     ImGui::BeginDisabled(g_scan_running);
     if (ImGui::Button(tr(ICON_FA_ARROWS_ROTATE "  Scan folders"))) {
         game_library_window.Rescan();
@@ -10920,7 +10933,8 @@ void DrawLibraryTab(int &tex_budget)
     ImGui::EndDisabled();
     ImGui::SetItemTooltip(tr("Look for new or removed games and covers"));
     if (!ClassicStyle()) { // Classic shows the count in its title row
-        ImGui::SameLine();
+        place(ImGui::CalcTextSize(string_format(tr("%d games"), (int)g_entries.size()).c_str()).x,
+              gap_def);
         ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled(tr("%d games"), (int)g_entries.size());
     }

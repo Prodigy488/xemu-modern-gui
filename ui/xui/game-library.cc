@@ -11635,7 +11635,7 @@ void DrawXeniaBar()
     }
     const float s = g_viewport_mgr.m_scale;
     ImGuiIO &io = ImGui::GetIO();
-    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowPos(ImVec2(0, g_main_menu_height)); // below the menu bar when it shows
     ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, 34 * s));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10 * s, 3 * s));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0);
@@ -11686,9 +11686,8 @@ void XeniaTick()
         void *hwnd = SDL_GetPointerProperty(SDL_GetWindowProperties(xemu_get_window()),
                                             SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
         ImGuiIO &eio = ImGui::GetIO();
-        XeniaEmbedTick(hwnd, 34 * g_viewport_mgr.m_scale, eio.DisplaySize.x);
+        XeniaEmbedTick(hwnd, g_main_menu_height + 34 * g_viewport_mgr.m_scale, eio.DisplaySize.x);
     }
-    DrawXeniaBar();
     std::string path;
     double seconds = 0;
     if (!XeniaPoll(&path, &seconds)) {
@@ -13736,6 +13735,7 @@ void DrawCollapsedTab()
 
 void GameLibraryWindow::Draw()
 {
+    DrawXeniaBar(); // inside the frame, unlike the per-frame tick
     if (!is_open) {
         if (g_preview->IsOpen() && !PreviewStopping()) {
             RequestPreviewStop();

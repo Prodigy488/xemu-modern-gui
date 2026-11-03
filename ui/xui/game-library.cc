@@ -124,6 +124,7 @@ struct GameStats {
     bool favorite = false;
     double play_seconds = 0;
     int64_t last_played = 0; // unix time
+    std::string notes;       // the user's own notes about the game
 };
 
 struct GameOverrides {
@@ -152,6 +153,7 @@ const std::string &LibraryEntry::DisplayName() const
     return title.empty() ? file_stem : title;
 }
 std::map<uint32_t, GameOverrides> g_overrides;   // by title ID
+std::map<uint32_t, XeniaGameSettings> g_x360_settings; // Xbox 360 games, by title ID
 
 // Game patches: files in <base>/patches/<TITLEID>/, applied in list order
 struct PatchItem {
@@ -378,6 +380,9 @@ int g_settings_shader_count = 0;  // its cached shader files, when opened
 bool g_settings_shader_confirm = false;
 std::string g_settings_shader_msg;
 GameOverrides g_settings_edit;
+XeniaGameSettings g_x360_edit; // the Xbox 360 game being edited
+bool g_notes_init = false;
+int g_settings_serial = 0; // bumped each time the settings open
 bool g_open_settings_popup = false;
 bool g_rename_init = true; // reload the name box from the game
 bool g_focus_requested = false;
@@ -590,6 +595,22 @@ void LoadLibrary()
             g_xenia.fullscreen = x.value("fullscreen", true);
             g_xenia.extra_args = x.value("args", "");
             g_xenia.pause_xemu = x.value("pause_xemu", true);
+            g_xenia.res_scale = std::clamp(x.value("res_scale", 0), 0, 8);
+            g_xenia.gpu = std::clamp(x.value("gpu", 0), 0, 2);
+            g_xenia.vsync = std::clamp(x.value("vsync", -1), -1, 1);
+        }
+        g_x360_settings.clear();
+        if (j.contains("x360_settings") && j["x360_settings"].is_object()) {
+            for (auto &[id, o] : j["x360_settings"].items()) {
+                XeniaGameSettings gs;
+                gs.enabled = o.value("enabled", false);
+                gs.res_scale = std::clamp(o.value("res_scale", 0), 0, 8);
+                gs.gpu = std::clamp(o.value("gpu", 0), 0, 2);
+                gs.vsync = std::clamp(o.value("vsync", -1), -1, 1);
+                gs.fullscreen = std::clamp(o.value("fullscreen", -1), -1, 1);
+                gs.extra_args = o.value("args", "");
+                g_x360_settings[(uint32_t)strtoul(id.c_str(), NULL, 16)] = gs;
+            }
         }
         g_drive_changes.clear();
         for (auto &c : j.value("drive_changes", json::array())) {
@@ -682,6 +703,7 @@ void LoadLibrary()
             st.custom_name = s.value("name", "");
             st.play_seconds = s.value("play_seconds", 0.0);
             st.last_played = s.value("last_played", (int64_t)0);
+            st.notes = s.value("notes", "");
             g_stats[path] = st;
         }
         for (auto &[id, o] : overrides.items()) {
@@ -757,17 +779,34 @@ void SaveLibrary(bool async = false)
                    { "exe", g_xenia.exe },
                    { "fullscreen", g_xenia.fullscreen },
                    { "args", g_xenia.extra_args },
-                   { "pause_xemu", g_xenia.pause_xemu } };
+                   { "pause_xemu", g_xenia.pause_xemu },
+                   { "res_scale", g_xenia.res_scale },
+                   { "gpu", g_xenia.gpu },
+                   { "vsync", g_xenia.vsync } };
+    json x360s = json::object();
+    for (auto &[id, gs] : g_x360_settings) {
+        if (!gs.enabled && gs.extra_args.empty()) {
+            continue;
+        }
+        x360s[TitleIdHex(id)] = { { "enabled", gs.enabled },
+                                  { "res_scale", gs.res_scale },
+                                  { "gpu", gs.gpu },
+                                  { "vsync", gs.vsync },
+                                  { "fullscreen", gs.fullscreen },
+                                  { "args", gs.extra_args } };
+    }
+    j["x360_settings"] = x360s;
     json stats = json::object();
     for (auto &[path, s] : g_stats) {
         if (!s.favorite && s.play_seconds <= 0 && s.last_played <= 0 &&
-            s.custom_name.empty()) {
+            s.custom_name.empty() && s.notes.empty()) {
             continue;
         }
         stats[path] = { { "favorite", s.favorite },
                         { "name", s.custom_name },
                         { "play_seconds", s.play_seconds },
-                        { "last_played", s.last_played } };
+                        { "last_played", s.last_played },
+                        { "notes", s.notes } };
     }
     j["stats"] = stats;
     json ovs = json::object();
@@ -2340,6 +2379,10 @@ void OpenSettingsFor(LibraryEntry &e)
     g_settings_path = e.path;
     g_settings_edit = g_overrides.count(e.title_id) ? g_overrides[e.title_id]
                                                     : GameOverrides();
+    g_x360_edit = g_x360_settings.count(e.title_id) ? g_x360_settings[e.title_id]
+                                                    : XeniaGameSettings();
+    g_notes_init = true;
+    g_settings_serial++;
     g_settings_shader_count = e.valid ? ShaderCacheCountFor(e.title_id) : 0;
     g_settings_shader_confirm = false;
     g_settings_shader_msg.clear();
@@ -3055,6 +3098,10 @@ void RefreshPatchInfo()
 
 void OpenPatchesFor(LibraryEntry &e)
 {
+    if (e.x360) {
+        xemu_queue_notification(tr("Patches are for original Xbox games"));
+        return;
+    }
     g_patches_path = e.path;
     g_patch_check_msg.clear();
     g_patch_confirm_remove.clear();
@@ -4436,6 +4483,187 @@ void DrawGameInputPopup(GameOverrides &edit, const std::string &game)
     ImGui::EndPopup();
 }
 
+// ---- Quick presets for a game's settings ------------------------------------
+
+// Xbox: which preset the game's custom settings match (-1 none)
+int XboxPresetOf(const GameOverrides &o)
+{
+    if (!o.enabled) {
+        return -1;
+    }
+    if (o.surface_scale == 1 && o.filtering == 0) {
+        return 0;
+    }
+    if (o.surface_scale == 2 && o.filtering == 2 && o.fsr_sharpness < 0) {
+        return 1;
+    }
+    if (o.surface_scale == 3 && o.filtering == 4) {
+        return 2;
+    }
+    return -1;
+}
+
+void ApplyXboxPreset(GameOverrides &o, int preset)
+{
+    if (preset < 0 || preset > 2) { // back to the global settings
+        o.enabled = false;
+        o.surface_scale = 0;
+        o.filtering = -1;
+        o.fsr_sharpness = -1.0f;
+        o.renderer = -1;
+        o.dynamic_res = -1;
+        o.volume = -1.0f;
+        return;
+    }
+    static const int scale[3] = { 1, 2, 3 };
+    static const int filter[3] = { 0 /*linear*/, 2 /*FSR*/, 4 /*Lanczos*/ };
+    o.enabled = true;
+    o.surface_scale = scale[preset];
+    o.filtering = filter[preset];
+    o.fsr_sharpness = -1.0f;
+}
+
+int X360PresetOf(const XeniaGameSettings &g)
+{
+    if (!g.enabled || g.res_scale < 1 || g.res_scale > 3) {
+        return -1;
+    }
+    return g.res_scale - 1;
+}
+
+void ApplyX360Preset(XeniaGameSettings &g, int preset)
+{
+    if (preset < 0 || preset > 2) {
+        g = XeniaGameSettings();
+        return;
+    }
+    g.enabled = true;
+    g.res_scale = preset + 1;
+}
+
+// The preset buttons: Performance / Balanced / Quality / Use defaults.
+// Returns 0..2 for a preset, 3 for "use defaults", -1 when nothing was pressed.
+int DrawPresetRow(int active, const char *tips[3])
+{
+    const float s = g_viewport_mgr.m_scale;
+    static const char *labels[4] = { N_("Performance"), N_("Balanced"), N_("Quality"),
+                                     N_("Use defaults") };
+    int pressed = -1;
+    ImGui::TextDisabled(tr("Quick presets"));
+    for (int i = 0; i < 4; i++) {
+        if (i) {
+            ImGui::SameLine(0, 4 * s);
+        }
+        bool on = (i == active);
+        if (on) {
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                                  ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        }
+        ImGui::PushID(300 + i);
+        if (ImGui::Button(tr(labels[i]))) {
+            pressed = i;
+        }
+        ImGui::PopID();
+        if (on) {
+            ImGui::PopStyleColor();
+        }
+        if (i < 3) {
+            ImGui::SetItemTooltip("%s", tips[i]);
+        } else {
+            ImGui::SetItemTooltip("%s", tr("Follow the global settings again"));
+        }
+    }
+    return pressed;
+}
+
+// Notes of your own about the game, shown in its details
+void DrawGameNotes(LibraryEntry &e)
+{
+    static char buf[300];
+    GameStats &gst = g_stats[e.path];
+    if (g_notes_init) {
+        snprintf(buf, sizeof(buf), "%s", gst.notes.c_str());
+        g_notes_init = false;
+    }
+    if (ImGui::InputTextWithHint(tr("Notes"), tr("e.g. needs Vulkan, 2x breaks the menus"),
+                                 buf, sizeof(buf))) {
+        gst.notes = buf;
+        g_dirty = true;
+    }
+    OskTextBox();
+    ImGui::SetItemTooltip("%s", tr("Your own notes about this game, shown in its details"));
+}
+
+// The settings of an Xbox 360 game: options for Xenia, given each time it starts
+void DrawX360GameSettings(LibraryEntry &e)
+{
+    const float s = g_viewport_mgr.m_scale;
+    XeniaGameSettings &g = g_x360_edit;
+    ImGui::TextUnformatted(tr("Xbox 360 game: opens in Xenia"));
+    if (!XeniaConfigured()) {
+        ImGui::TextColored(ImVec4(0.95f, 0.6f, 0.3f, 1), "%s",
+                           tr("Xenia isn't set up yet (Folders > Xbox 360 games)."));
+    }
+    const char *tips[3] = {
+        tr("1x: the 360's own resolution. The lightest on your PC"),
+        tr("2x resolution: a sharper picture for most PCs"),
+        tr("3x resolution: the sharpest, needs a strong graphics card"),
+    };
+    int pick = DrawPresetRow(X360PresetOf(g), tips);
+    if (pick >= 0) {
+        ApplyX360Preset(g, pick);
+    }
+    ImGui::Checkbox(tr("Use custom settings for this game"), &g.enabled);
+    ImGui::BeginDisabled(!g.enabled);
+    int rs = g.res_scale;
+    if (ImGui::Combo(tr("Resolution scale"), &rs,
+                     tr_items("Use default\0" "1x\0" "2x\0" "3x\0" "4x\0"))) {
+        g.res_scale = rs;
+    }
+    int gp = g.gpu;
+    if (ImGui::Combo(tr("Graphics API"), &gp,
+                     tr_items("Use default\0" "Direct3D 12\0" "Vulkan\0"))) {
+        g.gpu = gp;
+    }
+    ImGui::SetItemTooltip("%s", tr("Some games only work, or run better, on one of them"));
+    int vs = g.vsync < 0 ? 0 : g.vsync ? 1 : 2;
+    if (ImGui::Combo(tr("Vsync"), &vs, tr_items("Use default\0" "On\0" "Off\0"))) {
+        g.vsync = vs == 0 ? -1 : vs == 1 ? 1 : 0;
+    }
+    int fs = g.fullscreen < 0 ? 0 : g.fullscreen ? 1 : 2;
+    if (ImGui::Combo(tr("Fullscreen"), &fs, tr_items("Use default\0" "On\0" "Off\0"))) {
+        g.fullscreen = fs == 0 ? -1 : fs == 1 ? 1 : 0;
+    }
+    static char args[300];
+    static std::string args_for;
+    if (args_for != e.path + "#" + std::to_string(g_settings_serial)) {
+        snprintf(args, sizeof(args), "%s", g.extra_args.c_str());
+        args_for = e.path + "#" + std::to_string(g_settings_serial);
+    }
+    if (ImGui::InputTextWithHint(tr("Extra options"), tr("Xenia options, e.g. --gpu_allow_invalid_fetch_constants=true"),
+                                 args, sizeof(args))) {
+        g.extra_args = args;
+    }
+    OskTextBox();
+    ImGui::EndDisabled();
+    // What will be passed to Xenia
+    std::string preview;
+    for (auto &f : XeniaBuildFlags(g_xenia, &g)) {
+        preview += (preview.empty() ? "" : " ") + f;
+    }
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 440 * s);
+    ImGui::TextDisabled(tr("Starts Xenia with: %s"),
+                        preview.empty() ? tr("(Xenia's own settings)") : preview.c_str());
+    ImGui::TextDisabled(tr("Anything on \"Use default\" follows Folders > Xbox 360 games."));
+    ImGui::PopTextWrapPos();
+    if (ImGui::Button(tr("Look up on Xenia's compatibility list"))) {
+        SDL_OpenURL(("https://github.com/xenia-canary/game-compatibility/issues?q=" +
+                     TitleIdHex(e.title_id)).c_str());
+    }
+    ImGui::SetItemTooltip("%s", tr("Opens Xenia Canary's list for this game in your browser: "
+                                   "what works, and which settings help"));
+}
+
 void DrawSettingsPopup()
 {
     if (g_open_settings_popup) {
@@ -4500,6 +4728,11 @@ void DrawSettingsPopup()
         }
         ImGui::Separator();
     }
+    DrawGameNotes(*e);
+    ImGui::Separator();
+    if (e->x360) {
+        DrawX360GameSettings(*e);
+    } else {
     if (e->valid) {
         // Display refresh is kept apart from the custom settings below so it
         // can be turned on for just the games it helps
@@ -4523,6 +4756,17 @@ void DrawSettingsPopup()
                                        "faster than real time. Applies the "
                                        "next time the game starts."));
         ImGui::Separator();
+    }
+    {
+        const char *tips[3] = {
+            tr("1x resolution with the linear filter: the lightest on your PC"),
+            tr("2x resolution with FSR sharpening: a good middle"),
+            tr("3x resolution with Lanczos: the sharpest, needs a strong graphics card"),
+        };
+        int pick = DrawPresetRow(XboxPresetOf(g_settings_edit), tips);
+        if (pick >= 0) {
+            ApplyXboxPreset(g_settings_edit, pick);
+        }
     }
     ImGui::Checkbox(tr("Use custom settings for this game"), &g_settings_edit.enabled);
     ImGui::BeginDisabled(!g_settings_edit.enabled);
@@ -4642,12 +4886,17 @@ void DrawSettingsPopup()
             g_settings_shader_confirm = false;
         }
     }
+    } // Xbox games
     ImGui::Separator();
     if (ImGui::Button(tr("Save"), ImVec2(120 * s, 0))) {
-        g_overrides[e->title_id] = g_settings_edit;
+        if (e->x360) {
+            g_x360_settings[e->title_id] = g_x360_edit;
+        } else {
+            g_overrides[e->title_id] = g_settings_edit;
+        }
         g_dirty = true;
         SaveLibrary();
-        if (IsCurrentDisc(*e)) {
+        if (!e->x360 && IsCurrentDisc(*e)) {
             ApplyOverridesFor(e->path);
         }
         ImGui::CloseCurrentPopup();
@@ -5270,6 +5519,31 @@ void DrawFoldersPopup()
         if (ImGui::Checkbox(tr("Start Xenia fullscreen"), &g_xenia.fullscreen)) {
             g_dirty = true;
         }
+        {
+            ImGui::TextDisabled(tr("Defaults for every 360 game (each game can have its own "
+                                "in its Settings)"));
+            int rs = g_xenia.res_scale;
+            ImGui::SetNextItemWidth(220 * s);
+            if (ImGui::Combo(tr("Resolution scale##x360"), &rs,
+                             tr_items("Xenia's own setting\0" "1x\0" "2x\0" "3x\0" "4x\0"))) {
+                g_xenia.res_scale = rs;
+                g_dirty = true;
+            }
+            int gp = g_xenia.gpu;
+            ImGui::SetNextItemWidth(220 * s);
+            if (ImGui::Combo(tr("Graphics API##x360"), &gp,
+                             tr_items("Xenia's own setting\0" "Direct3D 12\0" "Vulkan\0"))) {
+                g_xenia.gpu = gp;
+                g_dirty = true;
+            }
+            int vs = g_xenia.vsync < 0 ? 0 : g_xenia.vsync ? 1 : 2;
+            ImGui::SetNextItemWidth(220 * s);
+            if (ImGui::Combo(tr("Vsync##x360"), &vs,
+                             tr_items("Xenia's own setting\0" "On\0" "Off\0"))) {
+                g_xenia.vsync = vs == 0 ? -1 : vs == 1 ? 1 : 0;
+                g_dirty = true;
+            }
+        }
         if (ImGui::Checkbox(tr("Pause the Xbox game while Xenia runs"), &g_xenia.pause_xemu)) {
             g_dirty = true;
         }
@@ -5826,7 +6100,7 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
     int npatch = e.valid ? EnabledPatchCount(e.title_id) : 0;
     std::string patch_label =
         npatch ? string_format(tr("Patches (%d on)"), npatch) : std::string(tr("Patches"));
-    if (ImGui::Button(patch_label.c_str(), ImVec2(w, 0))) {
+    if (!e.x360 && ImGui::Button(patch_label.c_str(), ImVec2(w, 0))) {
         OpenPatchesFor(e);
     }
     ImGui::EndDisabled();
@@ -5848,10 +6122,21 @@ void DrawDetailsPanel(LibraryEntry &e, int &tex_budget)
             g_open_insignia_popup = true;
         }
     }
-    if (e.valid && g_overrides.count(e.title_id) && g_overrides[e.title_id].enabled) {
+    if (e.valid && !e.x360 && g_overrides.count(e.title_id) &&
+        g_overrides[e.title_id].enabled) {
         row(tr("Settings"), tr("Custom for this game"));
     }
-    if (e.valid && g_overrides.count(e.title_id) && g_overrides[e.title_id].input) {
+    if (e.x360 && g_x360_settings.count(e.title_id) &&
+        g_x360_settings[e.title_id].enabled) {
+        row(tr("Settings"), tr("Custom for this game (Xenia)"));
+    }
+    {
+        auto nt = g_stats.find(e.path);
+        if (nt != g_stats.end() && !nt->second.notes.empty()) {
+            row(tr("Notes"), nt->second.notes);
+        }
+    }
+    if (e.valid && !e.x360 && g_overrides.count(e.title_id) && g_overrides[e.title_id].input) {
         row(tr("Keyboard and mouse"), tr("Set up for this game"));
     }
     if (e.valid) {
@@ -6790,11 +7075,13 @@ void DrawHomeHero(LibraryEntry &e, ImVec2 size, int &tex_budget, bool is_recent)
         OpenSettingsFor(e);
     }
     ImGui::SetItemTooltip(tr("Settings for this game"));
-    ImGui::SameLine(0, 12 * s);
-    if (DashButton(ICON_FA_WRENCH, T().glass, T().white, ImVec2(btn_h, btn_h))) {
-        OpenPatchesFor(e);
+    if (!e.x360) {
+        ImGui::SameLine(0, 12 * s);
+        if (DashButton(ICON_FA_WRENCH, T().glass, T().white, ImVec2(btn_h, btn_h))) {
+            OpenPatchesFor(e);
+        }
+        ImGui::SetItemTooltip(tr("Patches for this game"));
     }
-    ImGui::SetItemTooltip(tr("Patches for this game"));
     ImGui::EndDisabled();
     ImGui::SetCursorScreenPos(ImVec2(a.x, b.y));
     ImGui::Dummy(ImVec2(size.x, 0));
@@ -11236,7 +11523,11 @@ void LaunchXenia(const std::string &path)
         return;
     }
     std::string err;
-    if (!XeniaLaunch(path, &err)) {
+    XeniaGameSettings *gs = nullptr;
+    if (e && g_x360_settings.count(e->title_id)) {
+        gs = &g_x360_settings[e->title_id];
+    }
+    if (!XeniaLaunch(path, &err, gs)) {
         xemu_queue_error_message(err.c_str());
         return;
     }

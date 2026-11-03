@@ -24,9 +24,28 @@ struct XeniaSettings {
     bool fullscreen = true;     // pass --fullscreen=true
     std::string extra_args;     // appended as given
     bool pause_xemu = true;     // pause a running Xbox game while Xenia runs
+    // Defaults for every game (0 / -1: leave it to Xenia's own settings)
+    int res_scale = 0;          // 1..4 -> draw_resolution_scale_x/y
+    int gpu = 0;                // 0 Xenia's choice, 1 D3D12, 2 Vulkan
+    int vsync = -1;             // -1 Xenia's choice, 0 off, 1 on
+};
+
+// Settings of one game; they replace the defaults above when `enabled`
+struct XeniaGameSettings {
+    bool enabled = false;
+    int res_scale = 0;          // 0 use the default, 1..4
+    int gpu = 0;                // 0 use the default, 1 D3D12, 2 Vulkan
+    int vsync = -1;             // -1 use the default, 0 off, 1 on
+    int fullscreen = -1;        // -1 use the default, 0 off, 1 on
+    std::string extra_args;     // after the default extra options
 };
 
 extern XeniaSettings g_xenia;
+
+// The command line options for a game: the defaults, then the game's own
+// settings over them. Does not include the game path.
+std::vector<std::string> XeniaBuildFlags(const XeniaSettings &defaults,
+                                         const XeniaGameSettings *game);
 
 struct X360TitleInfo {
     bool ok = false;
@@ -51,7 +70,8 @@ std::string X360NameFromFile(const std::string &path);
 bool X360ParseXex(const uint8_t *data, size_t len, uint32_t *title_id);
 
 // Start the game in Xenia. False with *err (plain words) on failure.
-bool XeniaLaunch(const std::string &game_path, std::string *err);
+bool XeniaLaunch(const std::string &game_path, std::string *err,
+                 const XeniaGameSettings *game = nullptr);
 bool XeniaConfigured();      // exe is set and exists
 bool XeniaIsRunning();
 // Call every frame. Returns true once when Xenia has just exited; *path is

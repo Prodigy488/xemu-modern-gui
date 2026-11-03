@@ -442,7 +442,43 @@ static std::wstring Quote(const std::wstring &a)
 }
 #endif
 
-bool XeniaLaunch(const std::string &game_path, std::string *err)
+std::vector<std::string> XeniaBuildFlags(const XeniaSettings &d,
+                                         const XeniaGameSettings *game)
+{
+    const bool own = game && game->enabled;
+    int res = own && game->res_scale > 0 ? game->res_scale : d.res_scale;
+    int gpu = own && game->gpu > 0 ? game->gpu : d.gpu;
+    int vsync = own && game->vsync >= 0 ? game->vsync : d.vsync;
+    int full = own && game->fullscreen >= 0 ? game->fullscreen : (d.fullscreen ? 1 : -1);
+    std::vector<std::string> out;
+    if (full >= 0) {
+        out.push_back(full ? "--fullscreen=true" : "--fullscreen=false");
+    }
+    if (res >= 1 && res <= 8) {
+        out.push_back("--draw_resolution_scale_x=" + std::to_string(res));
+        out.push_back("--draw_resolution_scale_y=" + std::to_string(res));
+    }
+    if (gpu == 1) {
+        out.push_back("--gpu=d3d12");
+    } else if (gpu == 2) {
+        out.push_back("--gpu=vulkan");
+    }
+    if (vsync >= 0) {
+        out.push_back(vsync ? "--vsync=true" : "--vsync=false");
+    }
+    for (auto &a : SplitArgs(d.extra_args)) {
+        out.push_back(a);
+    }
+    if (own) {
+        for (auto &a : SplitArgs(game->extra_args)) {
+            out.push_back(a);
+        }
+    }
+    return out;
+}
+
+bool XeniaLaunch(const std::string &game_path, std::string *err,
+                 const XeniaGameSettings *game)
 {
     auto fail = [&](const char *m) {
         if (err) {
@@ -460,15 +496,12 @@ bool XeniaLaunch(const std::string &game_path, std::string *err)
     if (!fs::exists(fs::u8path(game_path), ec)) {
         return fail("The game file is missing");
     }
-    std::vector<std::string> extra = SplitArgs(g_xenia.extra_args);
+    std::vector<std::string> extra = XeniaBuildFlags(g_xenia, game);
     fs::path exe = fs::u8path(g_xenia.exe);
     fs::path cwd = exe.parent_path(); // Xenia keeps its portable data here
 
 #ifdef _WIN32
     std::wstring cmd = Quote(exe.wstring());
-    if (g_xenia.fullscreen) {
-        cmd += L" --fullscreen=true";
-    }
     for (auto &a : extra) {
         cmd += L" " + Quote(Widen(a));
     }
@@ -491,9 +524,6 @@ bool XeniaLaunch(const std::string &game_path, std::string *err)
         args.push_back("wine"); // a Windows build of Xenia on Linux
     }
     args.push_back(exe.u8string());
-    if (g_xenia.fullscreen) {
-        args.push_back("--fullscreen=true");
-    }
     for (auto &a : extra) {
         args.push_back(a);
     }

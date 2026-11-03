@@ -1000,7 +1000,14 @@ void ScanWorker(std::vector<LibraryFolder> folders,
                 }
             } else if (want360) {
                 X360TitleInfo x;
-                if (X360ReadTitleInfo(e.path, x)) {
+                bool read360 = X360ReadTitleInfo(e.path, x);
+                if (X360LooksLikeCandidate(it.path.filename().u8string())) {
+                    fprintf(stderr, "library: %s: %s\n", e.path.c_str(),
+                            read360 ? ("Xbox 360 game, title ID " + TitleIdHex(x.title_id) +
+                                       " (" + x.kind + ")").c_str()
+                                    : ("not an Xbox or Xbox 360 game: " + x.error).c_str());
+                }
+                if (read360) {
                     e.valid = true;
                     e.x360 = true;
                     e.title_id = x.title_id;

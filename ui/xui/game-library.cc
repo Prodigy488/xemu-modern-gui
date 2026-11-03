@@ -11735,9 +11735,32 @@ void GameLibraryWindow::Launch(const std::string &path)
 {
     {
         LibraryEntry *x = FindEntry(path);
+        if (x && !x->x360 && g_xenia.enabled) {
+            // A 360 game can be listed as an Xbox game by a stale entry; look
+            // at the file itself before starting the wrong emulator
+            X360TitleInfo ti;
+            DiscTitleInfo di;
+            if (X360ReadTitleInfo(path, ti) && !ReadDiscTitleInfo(path, di)) {
+                fprintf(stderr, "library: %s is an Xbox 360 game that was listed as an "
+                                "Xbox game; corrected\n", path.c_str());
+                x->x360 = true;
+                x->valid = true;
+                x->title_id = ti.title_id;
+                if (!ti.title_name.empty()) {
+                    x->title = ti.title_name;
+                }
+                g_dirty = true;
+            }
+        }
         fprintf(stderr, "library: launching %s (%s%s)\n", path.c_str(),
                 !x ? "not in the library" : x->x360 ? "Xbox 360 game" : "Xbox game",
                 x && !x->valid ? ", not recognised" : "");
+        if (x) {
+            fprintf(stderr, "library:   title ID %08X \"%s\", %llu bytes, Xenia %s\n",
+                    x->title_id, x->title.c_str(), (unsigned long long)x->file_size,
+                    g_xenia.enabled ? (XeniaConfigured() ? "set up" : "path not found")
+                                    : "turned off");
+        }
         if (x && x->x360) {
             LaunchXenia(path);
             return;

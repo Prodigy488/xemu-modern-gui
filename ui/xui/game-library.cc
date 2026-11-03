@@ -11728,6 +11728,9 @@ void GameLibraryWindow::Launch(const std::string &path)
 {
     {
         LibraryEntry *x = FindEntry(path);
+        fprintf(stderr, "library: launching %s (%s%s)\n", path.c_str(),
+                !x ? "not in the library" : x->x360 ? "Xbox 360 game" : "Xbox game",
+                x && !x->valid ? ", not recognised" : "");
         if (x && x->x360) {
             LaunchXenia(path);
             return;

@@ -80,6 +80,9 @@ GameLibraryWindow game_library_window;
 
 namespace {
 
+// Bump when the way games are recognised changes, so saved lists are rebuilt
+const int kLibraryScanVersion = 2;
+
 // ---------------------------------------------------------------------------
 // Data model
 // ---------------------------------------------------------------------------
@@ -584,7 +587,12 @@ void LoadLibrary()
     }
     try {
         json j = json::parse(data.begin(), data.end());
-        json games = j.value("games", json::array());
+        // The saved list of games is a cache. When the way games are
+        // recognised changes (v2.6 added Xbox 360 games), a list saved by an
+        // older version is thrown away so everything is read again once.
+        json games = j.value("scan_version", 0) >= kLibraryScanVersion
+                         ? j.value("games", json::array())
+                         : json::array();
         json stats = j.value("stats", json::object());
         json overrides = j.value("overrides", json::object());
         g_primary_recursive = j.value("primary_recursive", true);
@@ -776,6 +784,7 @@ void SaveLibrary(bool async = false)
                           { "x360", e.x360 } });
     }
     j["games"] = games;
+    j["scan_version"] = kLibraryScanVersion;
     j["xenia"] = { { "enabled", g_xenia.enabled },
                    { "exe", g_xenia.exe },
                    { "fullscreen", g_xenia.fullscreen },

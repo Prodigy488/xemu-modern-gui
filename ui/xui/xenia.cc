@@ -377,6 +377,48 @@ namespace {
 
 #ifdef _WIN32
 HANDLE g_proc = NULL;
+DWORD g_pid_win = 0;
+HWND g_embed_wnd = NULL;      // Xenia's window while it is inside ours
+HWND g_embed_parent = NULL;
+LONG_PTR g_parent_style = 0;
+int g_embed_tries = 0;
+RECT g_embed_rect = { 0, 0, 0, 0 };
+
+struct FindCtx {
+    DWORD pid;
+    HWND found;
+};
+
+BOOL CALLBACK FindXeniaWindow(HWND h, LPARAM lp)
+{
+    FindCtx *c = (FindCtx *)lp;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(h, &pid);
+    if (pid != c->pid || !IsWindowVisible(h) || GetWindow(h, GW_OWNER) != NULL) {
+        return TRUE;
+    }
+    char cls[64] = { 0 };
+    GetClassNameA(h, cls, sizeof(cls) - 1);
+    if (strcmp(cls, "ConsoleWindowClass") == 0) {
+        return TRUE;
+    }
+    RECT r;
+    if (!GetWindowRect(h, &r) || r.right - r.left < 200 || r.bottom - r.top < 150) {
+        return TRUE; // not the game window (splash, tool windows)
+    }
+    c->found = h;
+    return FALSE;
+}
+
+void EmbedRelease()
+{
+    if (g_embed_parent && IsWindow(g_embed_parent)) {
+        SetWindowLongPtrW(g_embed_parent, GWL_STYLE, g_parent_style);
+        SetFocus(g_embed_parent);
+    }
+    g_embed_wnd = NULL;
+    g_embed_parent = NULL;
+}
 #else
 pid_t g_pid = 0;
 #endif
@@ -450,6 +492,9 @@ std::vector<std::string> XeniaBuildFlags(const XeniaSettings &d,
     int gpu = own && game->gpu > 0 ? game->gpu : d.gpu;
     int vsync = own && game->vsync >= 0 ? game->vsync : d.vsync;
     int full = own && game->fullscreen >= 0 ? game->fullscreen : (d.fullscreen ? 1 : -1);
+    if (d.embed) {
+        full = 0; // inside our window it fills the window; it must not go fullscreen
+    }
     std::vector<std::string> out;
     if (full >= 0) {
         out.push_back(full ? "--fullscreen=true" : "--fullscreen=false");
@@ -496,7 +541,9 @@ bool XeniaLaunch(const std::string &game_path, std::string *err,
     if (!fs::exists(fs::u8path(game_path), ec)) {
         return fail("The game file is missing");
     }
-    std::vector<std::string> extra = XeniaBuildFlags(g_xenia, game);
+    XeniaSettings eff = g_xenia;
+    eff.embed = eff.embed && XeniaEmbedSupported();
+    std::vector<std::string> extra = XeniaBuildFlags(eff, game);
     fs::path exe = fs::u8path(g_xenia.exe);
     fs::path cwd = exe.parent_path(); // Xenia keeps its portable data here
 
@@ -517,6 +564,9 @@ bool XeniaLaunch(const std::string &game_path, std::string *err,
     }
     CloseHandle(pi.hThread);
     g_proc = pi.hProcess;
+    g_pid_win = pi.dwProcessId;
+    g_embed_wnd = NULL;
+    g_embed_tries = 0;
 #else
     std::vector<std::string> args;
     std::string ext = Lower(exe.extension().u8string());
@@ -555,6 +605,76 @@ bool XeniaLaunch(const std::string &game_path, std::string *err,
     return true;
 }
 
+bool XeniaEmbedSupported()
+{
+#ifdef _WIN32
+    return true;
+#else
+    return false;
+#endif
+}
+
+void XeniaEmbedTick(void *parent_hwnd)
+{
+#ifdef _WIN32
+    HWND parent = (HWND)parent_hwnd;
+    if (!g_running || !parent || !IsWindow(parent)) {
+        return;
+    }
+    RECT pc;
+    GetClientRect(parent, &pc);
+    int w = pc.right - pc.left, h = pc.bottom - pc.top;
+    if (w < 16 || h < 16) {
+        return; // minimised
+    }
+    if (g_embed_wnd && !IsWindow(g_embed_wnd)) {
+        g_embed_wnd = NULL;
+        return;
+    }
+    if (!g_embed_wnd) {
+        // Xenia needs a moment to open its window; look a few times a second
+        // for about a minute
+        static int skip = 0;
+        if (g_embed_tries > 1800 || (++skip % 10) != 0) {
+            g_embed_tries++;
+            return;
+        }
+        g_embed_tries++;
+        FindCtx c = { g_pid_win, NULL };
+        EnumWindows(FindXeniaWindow, (LPARAM)&c);
+        if (!c.found) {
+            return;
+        }
+        HWND x = c.found;
+        LONG_PTR st = GetWindowLongPtrW(x, GWL_STYLE);
+        st &= ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZE |
+                WS_MAXIMIZE | WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
+        st |= WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS;
+        SetWindowLongPtrW(x, GWL_STYLE, st);
+        LONG_PTR ex = GetWindowLongPtrW(x, GWL_EXSTYLE);
+        ex &= ~(WS_EX_APPWINDOW | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE |
+                WS_EX_DLGMODALFRAME | WS_EX_TOOLWINDOW);
+        SetWindowLongPtrW(x, GWL_EXSTYLE, ex);
+        g_parent_style = GetWindowLongPtrW(parent, GWL_STYLE);
+        SetWindowLongPtrW(parent, GWL_STYLE, g_parent_style | WS_CLIPCHILDREN);
+        SetParent(x, parent);
+        g_embed_wnd = x;
+        g_embed_parent = parent;
+        g_embed_rect = { 0, 0, 0, 0 };
+    }
+    if (pc.right != g_embed_rect.right || pc.bottom != g_embed_rect.bottom) {
+        SetWindowPos(g_embed_wnd, HWND_TOP, 0, 0, w, h,
+                     SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+        if (g_embed_rect.right == 0) {
+            SetFocus(g_embed_wnd);
+        }
+        g_embed_rect = pc;
+    }
+#else
+    (void)parent_hwnd;
+#endif
+}
+
 bool XeniaPoll(std::string *path, double *seconds)
 {
     if (!g_running) {
@@ -566,6 +686,7 @@ bool XeniaPoll(std::string *path, double *seconds)
     if (done) {
         CloseHandle(g_proc);
         g_proc = NULL;
+        EmbedRelease();
     }
 #else
     int status = 0;

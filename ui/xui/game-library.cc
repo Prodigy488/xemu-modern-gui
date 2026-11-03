@@ -595,6 +595,7 @@ void LoadLibrary()
             g_xenia.fullscreen = x.value("fullscreen", true);
             g_xenia.extra_args = x.value("args", "");
             g_xenia.pause_xemu = x.value("pause_xemu", true);
+            g_xenia.embed = x.value("embed", false);
             g_xenia.res_scale = std::clamp(x.value("res_scale", 0), 0, 8);
             g_xenia.gpu = std::clamp(x.value("gpu", 0), 0, 2);
             g_xenia.vsync = std::clamp(x.value("vsync", -1), -1, 1);
@@ -780,6 +781,7 @@ void SaveLibrary(bool async = false)
                    { "fullscreen", g_xenia.fullscreen },
                    { "args", g_xenia.extra_args },
                    { "pause_xemu", g_xenia.pause_xemu },
+                   { "embed", g_xenia.embed },
                    { "res_scale", g_xenia.res_scale },
                    { "gpu", g_xenia.gpu },
                    { "vsync", g_xenia.vsync } };
@@ -5443,6 +5445,16 @@ void DrawXeniaControls(float s)
     }
     if (ImGui::Checkbox(tr("Pause the Xbox game while Xenia runs"), &g_xenia.pause_xemu)) {
         g_dirty = true;
+    }
+    if (XeniaEmbedSupported()) {
+        if (ImGui::Checkbox(tr("Play 360 games inside the xemu window (experimental)"),
+                            &g_xenia.embed)) {
+            g_dirty = true;
+        }
+        ImGui::SetItemTooltip("%s", tr("Xenia's picture is shown inside xemu's window "
+                                       "instead of a window of its own. It always "
+                                       "fills the window, so xemu's fullscreen applies. "
+                                       "If a game misbehaves, turn this off."));
     }
     char args[512];
     snprintf(args, sizeof(args), "%s", g_xenia.extra_args.c_str());
@@ -11620,6 +11632,11 @@ void XeniaTick()
 {
     if (!XeniaIsRunning()) {
         return;
+    }
+    if (g_xenia.embed && XeniaEmbedSupported()) {
+        void *hwnd = SDL_GetPointerProperty(SDL_GetWindowProperties(xemu_get_window()),
+                                            SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+        XeniaEmbedTick(hwnd);
     }
     std::string path;
     double seconds = 0;

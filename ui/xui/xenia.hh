@@ -24,6 +24,7 @@ struct XeniaSettings {
     bool fullscreen = true;     // pass --fullscreen=true
     std::string extra_args;     // appended as given
     bool pause_xemu = true;     // pause a running Xbox game while Xenia runs
+    bool embed = false;         // Windows: show Xenia inside the xemu window
     // Defaults for every game (0 / -1: leave it to Xenia's own settings)
     int res_scale = 0;          // 1..4 -> draw_resolution_scale_x/y
     int gpu = 0;                // 0 Xenia's choice, 1 D3D12, 2 Vulkan
@@ -80,3 +81,10 @@ bool XeniaPoll(std::string *path, double *seconds);
 // Ask a running Xenia to quit (does nothing if none)
 void XeniaStop();
 std::string XeniaRunningPath();
+
+// Windows only: Xenia's window shown inside xemu's own window. Experimental.
+bool XeniaEmbedSupported();
+// Call every frame with xemu's window handle (HWND) while Xenia runs and the
+// embed option is on. Finds Xenia's window once it opens, turns it into a
+// child of xemu's window and keeps it filling it.
+void XeniaEmbedTick(void *parent_hwnd);

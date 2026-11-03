@@ -31,6 +31,7 @@
 #include <string>
 #include <memory>
 
+#include "xenia.hh"
 #include "actions.hh"
 #include "ui-prof.hh"
 #if defined(_WIN32)
@@ -269,7 +270,10 @@ void xemu_hud_update(void)
     ImGui_ImplOpenGL3_NewFrame();
     io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
     ImGui_ImplSDL3_NewFrame();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+    // While Xenia is running the controller belongs to it, not the dashboard
+    if (!XeniaIsRunning()) {
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+    }
     io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
     g_input_mgr.Update();
 

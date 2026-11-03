@@ -9,6 +9,7 @@ xemu_ss.add(files(
   'i18n.cc',
   'game-library.cc',
   'game-library-scan.cc',
+  'xenia.cc',
   'game-patches.cc',
   'game-compat.cc',
   'game-perf.cc',

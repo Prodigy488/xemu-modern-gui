@@ -134,6 +134,22 @@ void FontManager::Rebuild()
             (void *)RobotoCondensed_Regular_data, RobotoCondensed_Regular_size,
             22.0f * scale, &config, kTextRanges);
         merge_cjk(22.0f);
+        {
+            // A few icons in the small menu font too (the gear on the
+            // dashboard's Xbox and Xenia tabs)
+            ImFontConfig icon_config;
+            icon_config.FontDataOwnedByAtlas = false;
+            icon_config.RasterizerDensity = pixel_density;
+            icon_config.MergeMode = true;
+            icon_config.PixelSnapH = true;
+            icon_config.GlyphMinAdvanceX = 18.0f * scale;
+            icon_config.GlyphOffset = ImVec2(0, 1 * scale);
+            static const ImWchar gear_ranges[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
+            io.Fonts->AddFontFromMemoryTTF(
+                (void *)font_awesome_6_1_1_solid_min_data,
+                font_awesome_6_1_1_solid_min_size, 16.0f * scale,
+                &icon_config, gear_ranges);
+        }
     }
     {
         ImFontConfig config;

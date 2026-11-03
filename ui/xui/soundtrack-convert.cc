@@ -214,13 +214,33 @@ bool RunProgram(const std::vector<std::string> &args, const std::string &log_pat
 // ---- Windows Media Foundation ----------------------------------------------
 
 #ifdef _WIN32
+// MinGW's headers only declare the transcode profile, so it is spelled out here
+// (same method order as the Windows SDK's IMFTranscodeProfile)
+struct IMyTranscodeProfile : public IUnknown {
+    virtual HRESULT STDMETHODCALLTYPE SetAudioAttributes(IMFAttributes *) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetAudioAttributes(IMFAttributes **) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetVideoAttributes(IMFAttributes *) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetVideoAttributes(IMFAttributes **) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetContainerAttributes(IMFAttributes *) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetContainerAttributes(IMFAttributes **) = 0;
+};
+
+// kMfTranscodeContainerType, kMfContainerAsf and
+// kMfAudioWma2 (the WAVE format tag 0x0161)
+static const GUID kMfTranscodeContainerType = { 0x150ff23f, 0x4abc, 0x478b,
+    { 0xac, 0x4f, 0xe1, 0x91, 0x6f, 0xba, 0x1c, 0xca } };
+static const GUID kMfContainerAsf = { 0x430f6f6e, 0xb6bf, 0x4fc1,
+    { 0xa8, 0xf5, 0xe5, 0xdb, 0x9a, 0xde, 0x40, 0xf9 } };
+static const GUID kMfAudioWma2 = { 0x00000161, 0x0000, 0x0010,
+    { 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71 } };
+
 typedef HRESULT(WINAPI *PFN_Startup)(ULONG, DWORD);
 typedef HRESULT(WINAPI *PFN_Shutdown)(void);
 typedef HRESULT(WINAPI *PFN_CreateAttributes)(IMFAttributes **, UINT32);
 typedef HRESULT(WINAPI *PFN_CreateSourceResolver)(IMFSourceResolver **);
-typedef HRESULT(WINAPI *PFN_CreateTranscodeProfile)(IMFTranscodeProfile **);
+typedef HRESULT(WINAPI *PFN_CreateTranscodeProfile)(IMyTranscodeProfile **);
 typedef HRESULT(WINAPI *PFN_CreateTranscodeTopology)(IMFMediaSource *, LPCWSTR,
-                                                     IMFTranscodeProfile *, IMFTopology **);
+                                                     IMyTranscodeProfile *, IMFTopology **);
 typedef HRESULT(WINAPI *PFN_CreateMediaSession)(IMFAttributes *, IMFMediaSession **);
 typedef HRESULT(WINAPI *PFN_GetOutputTypes)(REFGUID, DWORD, IMFAttributes *, IMFCollection **);
 
@@ -292,7 +312,7 @@ bool MfConvert(const std::string &in, const std::string &out, std::string *err)
     IMFMediaSource *source = nullptr;
     IMFCollection *types = nullptr;
     IMFMediaType *chosen = nullptr;
-    IMFTranscodeProfile *profile = nullptr;
+    IMyTranscodeProfile *profile = nullptr;
     IMFAttributes *container = nullptr;
     IMFTopology *topology = nullptr;
     IMFMediaSession *session = nullptr;
@@ -319,7 +339,7 @@ bool MfConvert(const std::string &in, const std::string &out, std::string *err)
             *err = "Windows can't read this song";
             break;
         }
-        hr = api.GetOutputTypes(MFAudioFormat_WMAudioV8, MFT_ENUM_FLAG_ALL, nullptr, &types);
+        hr = api.GetOutputTypes(kMfAudioWma2, MFT_ENUM_FLAG_ALL, nullptr, &types);
         DWORD count = 0;
         if (FAILED(hr) || !types || FAILED(types->GetElementCount(&count)) || !count) {
             *err = "This Windows has no WMA encoder (is it an N edition?). "
@@ -363,7 +383,7 @@ bool MfConvert(const std::string &in, const std::string &out, std::string *err)
         if (FAILED(api.CreateTranscodeProfile(&profile)) ||
             FAILED(profile->SetAudioAttributes(chosen)) ||
             FAILED(api.CreateAttributes(&container, 1)) ||
-            FAILED(container->SetGUID(MF_TRANSCODE_CONTAINERTYPE, MFTranscodeContainerType_ASF)) ||
+            FAILED(container->SetGUID(kMfTranscodeContainerType, kMfContainerAsf)) ||
             FAILED(profile->SetContainerAttributes(container))) {
             *err = "Windows couldn't set up the WMA conversion";
             break;

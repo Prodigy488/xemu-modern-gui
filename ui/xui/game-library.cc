@@ -11630,7 +11630,8 @@ void LaunchXenia(const std::string &path)
 // While Xenia is inside our window: a strip across the top with a way out
 void DrawXeniaBar()
 {
-    if (!XeniaEmbedActive()) {
+    const bool joined = XeniaEmbedActive();
+    if (!joined && !(XeniaIsRunning() && g_xenia.embed && XeniaEmbedSupported())) {
         return;
     }
     const float s = g_viewport_mgr.m_scale;
@@ -11656,6 +11657,10 @@ void DrawXeniaBar()
     ImGui::TextColored(ImVec4(0.55f, 0.9f, 0.4f, 1), "%s", tr("XENIA"));
     ImGui::SameLine();
     ImGui::TextUnformatted(name.c_str());
+    if (!joined) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", tr("- starting Xenia, its picture appears here"));
+    }
     float bw = 150 * s;
     ImGui::SameLine(io.DisplaySize.x - bw - 10 * s);
     if (ImGui::Button(confirm ? tr("Click again to exit") : tr(ICON_FA_POWER_OFF "  Exit Xenia"),

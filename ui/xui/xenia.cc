@@ -380,7 +380,7 @@ HANDLE g_proc = NULL;
 DWORD g_pid_win = 0;
 HWND g_embed_wnd = NULL;      // Xenia's window while it is inside ours
 HWND g_embed_parent = NULL;
-LONG_PTR g_parent_style = 0;
+bool g_embed_focus = false;
 int g_embed_tries = 0;
 RECT g_embed_rect = { 0, 0, 0, 0 };
 int g_embed_top = 0;
@@ -464,8 +464,7 @@ BOOL CALLBACK FindXeniaWindow(HWND h, LPARAM lp)
 void EmbedRelease()
 {
     if (g_embed_parent && IsWindow(g_embed_parent)) {
-        SetWindowLongPtrW(g_embed_parent, GWL_STYLE, g_parent_style);
-        SetFocus(g_embed_parent);
+        SetForegroundWindow(g_embed_parent);
     }
     g_embed_wnd = NULL;
     g_embed_parent = NULL;
@@ -684,8 +683,14 @@ void XeniaEmbedTick(void *parent_hwnd, float top_units, float display_w)
     RECT pc;
     GetClientRect(parent, &pc);
     int w = pc.right - pc.left, h = pc.bottom - pc.top;
-    if (w < 16 || h < 16) {
-        return; // minimised
+    if (w < 16 || h < 16 || IsIconic(parent)) {
+        // Minimised: an owned window goes with its owner, any other is hidden
+        if (g_embed_wnd && IsWindow(g_embed_wnd) &&
+            GetWindow(g_embed_wnd, GW_OWNER) != parent) {
+            ShowWindow(g_embed_wnd, SW_HIDE);
+            g_embed_rect = { 0, 0, 0, 0 };
+        }
+        return;
     }
     int top = display_w > 1 ? (int)(top_units * (float)w / display_w + 0.5f) : 0;
     if (top < 0 || top > h / 3) {
@@ -710,30 +715,52 @@ void XeniaEmbedTick(void *parent_hwnd, float top_units, float display_w)
             return;
         }
         HWND x = c.found;
+        // Xenia keeps its own window (a child window of ours can end up hidden
+        // behind xemu's picture), made borderless, owned by xemu's window and
+        // kept exactly over it. An owned window stays above its owner and
+        // follows it when it is minimised.
         LONG_PTR st = GetWindowLongPtrW(x, GWL_STYLE);
-        st &= ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZE |
+        st &= ~(WS_CHILD | WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZE |
                 WS_MAXIMIZE | WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
-        st |= WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS;
+        st |= WS_POPUP | WS_VISIBLE;
         SetWindowLongPtrW(x, GWL_STYLE, st);
         LONG_PTR ex = GetWindowLongPtrW(x, GWL_EXSTYLE);
         ex &= ~(WS_EX_APPWINDOW | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE |
-                WS_EX_DLGMODALFRAME | WS_EX_TOOLWINDOW);
+                WS_EX_DLGMODALFRAME);
+        ex |= WS_EX_TOOLWINDOW; // no taskbar button or Alt+Tab entry of its own
         SetWindowLongPtrW(x, GWL_EXSTYLE, ex);
-        g_parent_style = GetWindowLongPtrW(parent, GWL_STYLE);
-        SetWindowLongPtrW(parent, GWL_STYLE, g_parent_style | WS_CLIPCHILDREN);
-        SetParent(x, parent);
+        SetLastError(0);
+        SetWindowLongPtrW(x, GWLP_HWNDPARENT, (LONG_PTR)parent);
         g_embed_wnd = x;
         g_embed_parent = parent;
         g_embed_rect = { 0, 0, 0, 0 };
+        g_embed_top = -1;
+        g_embed_focus = true;
     }
-    if (pc.right != g_embed_rect.right || pc.bottom != g_embed_rect.bottom ||
+    // Where Xenia belongs: the client area of xemu's window below the strip
+    POINT org = { 0, top };
+    ClientToScreen(parent, &org);
+    RECT want = { org.x, org.y, org.x + w, org.y + (h - top) };
+    bool owned = GetWindow(g_embed_wnd, GW_OWNER) == parent;
+    // If the owner could not be set: stay on top while xemu or Xenia is the
+    // window in use, and step back when something else is
+    HWND after = HWND_TOP;
+    if (!owned) {
+        after = OurProcessHasFocus() ? HWND_TOPMOST : HWND_NOTOPMOST;
+    }
+    static HWND last_after = NULL;
+    if (after != last_after || want.left != g_embed_rect.left || want.top != g_embed_rect.top ||
+        want.right != g_embed_rect.right || want.bottom != g_embed_rect.bottom ||
         top != g_embed_top) {
-        SetWindowPos(g_embed_wnd, HWND_TOP, 0, top, w, h - top,
-                     SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-        if (g_embed_rect.right == 0) {
-            SetFocus(g_embed_wnd);
+        last_after = after;
+        SetWindowPos(g_embed_wnd, after, want.left, want.top, want.right - want.left,
+                     want.bottom - want.top,
+                     SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOACTIVATE);
+        if (g_embed_focus) {
+            g_embed_focus = false;
+            SetForegroundWindow(g_embed_wnd);
         }
-        g_embed_rect = pc;
+        g_embed_rect = want;
         g_embed_top = top;
     }
     // Ways out that work while Xenia has the keyboard and the controller:

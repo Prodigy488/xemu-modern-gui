@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -461,6 +462,24 @@ BOOL CALLBACK FindXeniaWindow(HWND h, LPARAM lp)
     return FALSE;
 }
 
+BOOL CALLBACK LogOneWindow(HWND h, LPARAM lp)
+{
+    DWORD pid = 0;
+    GetWindowThreadProcessId(h, &pid);
+    if (pid != (DWORD)lp) {
+        return TRUE;
+    }
+    char cls[64] = { 0 }, title[96] = { 0 };
+    GetClassNameA(h, cls, sizeof(cls) - 1);
+    GetWindowTextA(h, title, sizeof(title) - 1);
+    RECT r = { 0, 0, 0, 0 };
+    GetWindowRect(h, &r);
+    fprintf(stderr, "xenia:   window class=\"%s\" title=\"%s\" %ldx%ld visible=%d owner=%d\n",
+            cls, title, r.right - r.left, r.bottom - r.top, IsWindowVisible(h) ? 1 : 0,
+            GetWindow(h, GW_OWNER) ? 1 : 0);
+    return TRUE;
+}
+
 void EmbedRelease()
 {
     if (g_embed_parent && IsWindow(g_embed_parent)) {
@@ -649,6 +668,11 @@ bool XeniaLaunch(const std::string &game_path, std::string *err,
     }
     g_pid = pid;
 #endif
+    fprintf(stderr, "xenia: started %s for %s (single window %s)\n",
+            g_xenia.exe.c_str(), game_path.c_str(), eff.embed ? "on" : "off");
+    for (auto &a : extra) {
+        fprintf(stderr, "xenia:   option %s\n", a.c_str());
+    }
     g_running = true;
     g_path = game_path;
     g_started = std::chrono::steady_clock::now();
@@ -712,9 +736,22 @@ void XeniaEmbedTick(void *parent_hwnd, float top_units, float display_w)
         FindCtx c = { g_pid_win, NULL };
         EnumWindows(FindXeniaWindow, (LPARAM)&c);
         if (!c.found) {
+            if (g_embed_tries == 31 || g_embed_tries == 301 || g_embed_tries == 1801) {
+                fprintf(stderr, "xenia: no game window found yet; Xenia's windows:\n");
+                EnumWindows(LogOneWindow, (LPARAM)g_pid_win);
+            }
             return;
         }
         HWND x = c.found;
+        {
+            char cls[64] = { 0 }, title[96] = { 0 };
+            GetClassNameA(x, cls, sizeof(cls) - 1);
+            GetWindowTextA(x, title, sizeof(title) - 1);
+            RECT r;
+            GetWindowRect(x, &r);
+            fprintf(stderr, "xenia: found window class=\"%s\" title=\"%s\" %ldx%ld\n",
+                    cls, title, r.right - r.left, r.bottom - r.top);
+        }
         // Xenia keeps its own window (a child window of ours can end up hidden
         // behind xemu's picture), made borderless, owned by xemu's window and
         // kept exactly over it. An owned window stays above its owner and
@@ -731,6 +768,8 @@ void XeniaEmbedTick(void *parent_hwnd, float top_units, float display_w)
         SetWindowLongPtrW(x, GWL_EXSTYLE, ex);
         SetLastError(0);
         SetWindowLongPtrW(x, GWLP_HWNDPARENT, (LONG_PTR)parent);
+        fprintf(stderr, "xenia: placed over xemu's window, owner set: %s\n",
+                GetWindow(x, GW_OWNER) == parent ? "yes" : "no (using topmost)");
         g_embed_wnd = x;
         g_embed_parent = parent;
         g_embed_rect = { 0, 0, 0, 0 };
@@ -817,6 +856,7 @@ bool XeniaPoll(std::string *path, double *seconds)
         return false;
     }
     g_running = false;
+    fprintf(stderr, "xenia: closed\n");
     if (path) {
         *path = g_path;
     }

@@ -4875,7 +4875,7 @@ void DrawSettingsPopup()
                 : tr("No shader files are recorded for this game, so only the "
                   "Vulkan pipeline cache (shared by all games) is cleared. To "
                   "be sure, use \"Clear all shader caches\" in the "
-                  "dashboard's Settings tab."));
+                  "dashboard's Xbox tab."));
         ImGui::PopTextWrapPos();
         if (ImGui::Button(tr("Clear"))) {
             ShaderCacheClearFor(e->title_id, &g_settings_shader_msg);
@@ -5379,6 +5379,81 @@ bool g_open_folders_popup = false;
 bool g_open_clear_library = false;
 void ClearLibrary();
 
+// Everything about running Xbox 360 games in Xenia: where it is, and the
+// defaults for every game. Shared by the Folders panel and the Xenia tab.
+void DrawXeniaControls(float s)
+{
+    const float field_w = std::max(160 * s, std::min(430 * s, ImGui::GetContentRegionAvail().x - 110 * s));
+    char exe[1024];
+    snprintf(exe, sizeof(exe), "%s", g_xenia.exe.c_str());
+    ImGui::SetNextItemWidth(field_w);
+    if (ImGui::InputTextWithHint("##xeniaexe", tr("Path to xenia.exe / xenia_canary"),
+                                 exe, sizeof(exe))) {
+        g_xenia.exe = exe;
+        g_dirty = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(tr("Browse..."))) {
+        static const SDL_DialogFileFilter xf[] = {
+            { "Programs (*.exe)", "exe" },
+            { "All Files", "*" },
+        };
+        std::string start = g_xenia.exe.empty()
+                                ? ""
+                                : fs::u8path(g_xenia.exe).parent_path().u8string();
+        ShowOpenFileDialog(xf, 2, start.c_str(), [](const char *path) {
+            g_xenia.exe = path;
+            g_dirty = true;
+        });
+    }
+    if (XeniaConfigured()) {
+        ImGui::TextColored(ImVec4(0.35f, 0.85f, 0.4f, 1), "%s", tr("Xenia found"));
+    } else {
+        ImGui::TextColored(ImVec4(0.95f, 0.6f, 0.3f, 1), "%s",
+                           g_xenia.exe.empty() ? tr("Choose your Xenia to play 360 games")
+                                               : tr("That file was not found"));
+    }
+    if (ImGui::Checkbox(tr("Start Xenia fullscreen"), &g_xenia.fullscreen)) {
+        g_dirty = true;
+    }
+    {
+        ImGui::TextDisabled(tr("Defaults for every 360 game (each game can have its own "
+                            "in its Settings)"));
+        int rs = g_xenia.res_scale;
+        ImGui::SetNextItemWidth(220 * s);
+        if (ImGui::Combo(tr("Resolution scale##x360"), &rs,
+                         tr_items("Xenia's own setting\0" "1x\0" "2x\0" "3x\0" "4x\0"))) {
+            g_xenia.res_scale = rs;
+            g_dirty = true;
+        }
+        int gp = g_xenia.gpu;
+        ImGui::SetNextItemWidth(220 * s);
+        if (ImGui::Combo(tr("Graphics API##x360"), &gp,
+                         tr_items("Xenia's own setting\0" "Direct3D 12\0" "Vulkan\0"))) {
+            g_xenia.gpu = gp;
+            g_dirty = true;
+        }
+        int vs = g_xenia.vsync < 0 ? 0 : g_xenia.vsync ? 1 : 2;
+        ImGui::SetNextItemWidth(220 * s);
+        if (ImGui::Combo(tr("Vsync##x360"), &vs,
+                         tr_items("Xenia's own setting\0" "On\0" "Off\0"))) {
+            g_xenia.vsync = vs == 0 ? -1 : vs == 1 ? 1 : 0;
+            g_dirty = true;
+        }
+    }
+    if (ImGui::Checkbox(tr("Pause the Xbox game while Xenia runs"), &g_xenia.pause_xemu)) {
+        g_dirty = true;
+    }
+    char args[512];
+    snprintf(args, sizeof(args), "%s", g_xenia.extra_args.c_str());
+    ImGui::SetNextItemWidth(field_w);
+    if (ImGui::InputTextWithHint("##xeniaargs", tr("Extra options for Xenia (optional)"),
+                                 args, sizeof(args))) {
+        g_xenia.extra_args = args;
+        g_dirty = true;
+    }
+}
+
 void DrawFoldersPopup()
 {
     if (g_open_folders_popup) {
@@ -5487,74 +5562,7 @@ void DrawFoldersPopup()
         g_dirty = true; // the folders are scanned again on their own
     }
     if (g_xenia.enabled) {
-        char exe[1024];
-        snprintf(exe, sizeof(exe), "%s", g_xenia.exe.c_str());
-        ImGui::SetNextItemWidth(430 * s);
-        if (ImGui::InputTextWithHint("##xeniaexe", tr("Path to xenia.exe / xenia_canary"),
-                                     exe, sizeof(exe))) {
-            g_xenia.exe = exe;
-            g_dirty = true;
-        }
-        ImGui::SameLine();
-        if (ImGui::Button(tr("Browse..."))) {
-            static const SDL_DialogFileFilter xf[] = {
-                { "Programs (*.exe)", "exe" },
-                { "All Files", "*" },
-            };
-            std::string start = g_xenia.exe.empty()
-                                    ? ""
-                                    : fs::u8path(g_xenia.exe).parent_path().u8string();
-            ShowOpenFileDialog(xf, 2, start.c_str(), [](const char *path) {
-                g_xenia.exe = path;
-                g_dirty = true;
-            });
-        }
-        if (XeniaConfigured()) {
-            ImGui::TextColored(ImVec4(0.35f, 0.85f, 0.4f, 1), "%s", tr("Xenia found"));
-        } else {
-            ImGui::TextColored(ImVec4(0.95f, 0.6f, 0.3f, 1), "%s",
-                               g_xenia.exe.empty() ? tr("Choose your Xenia to play 360 games")
-                                                   : tr("That file was not found"));
-        }
-        if (ImGui::Checkbox(tr("Start Xenia fullscreen"), &g_xenia.fullscreen)) {
-            g_dirty = true;
-        }
-        {
-            ImGui::TextDisabled(tr("Defaults for every 360 game (each game can have its own "
-                                "in its Settings)"));
-            int rs = g_xenia.res_scale;
-            ImGui::SetNextItemWidth(220 * s);
-            if (ImGui::Combo(tr("Resolution scale##x360"), &rs,
-                             tr_items("Xenia's own setting\0" "1x\0" "2x\0" "3x\0" "4x\0"))) {
-                g_xenia.res_scale = rs;
-                g_dirty = true;
-            }
-            int gp = g_xenia.gpu;
-            ImGui::SetNextItemWidth(220 * s);
-            if (ImGui::Combo(tr("Graphics API##x360"), &gp,
-                             tr_items("Xenia's own setting\0" "Direct3D 12\0" "Vulkan\0"))) {
-                g_xenia.gpu = gp;
-                g_dirty = true;
-            }
-            int vs = g_xenia.vsync < 0 ? 0 : g_xenia.vsync ? 1 : 2;
-            ImGui::SetNextItemWidth(220 * s);
-            if (ImGui::Combo(tr("Vsync##x360"), &vs,
-                             tr_items("Xenia's own setting\0" "On\0" "Off\0"))) {
-                g_xenia.vsync = vs == 0 ? -1 : vs == 1 ? 1 : 0;
-                g_dirty = true;
-            }
-        }
-        if (ImGui::Checkbox(tr("Pause the Xbox game while Xenia runs"), &g_xenia.pause_xemu)) {
-            g_dirty = true;
-        }
-        char args[512];
-        snprintf(args, sizeof(args), "%s", g_xenia.extra_args.c_str());
-        ImGui::SetNextItemWidth(430 * s);
-        if (ImGui::InputTextWithHint("##xeniaargs", tr("Extra options for Xenia (optional)"),
-                                     args, sizeof(args))) {
-            g_xenia.extra_args = args;
-            g_dirty = true;
-        }
+        DrawXeniaControls(s);
     }
     ImGui::Separator();
     ImGui::Dummy(ImVec2(0, 4 * s));
@@ -6234,15 +6242,17 @@ void UpdateDiscordPresence()
 
 // ---------------------------------------------------------------------------
 // Dashboard: a console-style home screen with tabs (Home, Library, Insignia,
-// Media, Drive, Store, Patches, Settings), switched with LB/RB
+// Media, Drive, Store, Patches, Xbox, Xenia), switched with LB/RB
 // ---------------------------------------------------------------------------
 
 enum DashTab { kTabHome, kTabLibrary, kTabInsignia, kTabMedia, kTabDrive,
-               kTabStore, kTabPatches, kTabAchievements, kTabSettings, kTabCount };
+               kTabStore, kTabPatches, kTabAchievements, kTabSettings, kTabXenia, kTabCount };
 const char *const kTabNames[kTabCount] = { N_("Home"),  N_("Library"), N_("Insignia"),
                                            N_("Media"), N_("Drive"),   N_("Homebrew"),
                                            N_("Patches"), N_("Achievements"),
-                                           N_("Settings") };
+                                           N_("Xbox"), N_("Xenia") };
+// The two emulator tabs carry a gear, so they read as settings pages
+bool TabHasGear(int t) { return t == kTabSettings || t == kTabXenia; }
 int g_dash_tab = kTabHome;
 bool g_xbox_in_section = false; // Original Xbox style: in a section, not the main menu
 
@@ -6645,18 +6655,35 @@ void DrawDashTopBar()
     dl->ChannelsSplit(2);
     dl->ChannelsSetCurrent(1);
     ImVec2 hl_a(0, 0), hl_b(0, 0);
+    // The numbers before the names go when the tabs would reach the buttons
+    bool show_nums = true;
+    if (th.neon) {
+        ImFont *hud0 = HudFont();
+        float need = 14 * s;
+        for (int t = 0; t < kTabCount; t++) {
+            std::string nm = (TabHasGear(t) ? ICON_FA_GEAR "  " : "") + Upper(tr(kTabNames[t]));
+            need += ImGui::CalcTextSize(nm.c_str()).x + 18 * s + 2 * s +
+                    hud0->CalcTextSizeA(hud0->FontSize, FLT_MAX, 0, "00").x + 6 * s;
+        }
+        float room = ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 190 * s -
+                     ImGui::GetCursorScreenPos().x;
+        show_nums = need <= room;
+    }
     for (int t = 0; t < kTabCount; t++) {
         bool on = g_dash_tab == t;
         ImGui::PushID(t);
         if (th.neon) {
-            ImGui::SameLine(0, t ? 4 * s : 14 * s);
-            std::string name = Upper(tr(kTabNames[t]));
+            ImGui::SameLine(0, t ? 2 * s : 14 * s);
+            std::string name = (TabHasGear(t) ? ICON_FA_GEAR "  " : "") + Upper(tr(kTabNames[t]));
             char num[16];
             snprintf(num, sizeof(num), "%02d", t + 1);
             ImVec2 ts = ImGui::CalcTextSize(name.c_str());
             ImFont *hud = HudFont();
             ImVec2 ns = hud->CalcTextSizeA(hud->FontSize, FLT_MAX, 0, num);
-            ImVec2 size(ns.x + 6 * s + ts.x + 24 * s, ts.y + 18 * s);
+            if (!show_nums) {
+                ns = ImVec2(0, 0);
+            }
+            ImVec2 size(ns.x + (show_nums ? 6 * s : 0) + ts.x + 18 * s, ts.y + 18 * s);
             ImVec2 p(ImGui::GetCursorScreenPos().x, y_mid - size.y / 2);
             ImGui::SetCursorScreenPos(p);
             if (ImGui::InvisibleButton(kTabNames[t], size, ImGuiButtonFlags_EnableNav)) {
@@ -6665,18 +6692,21 @@ void DrawDashTopBar()
             bool hov = ImGui::IsItemHovered();
             float tx = p.x + 12 * s;
             float ty = p.y + (size.y - ts.y) / 2;
-            dl->AddText(hud, hud->FontSize, ImVec2(tx, ty + ts.y - ns.y - 2 * s),
-                        on ? th.accent2 : Alpha(th.dim, 160), num);
-            dl->AddText(ImVec2(tx + ns.x + 6 * s, ty),
+            if (show_nums) {
+                dl->AddText(hud, hud->FontSize, ImVec2(tx, ty + ts.y - ns.y - 2 * s),
+                            on ? th.accent2 : Alpha(th.dim, 160), num);
+            }
+            dl->AddText(ImVec2(tx + ns.x + (show_nums ? 6 * s : 0), ty),
                         on ? th.accent : hov ? th.text : th.dim, name.c_str());
             if (on) {
                 hl_a = ImVec2(tx, p.y + size.y - 8 * s);
                 hl_b = ImVec2(p.x + size.x - 12 * s, p.y + size.y + 1 * s);
             }
         } else {
-            ImGui::SameLine(0, t ? 6 * s : 12 * s);
-            ImVec2 ts = ImGui::CalcTextSize(tr(kTabNames[t]));
-            ImVec2 size(ts.x + 34 * s, ts.y + 14 * s);
+            ImGui::SameLine(0, t ? 3 * s : 12 * s);
+            std::string tlabel = (TabHasGear(t) ? ICON_FA_GEAR "  " : "") + std::string(tr(kTabNames[t]));
+            ImVec2 ts = ImGui::CalcTextSize(tlabel.c_str());
+            ImVec2 size(ts.x + 24 * s, ts.y + 14 * s);
             ImGui::SetCursorScreenPos(
                 ImVec2(ImGui::GetCursorScreenPos().x, y_mid - size.y / 2));
             ImVec2 tp = ImGui::GetCursorScreenPos();
@@ -6693,7 +6723,7 @@ void DrawDashTopBar()
                                   on ? ImVec4(0, 0, 0, 0) : ImVec4(1, 1, 1, 0.14f));
             ImGui::PushStyleColor(ImGuiCol_Text,
                                   on ? th.on_primary : ImVec4(0.60f, 0.66f, 0.59f, 1));
-            if (ImGui::Button(tr(kTabNames[t]), size)) {
+            if (ImGui::Button(tlabel.c_str(), size)) {
                 SwitchTab(t);
             }
             ImGui::PopStyleColor(4);
@@ -10712,6 +10742,43 @@ void DrawDashSettingsTab()
     };
 
     card(0, "##picture", [&] {
+        DashLabel(tr("Graphics"));
+        DashTitle(tr("Renderer and window"));
+        label(tr("Renderer"));
+        ImGui::Combo("##renderer", &g_config.display.renderer,
+                     tr_items("Null\0"
+                              "OpenGL\0"
+#ifdef CONFIG_VULKAN
+                              "Vulkan\0"
+#endif
+                              ));
+        ImGui::SetItemTooltip("%s", tr("Vulkan is usually fastest and is what the "
+                                       "other graphics options are tuned for. "
+                                       "Applies when xemu restarts."));
+        label(tr("Aspect ratio"));
+        ImGui::Combo("##aspect", &g_config.display.ui.aspect_ratio,
+                     tr_items("Native\0" "Auto (Default)\0" "4:3\0" "16:9\0"));
+        ImGui::Checkbox(tr("Vertical refresh sync"), &g_config.display.window.vsync);
+        ImGui::SetItemTooltip("%s", tr("Matches the screen's refresh to reduce tearing"));
+        {
+            bool fs = xemu_is_fullscreen();
+            if (ImGui::Checkbox(tr("Fullscreen"), &fs)) {
+                xemu_toggle_fullscreen();
+            }
+        }
+        ImGui::Checkbox(tr("Fullscreen on startup"),
+                        &g_config.display.window.fullscreen_on_startup);
+        ImGui::Checkbox(tr("Cache shaders to disk"), &g_config.perf.cache_shaders);
+        ImGui::SetItemTooltip("%s", tr("Less stutter in games, after a first play"));
+        ImGui::Checkbox(tr("GPU boost (restart to apply)"), &g_config.perf.optimizations);
+        ImGui::SetItemTooltip("%s", tr("Tuned graphics fast paths. Turn off if a game "
+                                       "misbehaves."));
+#if defined(__x86_64__)
+        ImGui::Checkbox(tr("CPU boost (restart to apply)"), &g_config.perf.native_sse);
+        ImGui::SetItemTooltip("%s", tr("Runs SSE math on the host CPU. Turn off if a "
+                                       "game misbehaves."));
+#endif
+        ImGui::Dummy(ImVec2(0, 14 * s));
         DashLabel(tr("Picture"));
         DashTitle(tr("Display and upscaling"));
         label(tr("Internal resolution"));
@@ -11788,6 +11855,63 @@ bool AuroraStyle()
     return g_config.general.library.style == CONFIG_GENERAL_LIBRARY_STYLE_AURORA;
 }
 
+// Xenia (Xbox 360): where it is and how its games start
+void DrawXeniaTab()
+{
+    const float s = g_viewport_mgr.m_scale;
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 a = ImGui::GetCursorScreenPos();
+    DashCard(dl, a, ImVec2(a.x + avail.x, a.y + avail.y));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(26 * s, 22 * s));
+    ImGui::BeginChild("##xeniatab", avail,
+                      ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened);
+    DashLabel(tr("Xbox 360"));
+    DashTitle(tr("Xenia"));
+    ImGui::PushTextWrapPos(0);
+    ImGui::TextDisabled("%s", tr("xemu does not emulate the Xbox 360. Xenia runs those "
+                                 "games; this page sets where it is and how they start. "
+                                 "Each game can also have its own settings."));
+    ImGui::PopTextWrapPos();
+    ImGui::Dummy(ImVec2(0, 8 * s));
+    if (ImGui::Checkbox(tr("Show Xbox 360 games"), &g_xenia.enabled)) {
+        g_dirty = true;
+    }
+    if (g_xenia.enabled) {
+        ImGui::Dummy(ImVec2(0, 4 * s));
+        DrawXeniaControls(s);
+        ImGui::Dummy(ImVec2(0, 10 * s));
+        if (XeniaConfigured()) {
+            if (DashButton(tr(ICON_FA_FOLDER_OPEN "  Open Xenia's folder"), T().glass,
+                           T().white, ImVec2(0, 34 * s))) {
+                std::string dir = fs::u8path(g_xenia.exe).parent_path().generic_u8string();
+                SDL_OpenURL(("file:///" + dir).c_str());
+            }
+            ImGui::SameLine();
+        }
+        if (DashButton(tr(ICON_FA_GAMEPAD "  Show my 360 games"), T().glass, T().white,
+                       ImVec2(0, 34 * s))) {
+            g_filter_platform = 2;
+            SwitchTab(kTabLibrary);
+        }
+        ImGui::SameLine();
+        if (DashButton(tr("Xenia downloads"), T().glass, T().white, ImVec2(0, 34 * s))) {
+            SDL_OpenURL("https://github.com/xenia-canary/xenia-canary-releases/releases");
+        }
+        ImGui::Dummy(ImVec2(0, 8 * s));
+        ImGui::PushTextWrapPos(0);
+        ImGui::TextDisabled("%s", tr("Xenia's own picture and control settings are kept "
+                                     "by Xenia, in its config file next to xenia.exe. "
+                                     "The options above are passed to it when a game "
+                                     "starts."));
+        ImGui::PopTextWrapPos();
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+}
+
 void DrawTabContent(int tab, int &tex_budget)
 {
     switch (tab) {
@@ -11814,6 +11938,9 @@ void DrawTabContent(int tab, int &tex_budget)
         break;
     case kTabSettings:
         DrawDashSettingsTab();
+        break;
+    case kTabXenia:
+        DrawXeniaTab();
         break;
     default:
         DrawLibraryTab(tex_budget);
@@ -11909,21 +12036,21 @@ ImU32 SectionColor(int tab)
         IM_COL32(0, 150, 136, 255),  IM_COL32(52, 120, 200, 255),
         IM_COL32(110, 90, 190, 255), IM_COL32(196, 64, 96, 255),
         IM_COL32(214, 120, 30, 255), IM_COL32(200, 160, 30, 255),
-        IM_COL32(96, 110, 104, 255),
+        IM_COL32(96, 110, 104, 255), IM_COL32(150, 150, 60, 255),
     };
     static const ImU32 neon[kTabCount] = {
         IM_COL32(0, 200, 230, 255),  IM_COL32(40, 110, 255, 255),
         IM_COL32(57, 210, 130, 255), IM_COL32(150, 70, 255, 255),
         IM_COL32(255, 46, 136, 255), IM_COL32(255, 90, 60, 255),
         IM_COL32(255, 160, 0, 255),  IM_COL32(255, 214, 10, 255),
-        IM_COL32(110, 116, 150, 255),
+        IM_COL32(110, 116, 150, 255), IM_COL32(120, 255, 90, 255),
     };
     static const ImU32 red[kTabCount] = {
         IM_COL32(255, 52, 40, 255),  IM_COL32(255, 96, 56, 255),
         IM_COL32(255, 140, 40, 255), IM_COL32(230, 40, 80, 255),
         IM_COL32(255, 70, 100, 255), IM_COL32(255, 112, 30, 255),
         IM_COL32(255, 176, 40, 255), IM_COL32(255, 214, 80, 255),
-        IM_COL32(150, 112, 108, 255),
+        IM_COL32(150, 112, 108, 255), IM_COL32(255, 196, 120, 255),
     };
     int i = tab < 0 ? 0 : (tab >= kTabCount ? kTabCount - 1 : tab);
     return (T().id == 2 ? red : T().neon ? neon : green)[i];
@@ -12419,7 +12546,7 @@ void DrawModernFrame(int &tex_budget)
     const float row_h = 50 * s, gap = 4 * s;
     const float top0 = rp.y + 84 * s;
     auto row_y = [&](int i) {
-        return i == kTabSettings ? rq.y - row_h - 14 * s : top0 + i * (row_h + gap);
+        return i >= kTabSettings ? rq.y - (kTabCount - i) * (row_h + gap) - 14 * s + gap : top0 + i * (row_h + gap);
     };
     static float pill_y = -1;
     float want_y = row_y(g_dash_tab);
@@ -12897,9 +13024,10 @@ void DrawHoloFrame(int &tex_budget)
     const float lw = SafeClamp(ws.x * 0.27f, 214.0f * s, 380.0f * s);
     const float gap = 10 * s;
 
-    // Sections: a 3 x 3 grid of tiles
+    // Sections: a grid of tiles, four to a row
     ImVec2 pa(lx0, top);
-    const float tile_w = (lw - 2 * 10 * s - 2 * gap) / 3;
+    const int tile_cols = 4;
+    const float tile_w = (lw - 2 * 10 * s - (tile_cols - 1) * gap) / tile_cols;
     const float tile_h = std::min(tile_w * 0.86f, (bottom - top) * 0.2f);
     const float hh = label->FontSize + 12 * s;
     ImVec2 pb(lx0 + lw, top + hh + 12 * s + 3 * tile_h + 2 * gap + 10 * s);
@@ -12910,7 +13038,7 @@ void DrawHoloFrame(int &tex_budget)
     ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(1, 1, 1, 0.55f));
     ImFont *icon_font = FontOr(g_font_mgr.m_default_font);
     for (int i = 0; i < kTabCount; i++) {
-        int cx = i % 3, ry = i / 3;
+        int cx = i % tile_cols, ry = i / tile_cols;
         ImVec2 a(pa.x + 10 * s + cx * (tile_w + gap), pa.y + hh + 12 * s + ry * (tile_h + gap));
         ImVec2 b(a.x + tile_w, a.y + tile_h);
         ImGui::SetCursorScreenPos(a);
@@ -13785,6 +13913,9 @@ void GameLibraryWindow::Draw()
             break;
         case kTabSettings:
             DrawDashSettingsTab();
+            break;
+        case kTabXenia:
+            DrawXeniaTab();
             break;
         default:
             DrawLibraryTab(tex_budget);

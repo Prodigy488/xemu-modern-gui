@@ -34,16 +34,16 @@ tab (v2.1), four more dashboard styles, achievements that can unlock from the
 game's memory and stick drift tools (v2.2), performance settings in v2.3 (CPU
 boost, GPU boost and per-game settings with an automatic safe mode, plus a fix
 that lets NFL Fever 2004 run), a faster game library with a "Clear library"
-button and a 1.4 GHz CPU option in v2.4, and, new in v2.5, a third theme
-(Tron Red), two more dashboard styles (Holo and Aurora), holographic floating
-game covers, the sphere-and-fins dashboard as the default (now with an X
-emblem on the sphere), sturdier audio, a Linux AppImage again and a fix for
-colours going wrong in some games with GPU boost on.
+button and a 1.4 GHz CPU option in v2.4, a third theme (Tron Red), two more
+dashboard styles (Holo and Aurora), holographic floating game covers, the
+sphere-and-fins dashboard as the default and a fix for colours going wrong in
+some games with GPU boost on in v2.5, and, new in v2.6, **Xbox 360 games
+through Xenia** with Xbox and Xenia settings tabs.
 
 ## Highlights
 
 - **Console-style dashboard** with Home, Library, Insignia, Media, Drive,
-  Homebrew, Patches and Settings tabs, ten styles (v2.2 adds Original Xbox,
+  Homebrew, Patches, Achievements, Xbox and Xenia tabs, ten styles (v2.2 adds Original Xbox,
   Original Blades, Glossy Blades and Modern; v2.5 adds Holo and Aurora) and three
   themes (Neon, Green and, new in v2.5, Tron Red). Everything works from a
   controller.
@@ -65,6 +65,11 @@ colours going wrong in some games with GPU boost on.
   focus and a bug-report diagnostics button** (v2.2).
 - **CPU boost and GPU boost, per-game settings and safe mode** (v2.3), and a
   floating-point fix that lets NFL Fever 2004 run.
+- **Xbox 360 games through your own Xenia** (v2.6): the library lists 360
+  games next to Xbox ones, with All / Xbox / Xbox 360 filters, per-game
+  settings, presets and notes, and starts them in Xenia, optionally inside the
+  xemu window on Windows. New **Xbox** and **Xenia** gear tabs hold the display
+  and render settings of each emulator.
 - **Tron Red, a light-cycle fight in Holo, holographic floating covers and an
   X emblem on the sphere** (v2.5), plus Holo and Aurora dashboard styles and an
   audio chip that skips bad data from a game instead of stopping the emulator.
@@ -177,6 +182,29 @@ see the [Releases](../../releases) page.
   play time.
 - **Quick save and load from the controller:** Back + LB saves the game
   you're playing, Back + RB loads it (one quick save per game).
+
+### Xbox 360 games (through Xenia)
+
+xemu does not emulate the Xbox 360, and this fork does not include or modify
+any 360 emulator. With **Xenia** or **Xenia Canary** that you download
+yourself, the library can list and start 360 games.
+
+- Turn on **Show Xbox 360 games** on the dashboard's **Xenia** tab and choose
+  your `xenia.exe` / `xenia_canary.exe`. Game folders are scanned for disc
+  images (`.iso`), extracted games with a `default.xex`, `.xex` files, Games on
+  Demand and Xbox Live Arcade packages.
+- Games show a **360** badge and get **All / Xbox / Xbox 360** filter tabs.
+  Play time, favorites and covers work as for Xbox games.
+- **Settings for each game:** resolution scale, graphics API (Direct3D 12 or
+  Vulkan), vsync, fullscreen and extra options, with quick presets and a notes
+  box. Defaults for every game are on the Xenia tab.
+- **Inside the xemu window (Windows, experimental):** Xenia's window is shown
+  inside xemu's, with an **Exit Xenia** strip at the top, **Ctrl+Shift+Q**, or
+  Back + Start held for a second to leave. Turn it off on the Xenia tab if a
+  game misbehaves.
+- The **Xbox** tab holds xemu's own renderer (OpenGL or Vulkan), aspect ratio,
+  vsync, fullscreen, shader cache and CPU / GPU boost next to the picture,
+  audio and controller settings.
 
 ### Patches
 

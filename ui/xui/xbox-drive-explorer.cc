@@ -21,6 +21,7 @@
 
 #include "common.hh"
 #include "osk.hh"
+#include "soundtracks.hh"
 #include "game-library.hh"
 #include "IconsFontAwesome6.h"
 #include "misc.hh"
@@ -735,6 +736,12 @@ void DrawToolbar()
     }
     ImGui::SetItemTooltip("%s", tr("Back up the Xbox's game saves to your PC, or put "
                                    "a backup back"));
+    ImGui::SameLine();
+    if (ImGui::Button(tr(ICON_FA_VOLUME_HIGH " Soundtracks"))) {
+        SoundtracksOpenWindow();
+    }
+    ImGui::SetItemTooltip("%s", tr("Add your own music (mp3 and more) to the Xbox "
+                                   "dashboard's soundtracks"));
     ImGui::EndDisabled();
 }
 

@@ -34,7 +34,9 @@ namespace fs = std::filesystem;
 namespace
 {
 
-XboxDrive g_drive;
+// Never destroyed: closing it at exit would flush through QEMU's block layer,
+// which is already shut down by then
+XboxDrive &g_drive = *new XboxDrive();
 std::string g_open_err;
 uint64_t g_open_tried = 0; // ticks of the last failed open
 char g_vol = 'E';

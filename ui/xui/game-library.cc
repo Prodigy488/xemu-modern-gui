@@ -6311,10 +6311,11 @@ void UpdateDiscordPresence()
 // ---------------------------------------------------------------------------
 
 enum DashTab { kTabHome, kTabLibrary, kTabInsignia, kTabMedia, kTabDrive,
-               kTabStore, kTabPatches, kTabAchievements, kTabSettings, kTabXenia, kTabCount };
+               kTabStore, kTabSoundtracks, kTabPatches, kTabAchievements, kTabSettings,
+               kTabXenia, kTabCount };
 const char *const kTabNames[kTabCount] = { N_("Home"),  N_("Library"), N_("Insignia"),
                                            N_("Media"), N_("Drive"),   N_("Homebrew"),
-                                           N_("Patches"), N_("Achievements"),
+                                           N_("Soundtracks"), N_("Patches"), N_("Achievements"),
                                            N_("Xbox"), N_("Xenia") };
 // The two emulator tabs carry a gear, so they read as settings pages
 bool TabHasGear(int t) { return t == kTabSettings || t == kTabXenia; }
@@ -6722,6 +6723,7 @@ void DrawDashTopBar()
     ImVec2 hl_a(0, 0), hl_b(0, 0);
     // The numbers before the names go when the tabs would reach the buttons
     bool show_nums = true;
+    float neon_pad = 18 * s; // room around a neon label
     if (th.neon) {
         ImFont *hud0 = HudFont();
         float need = 14 * s;
@@ -6731,8 +6733,33 @@ void DrawDashTopBar()
                     hud0->CalcTextSizeA(hud0->FontSize, FLT_MAX, 0, "00").x + 6 * s;
         }
         float room = ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 190 * s -
-                     ImGui::GetCursorScreenPos().x;
+                     ImGui::GetItemRectMax().x; // the LB chip is the last thing before the tabs
         show_nums = need <= room;
+        if (!show_nums) {
+            // Still too long without the numbers: tighten the labels as well
+            float bare = 14 * s;
+            for (int t = 0; t < kTabCount; t++) {
+                std::string nm = (TabHasGear(t) ? ICON_FA_GEAR "  " : "") + Upper(tr(kTabNames[t]));
+                bare += ImGui::CalcTextSize(nm.c_str()).x + neon_pad + 2 * s;
+            }
+            if (bare > room) {
+                neon_pad = std::max(8 * s, neon_pad - (bare - room) / kTabCount);
+            }
+        }
+    }
+    // Pills squeeze together when the tabs would reach the buttons
+    float pill_pad = 24 * s;
+    if (!th.neon) {
+        float need = 12 * s;
+        for (int t = 0; t < kTabCount; t++) {
+            std::string tl = (TabHasGear(t) ? ICON_FA_GEAR "  " : "") + std::string(tr(kTabNames[t]));
+            need += ImGui::CalcTextSize(tl.c_str()).x + pill_pad + 3 * s;
+        }
+        float room = ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 190 * s -
+                     ImGui::GetItemRectMax().x; // the LB chip is the last thing before the tabs
+        if (need > room) {
+            pill_pad = std::max(10 * s, pill_pad - (need - room) / kTabCount);
+        }
     }
     for (int t = 0; t < kTabCount; t++) {
         bool on = g_dash_tab == t;
@@ -6748,14 +6775,14 @@ void DrawDashTopBar()
             if (!show_nums) {
                 ns = ImVec2(0, 0);
             }
-            ImVec2 size(ns.x + (show_nums ? 6 * s : 0) + ts.x + 18 * s, ts.y + 18 * s);
+            ImVec2 size(ns.x + (show_nums ? 6 * s : 0) + ts.x + neon_pad, ts.y + 18 * s);
             ImVec2 p(ImGui::GetCursorScreenPos().x, y_mid - size.y / 2);
             ImGui::SetCursorScreenPos(p);
             if (ImGui::InvisibleButton(kTabNames[t], size, ImGuiButtonFlags_EnableNav)) {
                 SwitchTab(t);
             }
             bool hov = ImGui::IsItemHovered();
-            float tx = p.x + 12 * s;
+            float tx = p.x + neon_pad * 0.66f;
             float ty = p.y + (size.y - ts.y) / 2;
             if (show_nums) {
                 dl->AddText(hud, hud->FontSize, ImVec2(tx, ty + ts.y - ns.y - 2 * s),
@@ -6765,13 +6792,13 @@ void DrawDashTopBar()
                         on ? th.accent : hov ? th.text : th.dim, name.c_str());
             if (on) {
                 hl_a = ImVec2(tx, p.y + size.y - 8 * s);
-                hl_b = ImVec2(p.x + size.x - 12 * s, p.y + size.y + 1 * s);
+                hl_b = ImVec2(p.x + size.x - neon_pad * 0.66f, p.y + size.y + 1 * s);
             }
         } else {
             ImGui::SameLine(0, t ? 3 * s : 12 * s);
             std::string tlabel = (TabHasGear(t) ? ICON_FA_GEAR "  " : "") + std::string(tr(kTabNames[t]));
             ImVec2 ts = ImGui::CalcTextSize(tlabel.c_str());
-            ImVec2 size(ts.x + 24 * s, ts.y + 14 * s);
+            ImVec2 size(ts.x + pill_pad, ts.y + 14 * s);
             ImGui::SetCursorScreenPos(
                 ImVec2(ImGui::GetCursorScreenPos().x, y_mid - size.y / 2));
             ImVec2 tp = ImGui::GetCursorScreenPos();
@@ -9843,6 +9870,28 @@ void DrawStoreBrowser()
     }
 }
 
+// Music: add your own songs to the Xbox dashboard (the same screen as the
+// Custom Soundtracks window)
+void DrawSoundtracksTab()
+{
+    const float s = g_viewport_mgr.m_scale;
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 a = ImGui::GetCursorScreenPos();
+    DashCard(dl, a, ImVec2(a.x + avail.x, a.y + avail.y));
+    ImGui::SetCursorScreenPos(a);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(26 * s, 22 * s));
+    ImGui::BeginChild("##soundtracks", avail,
+                      ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened);
+    DashLabel(tr("Music"));
+    DashTitle(tr("Custom soundtracks"));
+    SoundtracksDrawContent();
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+}
+
 void DrawStoreTab()
 {
     const float s = g_viewport_mgr.m_scale;
@@ -12106,6 +12155,9 @@ void DrawTabContent(int tab, int &tex_budget)
     case kTabStore:
         DrawStoreTab();
         break;
+    case kTabSoundtracks:
+        DrawSoundtracksTab();
+        break;
     case kTabPatches:
         DrawPatchesTab(tex_budget);
         break;
@@ -12211,21 +12263,21 @@ ImU32 SectionColor(int tab)
         IM_COL32(86, 178, 22, 255),  IM_COL32(32, 132, 72, 255),
         IM_COL32(0, 150, 136, 255),  IM_COL32(52, 120, 200, 255),
         IM_COL32(110, 90, 190, 255), IM_COL32(196, 64, 96, 255),
-        IM_COL32(214, 120, 30, 255), IM_COL32(200, 160, 30, 255),
+        IM_COL32(40, 150, 190, 255), IM_COL32(214, 120, 30, 255), IM_COL32(200, 160, 30, 255),
         IM_COL32(96, 110, 104, 255), IM_COL32(150, 150, 60, 255),
     };
     static const ImU32 neon[kTabCount] = {
         IM_COL32(0, 200, 230, 255),  IM_COL32(40, 110, 255, 255),
         IM_COL32(57, 210, 130, 255), IM_COL32(150, 70, 255, 255),
         IM_COL32(255, 46, 136, 255), IM_COL32(255, 90, 60, 255),
-        IM_COL32(255, 160, 0, 255),  IM_COL32(255, 214, 10, 255),
+        IM_COL32(0, 230, 255, 255),  IM_COL32(255, 160, 0, 255),  IM_COL32(255, 214, 10, 255),
         IM_COL32(110, 116, 150, 255), IM_COL32(120, 255, 90, 255),
     };
     static const ImU32 red[kTabCount] = {
         IM_COL32(255, 52, 40, 255),  IM_COL32(255, 96, 56, 255),
         IM_COL32(255, 140, 40, 255), IM_COL32(230, 40, 80, 255),
         IM_COL32(255, 70, 100, 255), IM_COL32(255, 112, 30, 255),
-        IM_COL32(255, 176, 40, 255), IM_COL32(255, 214, 80, 255),
+        IM_COL32(255, 120, 150, 255), IM_COL32(255, 176, 40, 255), IM_COL32(255, 214, 80, 255),
         IM_COL32(150, 112, 108, 255), IM_COL32(255, 196, 120, 255),
     };
     int i = tab < 0 ? 0 : (tab >= kTabCount ? kTabCount - 1 : tab);
@@ -12663,6 +12715,7 @@ const char *SectionIcon(int tab)
     case kTabMedia:        return ICON_FA_IMAGE;
     case kTabDrive:        return ICON_FA_HARD_DRIVE;
     case kTabStore:        return ICON_FA_DOWNLOAD;
+    case kTabSoundtracks:  return ICON_FA_VOLUME_HIGH;
     case kTabPatches:      return ICON_FA_WAND_MAGIC_SPARKLES;
     case kTabAchievements: return ICON_FA_TROPHY;
     default:               return ICON_FA_GEAR;
@@ -12719,7 +12772,9 @@ void DrawModernFrame(int &tex_budget)
     }
 
     // The rail: sections, then Settings by itself at the foot
-    const float row_h = 50 * s, gap = 4 * s;
+    // Rows shrink a little when there are too many for a short window
+    const float gap = 4 * s;
+    const float row_h = std::min(50 * s, ((rq.y - rp.y) - 84 * s - 24 * s) / kTabCount - gap);
     const float top0 = rp.y + 84 * s;
     auto row_y = [&](int i) {
         return i >= kTabSettings ? rq.y - (kTabCount - i) * (row_h + gap) - 14 * s + gap : top0 + i * (row_h + gap);
@@ -14081,6 +14136,9 @@ void GameLibraryWindow::Draw()
             break;
         case kTabStore:
             DrawStoreTab();
+            break;
+        case kTabSoundtracks:
+            DrawSoundtracksTab();
             break;
         case kTabPatches:
             DrawPatchesTab(tex_budget);

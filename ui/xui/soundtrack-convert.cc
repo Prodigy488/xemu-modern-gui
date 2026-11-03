@@ -44,6 +44,8 @@ namespace
 {
 std::string g_chosen_ffmpeg;
 bool g_chosen_loaded = false;
+std::string g_found_ffmpeg; // the last search, redone every few seconds
+uint64_t g_found_at = 0;
 
 fs::path ChosenFile()
 {
@@ -594,11 +596,26 @@ void SoundtrackSetFfmpeg(const std::string &path)
 {
     LoadChosen();
     g_chosen_ffmpeg = path;
+    g_found_at = 0;
     std::ofstream f(ChosenFile(), std::ios::trunc);
     f << path << "\n";
 }
 
+static std::string FindFfmpegNow();
+
+// Looked for at most every few seconds (it is asked for on every frame)
 std::string SoundtrackFindFfmpeg()
+{
+    uint64_t now = SDL_GetTicks();
+    if (g_found_at && now - g_found_at < 3000) {
+        return g_found_ffmpeg;
+    }
+    g_found_ffmpeg = FindFfmpegNow();
+    g_found_at = now ? now : 1;
+    return g_found_ffmpeg;
+}
+
+static std::string FindFfmpegNow()
 {
     LoadChosen();
     if (!g_chosen_ffmpeg.empty() && IsFile(fs::u8path(g_chosen_ffmpeg))) {

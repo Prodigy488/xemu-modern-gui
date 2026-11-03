@@ -566,6 +566,11 @@ void DrawContent()
 }
 } // namespace
 
+void SoundtracksDrawContent(void)
+{
+    DrawContent();
+}
+
 void SoundtracksOpenWindow(void)
 {
     g_show = true;

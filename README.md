@@ -67,8 +67,9 @@ Xbox 360 games.
   focus and a bug-report diagnostics button** (v2.2).
 - **CPU boost and GPU boost, per-game settings and safe mode** (v2.3), and a
   floating-point fix that lets NFL Fever 2004 run.
-- **Custom soundtracks and 360 cover art** (v2.6.1): Games > Custom
-  Soundtracks (or the Xbox tab's Audio section) turns mp3, flac, ogg, m4a, wav
+- **Custom soundtracks and 360 cover art** (v2.6.1): the new Soundtracks tab
+  next to Homebrew (also Games > Custom Soundtracks, the Drive tab and the
+  Xbox tab's Audio section) turns mp3, flac, ogg, m4a, wav
   and wma files into the WMA the Xbox dashboard plays and adds them to the
   emulated hard drive as a new soundtrack, or to one you already have. Get
   covers now also fetches box art for Xbox 360 games, and starting a 360 game

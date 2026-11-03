@@ -18,3 +18,5 @@ void SoundtracksOpenWindow(void);
 // Every frame: moves conversion along and finishes the copy to the Xbox
 void SoundtracksUpdate(void);
 void SoundtracksWindowDraw(void);
+// The screen itself, for the dashboard's Soundtracks tab
+void SoundtracksDrawContent(void);

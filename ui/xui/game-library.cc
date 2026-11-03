@@ -251,9 +251,13 @@ std::atomic<int> g_covers_done{ 0 };
 std::atomic<int> g_covers_total{ 0 };
 std::atomic<int> g_covers_found{ 0 };
 std::mutex g_cover_mutex;
-std::vector<uint32_t> g_covers_fetched;  // finished downloads, for reload
-std::vector<uint32_t> g_covers_404;      // worker results, merged on main
+// Cover jobs are keyed by title ID, with bit 32 set for an Xbox 360 game
+// (an Xbox and a 360 title can share an ID)
+constexpr uint64_t kCover360 = 1ull << 32;
+std::vector<uint64_t> g_covers_fetched;  // finished downloads, for reload
+std::vector<uint64_t> g_covers_404;      // worker results, merged on main
 std::set<uint32_t> g_covers_missing;     // not in the database (persisted)
+std::set<uint32_t> g_covers_missing360;  // same for Xbox 360 titles (persisted)
 bool g_covers_finished = false;
 
 // Preview video player. Heap-allocated and never destroyed: its GL texture
@@ -313,7 +317,7 @@ void ApplyPreviewRequests()
 // Resume points: a snapshot named "Resume <TITLE ID>" saved when leaving a
 // game. Saving needs the main loop lock and the GL context, so actions that
 // leave a game are queued and run from Update().
-enum class LeaveAction { None, Quit, Eject, Launch };
+enum class LeaveAction { None, Quit, Eject, Launch, Xenia };
 LeaveAction g_leave_action = LeaveAction::None;
 std::string g_leave_launch_path;
 
@@ -645,6 +649,12 @@ void LoadLibrary()
                     (uint32_t)strtoul(m.get<std::string>().c_str(), NULL, 16));
             }
         }
+        for (auto &m : j.value("covers_missing_x360", json::array())) {
+            if (m.is_string()) {
+                g_covers_missing360.insert(
+                    (uint32_t)strtoul(m.get<std::string>().c_str(), NULL, 16));
+            }
+        }
         for (auto &h : j.value("hidden", json::array())) {
             if (h.is_string()) {
                 g_hidden.insert(h.get<std::string>());
@@ -860,6 +870,11 @@ void SaveLibrary(bool async = false)
         missing.push_back(TitleIdHex(id));
     }
     j["covers_missing"] = missing;
+    json missing360 = json::array();
+    for (uint32_t id : g_covers_missing360) {
+        missing360.push_back(TitleIdHex(id));
+    }
+    j["covers_missing_x360"] = missing360;
     json patches = json::object();
     for (auto &[id, items] : g_patches) {
         json list = json::array();
@@ -1354,8 +1369,9 @@ std::vector<fs::path> ArtworkCandidates(const LibraryEntry &e)
     for (const char *ext : exts) {
         out.push_back(img.parent_path() / (img.stem().u8string() + ext));
     }
-    if (e.valid && !e.x360) {
-        out.push_back(IconCacheDir() / "covers" / (TitleIdHex(e.title_id) + ".jpg"));
+    if (e.valid) {
+        out.push_back(IconCacheDir() / "covers" /
+                      ((e.x360 ? "x360-" : "") + TitleIdHex(e.title_id) + ".jpg"));
     }
     if (e.has_icon) {
         out.push_back(IconCacheDir() /
@@ -1734,6 +1750,7 @@ void SaveResumePoint()
 }
 
 void LaunchNow(const std::string &path);
+void CloseXboxGameForXenia();
 
 // Run a queued action that leaves the current game (from Update())
 void RunLeaveAction()
@@ -1743,8 +1760,13 @@ void RunLeaveAction()
     if (action == LeaveAction::None) {
         return;
     }
-    SaveResumePoint();
+    if (action != LeaveAction::Xenia || g_config.general.library.auto_resume) {
+        SaveResumePoint();
+    }
     switch (action) {
+    case LeaveAction::Xenia:
+        CloseXboxGameForXenia();
+        break;
     case LeaveAction::Quit:
         qemu_system_shutdown_request(SHUTDOWN_CAUSE_HOST_UI);
         break;
@@ -4928,15 +4950,21 @@ void DrawSettingsPopup()
     ImGui::EndPopup();
 }
 
-fs::path DownloadedCoverPath(uint32_t title_id)
+fs::path DownloadedCoverPath(uint32_t title_id, bool x360 = false)
 {
-    return IconCacheDir() / "covers" / (TitleIdHex(title_id) + ".jpg");
+    return IconCacheDir() / "covers" /
+           ((x360 ? "x360-" : "") + TitleIdHex(title_id) + ".jpg");
 }
 
 // xdb keeps titles/<publisher>/<number>/cover_front.jpg, e.g. MS-004 ->
 // titles/MS/004. Only titles with a standard two-letter publisher code.
-std::string CoverUrl(uint32_t title_id)
+std::string CoverUrl(uint32_t title_id, bool x360 = false)
 {
+    if (x360) {
+        // Xenia Manager's x360db keeps titles/<TITLE ID>/artwork/boxart.jpg
+        return "https://raw.githubusercontent.com/xenia-manager/x360db/main/titles/" +
+               TitleIdHex(title_id) + "/artwork/boxart.jpg";
+    }
     std::string id = FormatTitleId(title_id);
     if (id.size() != 6 || id[2] != '-') {
         return "";
@@ -4945,20 +4973,22 @@ std::string CoverUrl(uint32_t title_id)
            id.substr(0, 2) + "/" + id.substr(3) + "/cover_front.jpg";
 }
 
-void CoverWorker(std::vector<uint32_t> ids)
+void CoverWorker(std::vector<uint64_t> ids)
 {
     std::error_code ec;
     fs::create_directories(IconCacheDir() / "covers", ec);
-    for (uint32_t id : ids) {
+    for (uint64_t key : ids) {
         if (g_scan_cancel) {
             break;
         }
-        std::string url = CoverUrl(id);
+        bool x360 = (key & kCover360) != 0;
+        uint32_t id = (uint32_t)key;
+        std::string url = CoverUrl(id, x360);
         GByteArray *data = g_byte_array_new();
         int code = url.empty() ? 404 : http_get(url.c_str(), data, NULL, NULL);
         bool is_jpeg = data->len > 4 && data->data[0] == 0xFF && data->data[1] == 0xD8;
         if (code == 200 && is_jpeg) {
-            fs::path out = DownloadedCoverPath(id);
+            fs::path out = DownloadedCoverPath(id, x360);
             fs::path tmp = out;
             tmp += ".tmp";
             {
@@ -4968,10 +4998,10 @@ void CoverWorker(std::vector<uint32_t> ids)
             fs::rename(tmp, out, ec);
             g_covers_found++;
             std::lock_guard<std::mutex> lock(g_cover_mutex);
-            g_covers_fetched.push_back(id);
+            g_covers_fetched.push_back(key);
         } else if (code == 404) {
             std::lock_guard<std::mutex> lock(g_cover_mutex);
-            g_covers_404.push_back(id); // don't ask again
+            g_covers_404.push_back(key); // don't ask again
         }
         g_byte_array_unref(data);
         g_covers_done++;
@@ -4990,13 +5020,15 @@ void StartCoverDownload()
         g_cover_thread.join();
     }
     // Games without a cover of their own or a previous download
-    std::vector<uint32_t> ids;
-    std::set<uint32_t> seen;
+    std::vector<uint64_t> ids;
+    std::set<uint64_t> seen;
     std::error_code ec;
     for (auto &e : g_entries) {
-        if (!e.valid || e.x360 || seen.count(e.title_id) ||
-            g_covers_missing.count(e.title_id) || CoverUrl(e.title_id).empty() ||
-            fs::exists(DownloadedCoverPath(e.title_id), ec)) {
+        uint64_t key = (uint64_t)e.title_id | (e.x360 ? kCover360 : 0);
+        if (!e.valid || seen.count(key) ||
+            (e.x360 ? g_covers_missing360 : g_covers_missing).count(e.title_id) ||
+            CoverUrl(e.title_id, e.x360).empty() ||
+            fs::exists(DownloadedCoverPath(e.title_id, e.x360), ec)) {
             continue;
         }
         bool own_cover = false;
@@ -5005,14 +5037,14 @@ void StartCoverDownload()
                 p.parent_path() == IconCacheDir()) {
                 continue; // the embedded disc icon doesn't count
             }
-            if (p != DownloadedCoverPath(e.title_id) && fs::exists(p, ec)) {
+            if (p != DownloadedCoverPath(e.title_id, e.x360) && fs::exists(p, ec)) {
                 own_cover = true;
                 break;
             }
         }
         if (!own_cover) {
-            seen.insert(e.title_id);
-            ids.push_back(e.title_id);
+            seen.insert(key);
+            ids.push_back(key);
         }
     }
     if (ids.empty()) {
@@ -5038,7 +5070,7 @@ void StartCoverDownload()
 // Main thread: show newly downloaded covers and report when done
 void MergeCoverResults()
 {
-    std::vector<uint32_t> fetched, missing;
+    std::vector<uint64_t> fetched, missing;
     bool finished = false;
     {
         std::lock_guard<std::mutex> lock(g_cover_mutex);
@@ -5047,10 +5079,14 @@ void MergeCoverResults()
         finished = g_covers_finished;
         g_covers_finished = false;
     }
-    g_covers_missing.insert(missing.begin(), missing.end());
-    for (uint32_t id : fetched) {
+    for (uint64_t key : missing) {
+        ((key & kCover360) ? g_covers_missing360 : g_covers_missing)
+            .insert((uint32_t)key);
+    }
+    for (uint64_t key : fetched) {
         for (auto &e : g_entries) {
-            if (e.valid && e.title_id == id) {
+            if (e.valid && e.title_id == (uint32_t)key &&
+                e.x360 == ((key & kCover360) != 0)) {
                 FreeTexture(e); // reload with the new cover
             }
         }
@@ -11608,6 +11644,20 @@ void LaunchNow(const std::string &path)
 bool g_xenia_vm_paused = false;   // we paused the Xbox while Xenia runs
 bool g_xenia_was_open = false;    // the library was open when Xenia started
 
+// Xenia is on screen: the original Xbox game is closed (its resume point was
+// saved first), so its picture and sound don't overlap Xenia's. The console is
+// left on the dashboard, paused, until Xenia is closed.
+void CloseXboxGameForXenia()
+{
+    ActionEjectDiscNow();
+    ActionReset();
+    if (runstate_is_running()) {
+        vm_stop(RUN_STATE_PAUSED);
+    }
+    g_xenia_vm_paused = true;
+    fprintf(stderr, "xenia: the Xbox game was closed so it doesn't overlap\n");
+}
+
 void LaunchXenia(const std::string &path)
 {
     LibraryEntry *e = FindEntry(path);
@@ -11632,7 +11682,14 @@ void LaunchXenia(const std::string &path)
     // The Xbox would keep running behind Xenia; hold it, and don't let the
     // controller you are playing with in Xenia also move the dashboard
     g_xenia_vm_paused = false;
-    if (g_xenia.pause_xemu && runstate_is_running()) {
+    const char *dvd = g_config.sys.files.dvd_path;
+    if (dvd && dvd[0]) {
+        // An Xbox game is open: save a resume point and close it (in Update)
+        g_leave_action = LeaveAction::Xenia;
+        if (ShouldSaveResumePoint()) {
+            xemu_queue_notification(tr("Saving a resume point..."));
+        }
+    } else if (g_xenia.pause_xemu && runstate_is_running()) {
         vm_stop(RUN_STATE_PAUSED);
         g_xenia_vm_paused = true;
     }

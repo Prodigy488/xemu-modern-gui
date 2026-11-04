@@ -4,7 +4,8 @@
 // xemu does not emulate the Xbox 360. This module lets the game library list
 // Xbox 360 games (disc images, extracted games, Games on Demand and Xbox Live
 // Arcade packages) and start them in the user's own copy of Xenia / Xenia
-// Canary. Xenia is never bundled or modified.
+// Canary. Xenia is never modified; only the Linux build includes an unmodified
+// copy of Xenia Canary.
 //
 // Pure C++17 with no emulator dependencies.
 //
@@ -69,6 +70,16 @@ std::string X360NameFromFile(const std::string &path);
 
 // Title ID of a XEX image in memory; false if it isn't one.
 bool X360ParseXex(const uint8_t *data, size_t len, uint32_t *title_id);
+
+// The Linux build includes Xenia Canary (BSD 3-Clause, licence shipped next
+// to it); it is unmodified. "" when this build does not include it (always on
+// Windows and macOS).
+std::string XeniaBundledVersion();
+// The included Xenia lives in the read-only, moving AppImage mount, so it is
+// copied to dest_dir (once, and again when this build brings another
+// version). *exe is the copy to run. False with *err on failure.
+bool XeniaInstallBundled(const std::string &dest_dir, std::string *exe,
+                         std::string *err);
 
 // Start the game in Xenia. False with *err (plain words) on failure.
 bool XeniaLaunch(const std::string &game_path, std::string *err,

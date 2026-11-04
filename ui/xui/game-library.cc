@@ -584,6 +584,37 @@ void FreeTexture(LibraryEntry &e)
 // Persistence
 // ---------------------------------------------------------------------------
 
+// The Linux build includes Xenia Canary. Its copy in the install can't be run
+// from (read-only, and the path changes on every start), so it is copied to
+// the user's xemu folder and that copy is what the setting points at.
+std::string IncludedXeniaPath()
+{
+    return (BasePath() / "xenia-canary" / "xenia_canary_linux.AppImage").u8string();
+}
+
+// force: use it even if the user had chosen another Xenia
+void UseIncludedXenia(bool force)
+{
+    if (XeniaBundledVersion().empty()) {
+        return;
+    }
+    std::error_code ec;
+    const bool own = !g_xenia.exe.empty() && g_xenia.exe != IncludedXeniaPath() &&
+                     fs::is_regular_file(fs::u8path(g_xenia.exe), ec);
+    if (own && !force) {
+        return; // a Xenia the user chose stays
+    }
+    std::string exe, err;
+    if (XeniaInstallBundled((BasePath() / "xenia-canary").u8string(), &exe, &err)) {
+        if (g_xenia.exe != exe) {
+            g_xenia.exe = exe;
+            g_dirty = true;
+        }
+    } else {
+        fprintf(stderr, "xenia: could not set up the included Xenia: %s\n", err.c_str());
+    }
+}
+
 void LoadLibrary()
 {
     std::vector<uint8_t> data;
@@ -5450,7 +5481,11 @@ void DrawXeniaControls(float s)
     ImGui::SameLine();
     if (ImGui::Button(tr("Browse..."))) {
         static const SDL_DialogFileFilter xf[] = {
+#ifdef _WIN32
             { "Programs (*.exe)", "exe" },
+#else
+            { "Xenia (*.AppImage, *.exe)", "AppImage;exe" },
+#endif
             { "All Files", "*" },
         };
         std::string start = g_xenia.exe.empty()
@@ -5461,7 +5496,24 @@ void DrawXeniaControls(float s)
             g_dirty = true;
         });
     }
-    if (XeniaConfigured()) {
+    const std::string included = XeniaBundledVersion();
+    if (!included.empty()) {
+        // Linux build: Xenia Canary comes with it
+        if (g_xenia.exe == IncludedXeniaPath() && XeniaConfigured()) {
+            ImGui::TextColored(ImVec4(0.35f, 0.85f, 0.4f, 1), "%s",
+                               tr("Using the Xenia Canary included with this build"));
+        } else {
+            ImGui::TextDisabled("%s", tr("Xenia Canary is included with this build"));
+            ImGui::SameLine();
+            if (ImGui::SmallButton(tr("Use it##incxenia"))) {
+                UseIncludedXenia(true);
+            }
+        }
+        ImGui::TextDisabled("Xenia Canary %s (BSD 3-Clause)", included.c_str());
+    }
+    if (!included.empty() && g_xenia.exe == IncludedXeniaPath() && XeniaConfigured()) {
+        // nothing more to say
+    } else if (XeniaConfigured()) {
         ImGui::TextColored(ImVec4(0.35f, 0.85f, 0.4f, 1), "%s", tr("Xenia found"));
     } else {
         ImGui::TextColored(ImVec4(0.95f, 0.6f, 0.3f, 1), "%s",
@@ -11967,6 +12019,7 @@ void GameLibraryWindow::Update()
         g_loaded = true;
         atexit(GameLibraryShutdown);
         LoadLibrary();
+        UseIncludedXenia(false);
         AchievementsLoad((BasePath() / "achievements.json").u8string(),
                          (BasePath() / "achievements").u8string());
         StartCompatRefresh();

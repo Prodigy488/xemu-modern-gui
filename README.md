@@ -119,7 +119,8 @@ Windows builds are on the [Releases](../../releases) page. Unzip and run
 settings, EEPROM and hard disk images carry over.
 
 A Linux x86_64 AppImage is also on the Releases page, for
-testing: make the AppImage executable and run it. It has had very little
+testing: make the AppImage executable and run it. It includes Xenia Canary for
+Xbox 360 games (see below). It has had very little
 testing and needs glibc 2.35 or newer (Ubuntu 22.04+, Fedora 36+, Debian 12+).
 
 You still need your **own** MCPX boot ROM, BIOS (flash ROM) and hard disk
@@ -194,12 +195,15 @@ see the [Releases](../../releases) page.
 
 ### Xbox 360 games (through Xenia)
 
-xemu does not emulate the Xbox 360, and this fork does not include or modify
-any 360 emulator. With **Xenia** or **Xenia Canary** that you download
-yourself, the library can list and start 360 games.
+xemu does not emulate the Xbox 360, and this fork does not modify any 360
+emulator. With **Xenia** or **Xenia Canary**, the library can list and start
+360 games. On Windows you download Xenia yourself. The **Linux AppImage
+includes an unmodified Xenia Canary** (BSD 3-Clause, Ben Vanik and the Xenia
+contributors, licence included), so it works out of the box there.
 
 - Turn on **Show Xbox 360 games** on the dashboard's **Xenia** tab and choose
-  your `xenia.exe` / `xenia_canary.exe`. Game folders are scanned for disc
+  your `xenia.exe` / `xenia_canary.exe`. In the Linux AppImage the included
+  Xenia Canary is already selected; you can still choose another one. Game folders are scanned for disc
   images (`.iso`), extracted games with a `default.xex`, `.xex` files, Games on
   Demand and Xbox Live Arcade packages.
 - Games show a **360** badge and get **All / Xbox / Xbox 360** filter tabs.

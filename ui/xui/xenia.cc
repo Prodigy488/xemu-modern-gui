@@ -14,6 +14,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <unordered_set>
 
 #ifdef _WIN32
@@ -532,6 +533,183 @@ bool XeniaConfigured()
     return fs::is_regular_file(fs::u8path(g_xenia.exe), ec);
 }
 
+#ifndef _WIN32
+namespace {
+
+const char kBundledName[] = "xenia_canary_linux.AppImage";
+const char kBundledStamp[] = "xenia-canary.txt";   // version, one line
+const char kBundledLicense[] = "LICENSE.txt";
+
+// Where the build put Xenia: <install>/share/xemu/xenia-canary. The AppImage
+// has <mount>/usr/bin/xemu, so that is found from the program's own path.
+fs::path BundledDir()
+{
+    std::vector<fs::path> where;
+    char buf[4096];
+    ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (n > 0) {
+        buf[n] = 0;
+        fs::path bin = fs::path(buf).parent_path();
+        where.push_back(bin.parent_path() / "share" / "xemu" / "xenia-canary");
+        where.push_back(bin / "xenia-canary");
+    }
+    if (const char *appdir = getenv("APPDIR")) {
+        where.push_back(fs::path(appdir) / "usr" / "share" / "xemu" / "xenia-canary");
+    }
+    where.push_back("/usr/share/xemu/xenia-canary");
+    std::error_code ec;
+    for (auto &d : where) {
+        if (fs::is_regular_file(d / kBundledName, ec)) {
+            return d;
+        }
+    }
+    return fs::path();
+}
+
+std::string ReadSmallText(const fs::path &p)
+{
+    std::ifstream f(p, std::ios::binary);
+    std::string s((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) {
+        s.pop_back();
+    }
+    return s;
+}
+
+// An AppImage mounts itself with FUSE 2. Without it (Ubuntu 22.04 and newer
+// don't install it) it can still run by unpacking itself first.
+bool FuseAvailable()
+{
+    std::error_code ec;
+    if (access("/dev/fuse", R_OK | W_OK) != 0) {
+        return false;
+    }
+    static const char *dirs[] = { "/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu",
+                                  "/usr/lib64", "/usr/lib", "/lib64", "/lib",
+                                  "/usr/lib/aarch64-linux-gnu" };
+    for (const char *d : dirs) {
+        if (fs::exists(fs::path(d) / "libfuse.so.2", ec)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The environment for Xenia. When xemu itself is an AppImage its AppRun
+// variables must not leak into another AppImage.
+std::vector<std::string> ChildEnvironment(bool extract_and_run)
+{
+    std::vector<std::string> out;
+    const char *appdir = getenv("APPDIR");
+    const bool in_appimage = appdir || getenv("APPIMAGE");
+    for (char **e = environ; e && *e; ++e) {
+        std::string kv = *e;
+        std::string key = kv.substr(0, kv.find('='));
+        if (key == "APPIMAGE_EXTRACT_AND_RUN") {
+            continue;
+        }
+        if (in_appimage) {
+            if (key == "APPDIR" || key == "APPIMAGE" || key == "ARGV0" || key == "OWD") {
+                continue;
+            }
+            if (key == "LD_LIBRARY_PATH" && appdir) {
+                std::string kept, val = kv.substr(key.size() + 1);
+                size_t pos = 0;
+                while (pos <= val.size()) {
+                    size_t end = val.find(':', pos);
+                    if (end == std::string::npos) {
+                        end = val.size();
+                    }
+                    std::string part = val.substr(pos, end - pos);
+                    if (!part.empty() && part.compare(0, strlen(appdir), appdir) != 0) {
+                        kept += (kept.empty() ? "" : ":") + part;
+                    }
+                    pos = end + 1;
+                }
+                if (!kept.empty()) {
+                    out.push_back("LD_LIBRARY_PATH=" + kept);
+                }
+                continue;
+            }
+        }
+        out.push_back(kv);
+    }
+    if (extract_and_run) {
+        out.push_back("APPIMAGE_EXTRACT_AND_RUN=1");
+    }
+    return out;
+}
+
+} // namespace
+#endif
+
+std::string XeniaBundledVersion()
+{
+#ifndef _WIN32
+    fs::path d = BundledDir();
+    if (!d.empty()) {
+        std::string v = ReadSmallText(d / kBundledStamp);
+        return v.empty() ? std::string("Canary") : v;
+    }
+#endif
+    return std::string();
+}
+
+bool XeniaInstallBundled(const std::string &dest_dir, std::string *exe, std::string *err)
+{
+#ifdef _WIN32
+    (void)dest_dir; (void)exe;
+    if (err) *err = "This build does not include Xenia";
+    return false;
+#else
+    auto fail = [&](const std::string &m) {
+        if (err) *err = m;
+        return false;
+    };
+    fs::path src = BundledDir();
+    if (src.empty()) {
+        return fail("This build does not include Xenia");
+    }
+    std::error_code ec;
+    fs::path dst = fs::u8path(dest_dir);
+    fs::create_directories(dst, ec);
+    if (ec) {
+        return fail("Could not create " + dst.u8string());
+    }
+    fs::path target = dst / kBundledName;
+    std::string stamp = ReadSmallText(src / kBundledStamp);
+    bool current = fs::is_regular_file(target, ec) &&
+                   fs::file_size(target, ec) == fs::file_size(src / kBundledName, ec) &&
+                   ReadSmallText(dst / kBundledStamp) == stamp;
+    if (!current) {
+        // Copy beside it and rename: a Xenia that is running keeps its file
+        fs::path tmp = dst / (std::string(kBundledName) + ".part");
+        fs::copy_file(src / kBundledName, tmp, fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            return fail("Could not copy Xenia: " + ec.message());
+        }
+        fs::permissions(tmp,
+                        fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec |
+                            fs::perms::others_read | fs::perms::others_exec,
+                        ec);
+        fs::rename(tmp, target, ec);
+        if (ec) {
+            fs::remove(tmp, ec);
+            return fail("Could not install Xenia: " + ec.message());
+        }
+        std::ofstream(dst / kBundledStamp, std::ios::binary | std::ios::trunc) << stamp << "\n";
+        fs::copy_file(src / kBundledLicense, dst / kBundledLicense,
+                      fs::copy_options::overwrite_existing, ec);
+        fprintf(stderr, "xenia: installed the included Xenia Canary (%s) to %s\n",
+                stamp.c_str(), target.c_str());
+    }
+    if (exe) {
+        *exe = target.u8string();
+    }
+    return true;
+#endif
+}
+
 bool XeniaIsRunning() { return g_running; }
 std::string XeniaRunningPath() { return g_running ? g_path : std::string(); }
 
@@ -659,8 +837,18 @@ bool XeniaLaunch(const std::string &game_path, std::string *err,
     // Xenia's own folder is its working directory
     posix_spawn_file_actions_addchdir_np(&fa, cwd.u8string().c_str());
 #endif
+    // An AppImage (the included Xenia, or one the user chose) is started with
+    // a clean environment, and unpacks itself when FUSE is not installed
+    std::vector<std::string> env_store =
+        ChildEnvironment(ext == ".appimage" && !FuseAvailable());
+    std::vector<char *> envp;
+    for (auto &e : env_store) {
+        envp.push_back(const_cast<char *>(e.c_str()));
+    }
+    envp.push_back(nullptr);
+
     pid_t pid = 0;
-    int rc = posix_spawnp(&pid, argv[0], &fa, NULL, argv.data(), environ);
+    int rc = posix_spawnp(&pid, argv[0], &fa, NULL, argv.data(), envp.data());
     posix_spawn_file_actions_destroy(&fa);
     if (rc != 0) {
         return fail(ext == ".exe" ? "Could not start Xenia (is Wine installed?)"

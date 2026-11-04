@@ -164,6 +164,27 @@ jobs:
         tar -C appimage -xf data.tar*
         install -DT src/xemu.metainfo.xml appimage/usr/share/metainfo/xemu.metainfo.xml
 
+        # Include Xenia Canary (Xbox 360 emulator), unmodified. It is BSD
+        # 3-Clause, so its licence goes next to it. xemu copies it to the
+        # user's folder on first start. If it can't be fetched the build goes
+        # on without it.
+        xdir=appimage/usr/share/xemu/xenia-canary
+        xurl=https://github.com/xenia-canary/xenia-canary/releases/latest/download/xenia_canary_linux.AppImage
+        mkdir -p "$xdir"
+        xtag=$(curl -s -o /dev/null -w '%{redirect_url}' "$xurl" | awk -F/ '{print $(NF-1)}')
+        if [ -n "$xtag" ] \
+            && curl -fsSL --retry 3 -o "$xdir/xenia_canary_linux.AppImage" "$xurl" \
+            && [ "$(stat -c%s "$xdir/xenia_canary_linux.AppImage")" -gt 5000000 ] \
+            && [ "$(head -c4 "$xdir/xenia_canary_linux.AppImage" | od -An -c | tr -d ' ')" = "177ELF" ]; then
+          chmod 755 "$xdir/xenia_canary_linux.AppImage"
+          echo "$xtag" > "$xdir/xenia-canary.txt"
+          install -DT src/third-party/xenia-canary/LICENSE.txt "$xdir/LICENSE.txt"
+          echo "Included Xenia Canary $xtag"
+        else
+          echo "::warning::Could not fetch Xenia Canary; building without it"
+          rm -rf "$xdir"
+        fi
+
         # Use the host's GLib. SDL dlopens the host's libdecor to draw window
         # decorations on Wayland compositors without server-side decorations
         # (e.g. GNOME), and its GTK plugin fails to load against an older

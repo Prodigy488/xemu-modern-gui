@@ -23,6 +23,13 @@
 #include "renderer.h"
 #include "xemu-version.h"
 
+/* True when the environment variable is set to something but "" or "0". */
+bool xemu_vk_env_on(const char *name)
+{
+    const char *e = getenv(name);
+    return e && *e && strcmp(e, "0") != 0;
+}
+
 #define VkExtensionPropertiesArray GArray
 #define StringArray GArray
 
@@ -602,6 +609,29 @@ static bool create_logical_device(PGRAPHState *pg, Error **errp)
                           vids_query.vertexInputDynamicState;
     r->pipeline_library = r->pipeline_library_extension_enabled &&
                           gpl_query.graphicsPipelineLibrary;
+    /* Compatibility switches for tracking down a driver-specific fault: set
+     * the variable to 1 (any value but empty or 0) and the feature is not
+     * used, the renderer falls back to static pipeline state.
+     *   XEMU_VK_NO_DYN_STATE     extended dynamic state 1 and 3, and with them
+     *                            the pipeline library (it needs both)
+     *   XEMU_VK_NO_DYN_BLEND     dynamic blend; also turns the pipeline
+     *                            library off
+     *   XEMU_VK_NO_DYN_VERTEX    dynamic vertex input; also turns the
+     *                            pipeline library off
+     *   XEMU_VK_NO_PIPELINE_LIB  graphics pipeline libraries only */
+    if (xemu_vk_env_on("XEMU_VK_NO_DYN_STATE")) {
+        r->dyn_cull_front = r->dyn_blend = false;
+    }
+    if (xemu_vk_env_on("XEMU_VK_NO_DYN_BLEND")) {
+        r->dyn_blend = false;
+    }
+    if (xemu_vk_env_on("XEMU_VK_NO_DYN_VERTEX")) {
+        r->dyn_vertex_input = false;
+    }
+    if (xemu_vk_env_on("XEMU_VK_NO_PIPELINE_LIB") || !r->dyn_cull_front ||
+        !r->dyn_blend || !r->dyn_vertex_input) {
+        r->pipeline_library = false;
+    }
     fprintf(stderr,
             "Dynamic state: cull/front %d, blend %d, vertex input %d"
             " | pipeline library %d | host query reset %d"

@@ -2083,7 +2083,16 @@ void pgraph_vk_init_surfaces(PGRAPHState *pg)
     // Check if the device supports preferred VK_FORMAT_D24_UNORM_S8_UINT
     // format, fall back to D32_SFLOAT_S8_UINT otherwise.
     r->kelvin_surface_zeta_vk_map[NV097_SET_SURFACE_FORMAT_ZETA_Z16] = zeta_d16;
-    if (check_surface_internal_formats_supported(r, &zeta_d24_unorm_s8_uint,
+    /* XEMU_VK_FORCE_D32=1 takes the D32_SFLOAT_S8_UINT path even where
+     * D24_UNORM_S8_UINT exists, to reproduce what an AMD GPU does. */
+    bool force_d32 = xemu_vk_env_on("XEMU_VK_FORCE_D32") &&
+                     check_surface_internal_formats_supported(
+                         r, &zeta_d32_sfloat_s8_uint, 1);
+    if (force_d32) {
+        fprintf(stderr, "Depth format: forced D32_SFLOAT_S8_UINT\n");
+    }
+    if (!force_d32 &&
+        check_surface_internal_formats_supported(r, &zeta_d24_unorm_s8_uint,
                                                  1)) {
         r->kelvin_surface_zeta_vk_map[NV097_SET_SURFACE_FORMAT_ZETA_Z24S8] =
             zeta_d24_unorm_s8_uint;

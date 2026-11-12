@@ -733,6 +733,8 @@ void pgraph_vk_end_debug_marker(PGRAPHVkState *r, VkCommandBuffer cmd);
 
 // instance.c
 void pgraph_vk_init_instance(PGRAPHState *pg, Error **errp);
+/* True when the environment variable is set to anything but "" or "0". */
+bool xemu_vk_env_on(const char *name);
 void pgraph_vk_finalize_instance(PGRAPHState *pg);
 QueueFamilyIndices pgraph_vk_find_queue_families(VkPhysicalDevice device);
 uint32_t pgraph_vk_get_memory_type(PGRAPHState *pg, uint32_t type_bits,
